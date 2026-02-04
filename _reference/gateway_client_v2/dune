@@ -1,0 +1,16 @@
+(library
+ (name gateway_client_v2_service)
+ (libraries
+  base
+  str
+  eio
+  eio_main
+  cohttp
+  cohttp-eio
+  yojson
+  uri
+  base64
+  digestif
+  infra
+  contract)
+ (preprocess (pps ppx_deriving_yojson)))

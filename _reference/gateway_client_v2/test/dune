@@ -1,0 +1,4 @@
+(library
+ (name blossom_test)
+ (libraries unix str)
+ (modules well_test runner))

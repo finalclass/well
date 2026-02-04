@@ -1,0 +1,4 @@
+(library
+ (name well_cli)
+ (public_name well.cli)
+ (libraries well_core unix))

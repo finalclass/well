@@ -1,0 +1,4 @@
+(library
+ (name well_core)
+ (public_name well.core)
+ (libraries eio eio_main yojson))
