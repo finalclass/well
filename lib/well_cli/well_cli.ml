@@ -6,7 +6,7 @@ let sorted_commands () =
   List.sort (fun (a : Command.t) (b : Command.t) -> String.compare a.name b.name) !commands
 
 let print_usage () =
-  Printf.printf "well %s — Full-stack OCaml web framework\n\n" Well_core.version;
+  Printf.printf "well %s — Full-stack OCaml web framework\n\n" Well.version;
   Printf.printf "Usage: well <command> [options]\n\n";
   Printf.printf "Commands:\n";
   List.iter
@@ -15,7 +15,7 @@ let print_usage () =
   Printf.printf "\nRun 'well <command> --help' for more information.\n"
 
 let print_version () =
-  Printf.printf "well %s\n" Well_core.version
+  Printf.printf "well %s\n" Well.version
 
 let find_command name =
   List.find_opt (fun (cmd : Command.t) -> cmd.name = name) !commands

@@ -1,4 +1,4 @@
 (executable
  (name main)
  (public_name well)
- (libraries well_core well_cli))
+ (libraries well well_cli))

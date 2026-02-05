@@ -1,3 +1,5 @@
+type node = [ `Html of string ]
+
 let escape_html s =
   let buf = Buffer.create (String.length s) in
   String.iter
@@ -21,35 +23,43 @@ let attrs_to_string attrs =
   in
   String.concat "" parts
 
+let cat (children : node list) =
+  String.concat "" (List.map (fun (`Html s) -> s) children)
+
 let void_tag name ?(id = "") ?(class_ = "") ?(charset = "")
-    ?(content = "") ?(name_ = "") ?(lang = "")
-    ?(children : string list = []) () =
+    ?(content = "") ?(name_ = "") ?(lang = "") ?(rel = "") ?(href = "")
+    ?(children : node list = []) () : node =
   ignore children;
   let attrs =
     [
       ("id", id); ("class", class_); ("charset", charset);
       ("content", content); ("name", name_); ("lang", lang);
+      ("rel", rel); ("href", href);
     ]
   in
-  Printf.sprintf "<%s%s />" name (attrs_to_string attrs)
+  `Html (Printf.sprintf "<%s%s />" name (attrs_to_string attrs))
 
 let tag name ?(id = "") ?(class_ = "") ?(lang = "")
-    ?(data_lv_click = "") ?(data_lv_submit = "")
+    ?(data_lv_click = "") ?(data_lv_submit = "") ?(data_lv_change = "")
     ?(action = "") ?(method_ = "") ?(href = "")
     ?(type_ = "") ?(placeholder = "") ?(value = "")
     ?(name_ = "") ?(charset = "") ?(content = "")
-    ?(children = []) () =
+    ?(src = "")
+    ?(children : node list = []) () : node =
   let attrs =
     [
       ("id", id); ("class", class_); ("lang", lang);
       ("data-lv-click", data_lv_click); ("data-lv-submit", data_lv_submit);
+      ("data-lv-change", data_lv_change);
       ("action", action); ("method", method_); ("href", href);
       ("type", type_); ("placeholder", placeholder); ("value", value);
       ("name", name_); ("charset", charset); ("content", content);
+      ("src", src);
     ]
   in
-  Printf.sprintf "<%s%s>%s</%s>" name (attrs_to_string attrs)
-    (String.concat "" children) name
+  `Html
+    (Printf.sprintf "<%s%s>%s</%s>" name (attrs_to_string attrs)
+       (cat children) name)
 
 let html = tag "html"
 let head = tag "head"
@@ -79,5 +89,62 @@ let li = tag "li"
 let meta ?id ?class_ ?charset ?content ?name_ ?lang ?children () =
   void_tag "meta" ?id ?class_ ?charset ?content ?name_ ?lang ?children ()
 
-let txt s = escape_html s
-let raw s = s
+let link ?id ?class_ ?charset ?content ?name_ ?lang ?rel ?href ?children () =
+  void_tag "link" ?id ?class_ ?charset ?content ?name_ ?lang ?rel ?href ?children ()
+
+let script = tag "script"
+
+let txt s : node = `Html (escape_html s)
+let raw s : node = `Html s
+
+(* ── LiveView support ─────────────────────────────────────────────── *)
+
+let element_to_string (`Html s : node) : string = s
+
+let dynamic id value : node =
+  `Html
+    (Printf.sprintf {|<span data-lv="%s">%s</span>|}
+       (escape_html id) (escape_html value))
+
+(* ── Keyed list support ──────────────────────────────────────────── *)
+
+type keyed_item = { key : string; html : string }
+
+let _list_registry : (string * keyed_item list) list ref = ref []
+
+let collect_and_clear_lists () =
+  let data = !_list_registry in
+  _list_registry := [];
+  data
+
+let inject_lv_key key html =
+  let pattern = Str.regexp {|<\([a-zA-Z][a-zA-Z0-9]*\)|} in
+  (try
+     let _ = Str.search_forward pattern html 0 in
+     let tag_name = Str.matched_group 1 html in
+     let match_start = Str.match_beginning () in
+     let match_end = Str.match_end () in
+     let before = String.sub html 0 match_start in
+     let after = String.sub html match_end (String.length html - match_end) in
+     before ^ "<" ^ tag_name
+     ^ Printf.sprintf {| data-lv-key="%s"|} (escape_html key)
+     ^ after
+   with Not_found -> html)
+
+let each ~id ?(tag_name = "div") items ~key render_fn : node =
+  let keyed_items =
+    List.map
+      (fun item ->
+        let k = key item in
+        let rendered = element_to_string (render_fn item) in
+        let html_with_key = inject_lv_key k rendered in
+        { key = k; html = html_with_key })
+      items
+  in
+  _list_registry := (id, keyed_items) :: !_list_registry;
+  let inner =
+    String.concat "" (List.map (fun ki -> ki.html) keyed_items)
+  in
+  `Html
+    (Printf.sprintf {|<%s data-lv-each="%s">%s</%s>|}
+       tag_name (escape_html id) inner tag_name)

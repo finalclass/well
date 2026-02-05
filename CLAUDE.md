@@ -11,16 +11,16 @@ Inspired by Phoenix LiveView, Rails, and the OCaml ecosystem (camels, dune, well
 
 - Code (variables, functions, comments) — English
 - Documentation — English
-- User-facing UI — Polish (for now, this is inherited from dg project)
+- User-facing UI — Polish (for now, inherited from dg project)
 - Framework name: `well` (lowercase, like `dune`)
 
 ## Tech Stack
 
-- **Language**: OCaml 5 with MLX dialect for JSX (NOT Reason)
+- **Language**: OCaml 5.4 with MLX dialect for JSX (NOT Reason)
 - **Async**: EIO (effect-based concurrency, fiber-per-connection)
 - **Database**: SQLite (bundled)
-- **Build**: dune
-- **JS Runtime**: bun (for building frontend assets)
+- **Build**: dune 3.17 (vendored at `./vendor/dune`)
+- **JS Runtime**: bun (for building frontend assets — planned)
 - **Deployment**: patchelf + bundled .so (no Nix, no Docker required)
 
 ## File Extensions
@@ -29,60 +29,245 @@ Inspired by Phoenix LiveView, Rails, and the OCaml ecosystem (camels, dune, well
 - `.mlx` — OCaml + JSX (views, components, layouts)
 - `.mli` — interfaces (prefer `open struct ... end` for private definitions)
 
-## Architecture
+## Current Project Structure
 
 ```
-well-core          HTTP server (raw EIO), WebSocket (RFC 6455), Router,
-                   Request/Response, Middleware, Session, Auth, Static files
-
-well-liveview      LiveView engine (Elm architecture), persistence (Ephemeral/Session/User),
-                   keyed list diffing, cross-device sync, HTML library with LiveView helpers
-
-well-orm           SQLite ORM, query builder, migrations, seeds
-                   (future: PPX type-safe SQL — killer feature)
-
-well-test          Jest-like testing DSL (describe/it/expect), parallel runner
-
-well-contract      TOML contract parser → OCaml/TS code generators
-
-well (cli)         CLI tool: init, dev, build, test, db, gen, release
+well/
+├── bin/
+│   ├── dune                      # executable: well (links well, well_cli)
+│   └── main.ml                   # entry point → Well_cli.run Sys.argv
+├── lib/
+│   ├── well/                     # core library (module: Well, public: well.core)
+│   │   ├── dune                  # (libraries eio eio_main yojson tls-eio ...)
+│   │   └── well.ml               # version + EIO runtime wrapper
+│   ├── well_cli/                 # CLI library (module: Well_cli, public: well.cli)
+│   │   ├── dune                  # (libraries well unix)
+│   │   ├── command.ml            # Command.t record type
+│   │   ├── well_cli.ml           # command registry, dispatcher, help
+│   │   ├── cmd_init.ml           # `well init <name>` implementation
+│   │   └── template.ml           # project scaffold templates (15 files)
+│   └── well_html/                # HTML library (module: Html, public: well.html)
+│       ├── dune                  # (wrapped false) — exports Html directly
+│       └── html.ml               # tag functions, escape_html, txt, raw
+├── vendor/
+│   ├── dune                      # vendored dune binary
+│   └── lib/                      # bundled .so for release (libc, libsqlite3, etc.)
+├── _reference/                   # POC code from gateway_client_v2 (Reason)
+│   ├── ROADMAP.md                # full roadmap (Polish)
+│   └── gateway_client_v2/        # working LiveView POC (~2150 LOC)
+├── dune-project                  # MLX dialect, package deps
+├── dune                          # (dirs :standard \ vendor _reference)
+├── Makefile                      # build, check, test, dev, install, release
+├── CLAUDE.md
+└── .gitignore
 ```
+
+## Libraries & Modules
+
+### `well` (public: `well.core`) — lib/well/
+
+HTTP server with global route registration. Raw EIO-based (no Cohttp).
+
+```ocaml
+(* Types *)
+type request = {
+  meth : string; path : string; headers : (string * string) list;
+  body : string; params : (string * string) list; query : (string * string) list;
+}
+
+type custom = { status : int option; headers : (string * string) list; body : response }
+and response = [
+  (* JSON — auto content-type: application/json *)
+  | `Null | `Bool of bool | `Int of int | `Float of float
+  | `String of string | `Intlit of string
+  | `List of Yojson.Safe.t list | `Assoc of (string * Yojson.Safe.t) list
+  (* Framework *)
+  | `Html of string      (* text/html *)
+  | `Text of string      (* text/plain *)
+  | `Redirect of string  (* 302 + Location *)
+  | `Custom of custom    (* status/header override *)
+]
+
+(* Convenience constructors *)
+val html : string -> response
+val text : string -> response
+val json : Yojson.Safe.t -> response   (* coerces Yojson.Safe.t → response *)
+val redirect : string -> response
+
+(* Response transformers — pipeable *)
+val status : int -> response -> response
+val header : string -> string -> response -> response
+
+(* Request helpers *)
+val param : request -> string -> string         (* path param, "" if missing *)
+val query : request -> string -> string option  (* query param *)
+
+(* Route registration — handler returns any subtype of response, coerced via :> *)
+val get : string -> (request -> [< response]) -> unit
+val post : string -> (request -> [< response]) -> unit
+val put : string -> (request -> [< response]) -> unit
+val delete : string -> (request -> [< response]) -> unit
+
+(* Server entry point — blocks forever *)
+val run : ?port:int -> ?cert:string -> ?key:string -> unit -> unit
+(* default port 4000, listens on 0.0.0.0 *)
+(* ~cert and ~key: paths to PEM files for TLS/HTTPS — both required together *)
+```
+
+**Response type** — polymorphic variant, superset of `Yojson.Safe.t`:
+- `` `Html`` → text/html (Html module `tag`/`txt`/`raw` return `` [`Html of string] `` which coerces automatically)
+- `` `Text`` → text/plain
+- JSON variants (`` `Null``, `` `Assoc``, etc.) → application/json
+- `` `Redirect`` → 302 + Location header
+- `status`/`header` wrap in `` `Custom `` variant: `Html.(<div/>) |> status 201`
+- Handler return type uses `:>` coercion — can return `Html.node`, `response`, or any subset
+
+Route paths support `:param` segments: `"/users/:id"` extracts `id` from the URL.
+Routes are matched in registration order. No match → 404. Handler exception → 500.
+
+Dependencies: `eio`, `eio_main`, `yojson`, `tls-eio`, `mirage-crypto-rng.unix`
+
+### `well_cli` (public: `well.cli`) — lib/well_cli/
+
+Command registry with dispatch. Currently one command: `well init`.
+
+```ocaml
+(* Command.t *)
+type t = { name: string; summary: string; usage: string; description: string; run: string list -> unit }
+
+(* Well_cli *)
+val run : string array -> unit   (* main entry point *)
+```
+
+Dependencies: `well`, `unix`
+
+### `well_html` (public: `well.html`) — lib/well_html/
+
+HTML generation. `(wrapped false)` so the module is `Html` directly.
+
+```ocaml
+type node = [ `Html of string ]
+
+val escape_html : string -> string
+val txt : string -> node             (* escaped text node *)
+val raw : string -> node             (* raw/unescaped HTML *)
+val tag : string -> ... -> ?children:node list -> unit -> node
+val void_tag : string -> ... -> ?children:node list -> unit -> node
+
+(* Tag functions: html, head, title, body, div, span, p, h1-h4,
+   a, main, footer, header, nav, section, form, button, input,
+   label, ul, ol, li, meta *)
+```
+
+Tag functions return `node = [`Html of string]` — a concrete polymorphic variant
+that coerces to `Well.response` via `:>` in route handlers (automatic).
+
+Tag functions accept optional labeled args: `?id`, `?class_`, `?lang`, `?href`,
+`?data_lv_click`, `?data_lv_submit`, `?action`, `?method_`, `?type_`,
+`?placeholder`, `?value`, `?name_`, `?charset`, `?content`, `?children`.
+
+No dependencies (no external libs).
+
+## Build Commands
+
+The Makefile uses vendored dune: `DUNE := ./vendor/dune`
+
+```bash
+make build        # dune build
+make check        # dune build @check (type-check only, faster)
+make test         # dune test
+make dev          # dune exec bin/main.exe
+make install      # copy binary to ~/.local/bin/well
+make release      # bundle binary + .so with patchelf → _release/
+make lock         # dune pkg lock
+make clean        # dune clean
+```
+
+## CLI — What Works Now
+
+```bash
+well init <name>    # scaffold new project (validates name, creates 15 files)
+well init .         # init in current directory
+well --help         # usage
+well --version      # version
+```
+
+### Scaffold Output (`well init myapp`)
+
+Creates a ready-to-build project with:
+- `dune-project` — MLX dialect, pins `well` from local path
+- `bin/main.ml` — entry point: `let () = Well.run ()`
+- `lib/myapp/myapp.ml` — app name + version
+- `lib/myapp_web/home_page.mlx` — welcome page (MLX/JSX), registers route via `Well.get`
+- `lib/myapp_web/layout.mlx` — HTML layout (MLX/JSX)
+- `test/myapp_test.ml` — basic test
+- Makefile, .gitignore, .ocamlformat, static/.gitkeep
 
 ## MLX — JSX for OCaml
 
-Uses https://github.com/ocaml-mlx/mlx (v0.10+, active project).
+Uses https://github.com/ocaml-mlx/mlx (v0.11, active project).
+
+**IMPORTANT — children syntax:**
+- `"string"` — string literal child (raw `string` in OCaml)
+- `identifier` — bare variable child
+- `(expr)` — **parenthesized expression** for function calls, operators, etc.
+- `<Tag />` — nested JSX child
+- `{x}` — **record expression only** (NOT general expression interpolation!)
+
+`{f x}`, `{(expr)}`, `{42}` are ALL syntax errors. Use `(f x)` instead.
 
 ```ocaml
 (* file: my_page.mlx *)
 let page ~title ~children =
   <html>
-    <head><title>{title}</title></head>
-    <body>{children}</body>
+    <head><title>(txt title)</title></head>
+    <body>children</body>
   </html>
 
 let counter ~count =
   <div class_="counter">
-    <span>{string_of_int count}</span>
+    <span>(txt (string_of_int count))</span>
     <button data_lv_click="increment">"+"</button>
   </div>
 ```
 
-Dune dialect config:
+Dune dialect config (in `dune-project`):
 ```lisp
 (dialect
  (name mlx)
  (implementation
   (extension mlx)
+  (merlin_reader mlx)
   (preprocess (run mlx-pp %{input-file}))))
 ```
 
-## LiveView — Server-side Reactive UI
+## Architecture (Planned)
+
+```
+well.core          Core: EIO runtime, HTTP server, WebSocket, Router,
+                   Request/Response, Middleware, Session, Auth, Static files
+
+well.liveview      LiveView engine (Elm architecture), persistence,
+                   keyed list diffing, cross-device sync
+
+well.html          HTML tag library (exists), LiveView helpers (planned)
+
+well.orm           SQLite ORM, query builder, migrations, seeds
+                   (future: PPX type-safe SQL — killer feature)
+
+well.test          Jest-like testing DSL (describe/it/expect), parallel runner
+
+well.contract      TOML contract parser → OCaml/TS code generators
+
+well.cli           CLI tool: init (exists), dev, build, test, db, gen, release
+```
+
+## LiveView — Server-side Reactive UI (planned)
 
 Elm architecture: model → update → render. All state on server.
 WebSocket sends only diffs (changed text values + keyed list operations).
 
 ```ocaml
-(* Component signature *)
 module type VIEW = sig
   type model
   type msg
@@ -92,7 +277,6 @@ module type VIEW = sig
   val update : ctx -> model -> msg -> model
   val render : model -> Html.element
 
-  (* JSON serialization via [@@deriving yojson] *)
   val model_to_yojson : model -> Yojson.Safe.t
   val model_of_yojson : Yojson.Safe.t -> (model, string) result
   val msg_of_yojson : Yojson.Safe.t -> (msg, string) result
@@ -115,15 +299,13 @@ end
 
 **EIO advantage over Elm/Phoenix cmd:**
 No need for `cmd` pattern. EIO allows blocking I/O directly in `update` —
-blocks one fiber, rest of system continues. Loading state solved by sending
-patch before operation, then patch after.
+blocks one fiber, rest of system continues.
 
 ## Type-safe SQL — KILLER FEATURE (planned)
 
 Write normal SQL. Compiler checks it.
 
 ```ocaml
-(* 1. Define model — PPX generates schema *)
 module User = struct
   type t = {
     id : int;
@@ -133,14 +315,11 @@ module User = struct
   } [@@deriving table { name = "users" }]
 end
 
-(* 2. Write NORMAL SQL — validated at COMPILE TIME *)
 let%query (module ActiveUsers) = "select id, name from users where active = true"
 
-(* 3. Fully typed result *)
 let* users = ActiveUsers.query db in
 (* users : { id: int; name: string } list *)
 
-(* 4. Compile error if SQL is wrong *)
 let%query (module Bad) = "select nonexistent from users"
 (* ^^^ COMPILE ERROR: column "nonexistent" not found in table "users" *)
 ```
@@ -148,7 +327,6 @@ let%query (module Bad) = "select nonexistent from users"
 **Why this is special:**
 - Write real SQL (copy from sqlite3 REPL → paste → compiler checks)
 - No new DSL to learn
-- LLM generates standard SQL → paste → works
 - Unlike Rust/sqlx: no database connection needed at compile time
 - Refactor fearlessly: change column type → compiler shows ALL broken queries
 
@@ -172,29 +350,9 @@ my-app/
 
 Deploy = copy directory. Works on any Linux x86_64.
 
-```bash
-patchelf --set-interpreter bin/lib/ld-linux-x86-64.so.2 --set-rpath '$ORIGIN/lib' bin/my-app
-```
+## Testing Framework (planned)
 
-## CLI Commands (planned)
-
-```bash
-well init my-app              # scaffold new project
-well dev                      # dev server with hot reload
-well build                    # production build (dune + patchelf)
-well release                  # bundle binary + .so for deployment
-well test [--filter PATTERN]  # run tests
-well db migrate               # run migrations
-well db rollback              # rollback last migration
-well db seed                  # seed data
-well gen crud User name:string email:string  # generate model + views + migration
-well new component Counter    # generate LiveView component (.mlx)
-well new model User           # generate model (.ml with [@@deriving table])
-```
-
-## Testing Framework
-
-Jest-like DSL in pure OCaml:
+Jest-like DSL in pure OCaml. Reference implementation in `_reference/gateway_client_v2/test/`:
 
 ```ocaml
 open Well_test
@@ -204,14 +362,8 @@ let () =
     it "creates a user" (fun () ->
       expect (String.length "hello") |> to_equal_int 5
     );
-
-    it "validates email" (fun () ->
-      expect "user@example.com" |> to_contain "@"
-    );
-
     skip "not ready" (fun () -> ());
   );
-
   run () |> exit_with_result
 ```
 
@@ -225,34 +377,29 @@ let () =
 ## Reference Files
 
 `_reference/` contains source material from the proof-of-concept:
-- `_reference/ROADMAP.md` — full roadmap with all planned features and phases
-- `_reference/gateway_client_v2/` — working POC code (Reason, currently):
-  - `liveview.re` — LiveView engine with keyed list diffing + cross-device sync
-  - `websocket.ml` — RFC 6455 WebSocket implementation
-  - `blossom.ml` — HTTP framework on EIO + Cohttp
-  - `html.re` — JSX-compatible HTML library
-  - `counter.re`, `todo.re` — demo LiveView components
-  - `main.re` — routes, SSR, CSS
-  - `liveview_store.ml` — SQLite persistence
-  - `test/` — testing framework (well_test.ml + runner.ml)
+- `_reference/ROADMAP.md` — full roadmap with all planned features and phases (Polish)
+- `_reference/gateway_client_v2/` — working POC code (~2150 LOC):
+  - `blossom.ml` — HTTP framework on EIO (224 LOC, OCaml — reusable as-is)
+  - `websocket.ml` — RFC 6455 WebSocket (339 LOC, OCaml — reusable as-is)
+  - `liveview.re` — LiveView engine with keyed list diffing (483 LOC, Reason → needs OCaml port)
+  - `liveview_store.ml` — SQLite persistence (83 LOC, OCaml — reusable as-is)
+  - `html.re` — JSX-compatible HTML library (365 LOC, Reason → needs OCaml port)
+  - `main.re` — routes, SSR, CSS (404 LOC, Reason → needs MLX port)
+  - `counter.re`, `todo.re` — demo LiveView components (Reason → MLX)
+  - `test/well_test.ml` — Jest-like test DSL (~600 LOC)
+  - `test/runner.ml` — test runner with autodiscovery
 
-**Important:** Reference code is in Reason. New code must be OCaml + MLX.
+**Important:** Reference `.ml` files (blossom, websocket, liveview_store) can be reused.
+Reference `.re` files must be ported to OCaml (`.ml`) or MLX (`.mlx`).
 Reference code uses Cohttp. New code should use raw EIO HTTP (fewer deps).
 
-## Build & Verify
+## Dependencies (from dune.lock)
 
-```bash
-dune build                    # build everything
-dune build @check             # type-check only (faster)
-```
-
-Target dependencies (minimal):
-- `eio`, `eio_main` — async I/O
-- `yojson` — JSON
-- `sqlite3` — database
-- `str` — regex
-- `mlx` — JSX dialect
-- `ppx_deriving_yojson` — JSON serialization
+**Core:** `eio` 1.3, `eio_main` 1.3, `eio_posix`, `eio_linux`
+**Language:** `mlx` 0.11, `ppxlib` 0.37.0, `ocaml` 5.4.0
+**Data:** `yojson` 3.0.0, `sqlite3` 5.3.1
+**TLS:** `tls` 2.0.3, `tls-eio` 2.0.3, `x509` 1.0.6, `mirage-crypto` 2.0.2, `mirage-crypto-rng` 2.0.2
+**Other:** `cstruct`, `fmt`, `mtime`, `str`
 
 Avoid heavy deps: no Cohttp, no Conduit, no Jane Street Base.
 
@@ -260,9 +407,41 @@ Avoid heavy deps: no Cohttp, no Conduit, no Jane Street Base.
 
 See `_reference/ROADMAP.md` for full roadmap. Summary:
 
-1. **Faza 0** — Project setup (dune-project, MLX, basic structure)
+1. **Faza 0** — Project setup (dune-project, MLX, basic structure) ← **CURRENT**
 2. **Faza 1** — Core HTTP + WebSocket + Router + LiveView (port from reference)
 3. **Faza 2** — Type-safe SQL PPX (killer feature)
 4. **Faza 3** — CLI + generators + static files + sessions
 5. **Faza 4** — Maturity (contracts, components, frontend build)
 6. **Faza 5** — Production (clustering, telemetry, HTTP/2)
+
+## Implementation Status
+
+### Done (Faza 0)
+- [x] dune-project with MLX dialect + merlin_reader
+- [x] Package structure: `well.core`, `well.cli`, `well.html`
+- [x] CLI framework (command registry, dispatch, help)
+- [x] `well init` command with full project scaffolding (15 files)
+- [x] HTML tag library with XSS protection (`escape_html`, `txt`, `raw`)
+- [x] Makefile with build/check/test/dev/install/release
+- [x] Release bundling with patchelf
+- [x] Vendored .so libraries for deployment
+
+### Done (Faza 1 — partial)
+- [x] Raw EIO HTTP/1.1 server (no Cohttp) with request parsing + response writing
+- [x] Global route registration (`Well.get`, `Well.post`, `Well.put`, `Well.delete`)
+- [x] Route matching with `:param` segments + query string parsing
+- [x] Polymorphic variant response type (superset of Yojson.Safe.t)
+- [x] Response constructors (`Well.html`, `Well.text`, `Well.json`, `Well.redirect`)
+- [x] Response transformers (`Well.status`, `Well.header`) wrapping in `` `Custom ``
+- [x] Html returns `node = [`Html of string]` — coerces to response via `:>`
+- [x] `Well.run ?port ()` entry point (default port 4000)
+- [x] TLS/HTTPS support via `tls-eio` (`Well.run ~cert ~key ~port:4443 ()`)
+
+### Next (Faza 1 — remaining)
+- [ ] Port `websocket.ml` → WebSocket in `well.core`
+- [ ] Port `liveview.re` → `well.liveview` (Reason → OCaml)
+- [ ] Port `html.re` → enhance `well.html` with LiveView helpers
+- [ ] Middleware pipeline
+- [ ] Static file serving
+- [ ] Session management
+- [ ] Port testing framework from reference

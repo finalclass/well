@@ -17,4 +17,7 @@
   eio
   eio_main
   yojson
-  sqlite3))
+  sqlite3
+  tls-eio
+  digestif
+  base64))
