@@ -2,7 +2,9 @@ DUNE := ./vendor/dune
 PATCHELF := patchelf
 RELEASE_DIR := _release
 
-.PHONY: build check test clean lock dev release
+INSTALL_DIR := $(HOME)/.local/bin
+
+.PHONY: build check test clean lock dev release install
 
 build:
 	$(DUNE) build
@@ -21,6 +23,13 @@ lock:
 
 dev:
 	$(DUNE) exec bin/main.exe
+
+install: build
+	@mkdir -p $(INSTALL_DIR)
+	@rm -f $(INSTALL_DIR)/well
+	@cp _build/default/bin/main.exe $(INSTALL_DIR)/well
+	@chmod 755 $(INSTALL_DIR)/well
+	@echo "Installed well to $(INSTALL_DIR)/well"
 
 release: build
 	@echo "==> Creating release bundle..."
