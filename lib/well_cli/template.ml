@@ -6,6 +6,7 @@ let dune_project name =
  (name mlx)
  (implementation
   (extension mlx)
+  (merlin_reader mlx)
   (preprocess
    (run mlx-pp %%{input-file}))))
 
@@ -157,6 +158,21 @@ let test_main name =
 |}
     name (String.capitalize_ascii name)
 
+let ocamlformat =
+  {|profile = ocamlformat
+break-cases = all
+type-decl = sparse
+margin = 80
+break-infix = fit-or-vertical
+break-fun-sig = fit-or-vertical
+break-fun-decl = fit-or-vertical
+if-then-else = keyword-first
+wrap-fun-args = false
+break-infix-before-func = false
+sequence-blank-line = preserve-one
+break-sequences=true
+|}
+
 let static_gitkeep = ""
 
 type file = {
@@ -170,6 +186,7 @@ let project_files name =
     { path = "dune"; content = root_dune };
     { path = "Makefile"; content = makefile };
     { path = ".gitignore"; content = gitignore };
+    { path = ".ocamlformat"; content = ocamlformat };
     { path = "bin/dune"; content = bin_dune name };
     { path = "bin/main.ml"; content = bin_main name };
     { path = Printf.sprintf "lib/%s/dune" name; content = lib_dune name };

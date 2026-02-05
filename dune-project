@@ -4,6 +4,7 @@
  (name mlx)
  (implementation
   (extension mlx)
+  (merlin_reader mlx)
   (preprocess
    (run mlx-pp %{input-file}))))
 
