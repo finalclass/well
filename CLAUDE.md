@@ -1,5 +1,9 @@
 # well — Full-stack OCaml Web Framework
 
+## Rules
+
+- Do NOT add "Co-Authored-By" to git commits
+
 ## What is well
 
 A batteries-included, type-safe, server-first web framework for OCaml 5.
