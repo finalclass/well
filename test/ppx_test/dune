@@ -1,0 +1,4 @@
+(executable
+ (name ppx_test)
+ (libraries sqlite3)
+ (preprocess (pps well_ppx)))

@@ -20,4 +20,5 @@
   sqlite3
   tls-eio
   digestif
-  base64))
+  base64
+  ppxlib))

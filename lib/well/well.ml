@@ -53,6 +53,49 @@ let param req key =
 
 let query req key = List.assoc_opt key req.query
 
+(* ── Middleware types ─────────────────────────────────────────────── *)
+
+type handler = request -> response
+type middleware = handler -> handler
+
+(* ── Context funktor ─────────────────────────────────────────────── *)
+
+let _next_context_id = ref 0
+
+module type CONTEXT = sig
+  type t
+  val empty : t
+end
+
+module Context (C : CONTEXT) : sig
+  val get : request -> C.t
+  val set : C.t -> request -> request
+  val update : (C.t -> C.t) -> request -> request
+end = struct
+  let key_id = incr _next_context_id; !_next_context_id
+
+  let get req =
+    match List.assoc_opt key_id req._context with
+    | Some v -> (Obj.obj v : C.t)
+    | None -> C.empty
+
+  let set ctx req =
+    { req with _context =
+        (key_id, Obj.repr ctx) ::
+        (List.filter (fun (k, _) -> k <> key_id) req._context) }
+
+  let update f req = set (f (get req)) req
+end
+
+(* ── Middleware registry ─────────────────────────────────────────── *)
+
+let global_middlewares : middleware list ref = ref []
+
+let use mw = global_middlewares := mw :: !global_middlewares
+
+let apply_middlewares middlewares handler =
+  List.fold_right (fun mw h -> mw h) middlewares handler
+
 (* ── Route internals ───────────────────────────────────────────────── *)
 
 type segment = Static of string | Param of string
@@ -267,23 +310,48 @@ let parse_segments parts =
       else Static part)
     parts
 
-let register meth path handler =
-  let segments = parse_segments (split_path path) in
-  routes := { meth; segments; handler } :: !routes
+(* ── Scope support ────────────────────────────────────────────────── *)
+
+type scope_ctx = { prefix : string; scope_middlewares : middleware list }
+
+let scope_stack : scope_ctx list ref = ref []
+
+let current_prefix () =
+  List.fold_left (fun acc s -> s.prefix ^ acc) "" !scope_stack
+
+let current_scope_middlewares () =
+  List.concat_map (fun s -> s.scope_middlewares) (List.rev !scope_stack)
+
+let scope ?(middleware = []) prefix f =
+  scope_stack := { prefix; scope_middlewares = middleware } :: !scope_stack;
+  f ();
+  scope_stack := List.tl !scope_stack
+
+let register ?middleware meth path handler =
+  let full_path = current_prefix () ^ path in
+  let segments = parse_segments (split_path full_path) in
+  let scope_mws = current_scope_middlewares () in
+  let per_route = match middleware with Some mws -> mws | None -> [] in
+  let all_mw = scope_mws @ per_route in
+  let wrapped =
+    if all_mw = [] then handler
+    else apply_middlewares all_mw handler
+  in
+  routes := { meth; segments; handler = wrapped } :: !routes
 
 (* ── Route registration ────────────────────────────────────────────── *)
 
-let get path handler =
-  register "GET" path (fun req -> (handler req :> response))
+let get ?middleware path handler =
+  register ?middleware "GET" path (fun req -> (handler req :> response))
 
-let post path handler =
-  register "POST" path (fun req -> (handler req :> response))
+let post ?middleware path handler =
+  register ?middleware "POST" path (fun req -> (handler req :> response))
 
-let put path handler =
-  register "PUT" path (fun req -> (handler req :> response))
+let put ?middleware path handler =
+  register ?middleware "PUT" path (fun req -> (handler req :> response))
 
-let delete path handler =
-  register "DELETE" path (fun req -> (handler req :> response))
+let delete ?middleware path handler =
+  register ?middleware "DELETE" path (fun req -> (handler req :> response))
 
 (* ── WebSocket route registration ─────────────────────────────────── *)
 
@@ -346,6 +414,23 @@ let parse_session_id headers =
               let v = String.sub cookie (i + 1) (String.length cookie - i - 1) in
               if k = "well_session" then Some v else None)
         cookies
+
+(* ── Session middleware ───────────────────────────────────────────── *)
+
+let session_middleware : middleware = fun next req ->
+  let existing = parse_session_id req.headers in
+  let session_id, new_session =
+    match existing with
+    | Some sid -> (sid, false)
+    | None -> (generate_session_id (), true)
+  in
+  let resp = next { req with session_id } in
+  if new_session then
+    header "Set-Cookie"
+      (Printf.sprintf "well_session=%s; HttpOnly; SameSite=Strict; Path=/"
+         session_id)
+      resp
+  else resp
 
 (* ── Route matching ────────────────────────────────────────────────── *)
 
@@ -415,6 +500,26 @@ let url_decode s =
     incr i
   done;
   Buffer.contents buf
+
+(* ── Form body parsing ────────────────────────────────────────────── *)
+
+let form_params (req : request) =
+  String.split_on_char '&' req.body
+  |> List.filter_map (fun pair ->
+         match String.index_opt pair '=' with
+         | None ->
+             if pair <> "" then Some (url_decode pair, "") else None
+         | Some j ->
+             let k = String.sub pair 0 j in
+             let v =
+               String.sub pair (j + 1) (String.length pair - j - 1)
+             in
+             Some (url_decode k, url_decode v))
+
+let form req key =
+  match List.assoc_opt key (form_params req) with
+  | Some v -> v
+  | None -> ""
 
 (* ── Raw HTTP/1.1 parsing ─────────────────────────────────────────── *)
 
@@ -493,6 +598,13 @@ let rec resolve (resp : response) : resolved =
         r_headers = c.headers @ inner.r_headers;
         r_body = inner.r_body }
 
+let rec response_status (resp : response) : int =
+  match resp with
+  | `Custom c ->
+      (match c.status with Some s -> s | None -> response_status c.body)
+  | `Redirect _ -> 302
+  | _ -> 200
+
 (* ── Static file serving ──────────────────────────────────────────── *)
 
 let try_serve_static meth path headers =
@@ -500,7 +612,7 @@ let try_serve_static meth path headers =
   else
     let rec try_mounts = function
       | [] -> None
-      | mount :: rest ->
+      | (mount : static_mount) :: rest ->
           let plen = String.length mount.prefix in
           if String.length path >= plen
              && String.sub path 0 plen = mount.prefix
@@ -585,6 +697,7 @@ let status_text = function
   | 403 -> "Forbidden"
   | 404 -> "Not Found"
   | 405 -> "Method Not Allowed"
+  | 429 -> "Too Many Requests"
   | 500 -> "Internal Server Error"
   | code -> string_of_int code
 
@@ -604,6 +717,228 @@ let write_response flow resolved =
   Buffer.add_string buf "\r\n";
   Buffer.add_string buf resolved.r_body;
   Eio.Flow.copy_string (Buffer.contents buf) flow
+
+(* ── Built-in middleware ─────────────────────────────────────────── *)
+
+let logger : middleware = fun next req ->
+  let t0 = Unix.gettimeofday () in
+  let resp = next req in
+  let dt = (Unix.gettimeofday () -. t0) *. 1000.0 in
+  Printf.printf "[well] %s %s -> %d (%.1fms)\n%!"
+    req.meth req.path (response_status resp) dt;
+  resp
+
+let cors ?(origins = ["*"])
+    ?(methods = ["GET"; "POST"; "PUT"; "DELETE"; "OPTIONS"])
+    ?(headers = ["Content-Type"; "Authorization"])
+    ?(max_age = 86400) () : middleware =
+  fun next req ->
+    let origin =
+      match List.assoc_opt "origin" req.headers with
+      | Some o -> o
+      | None -> ""
+    in
+    let allowed =
+      List.mem "*" origins || List.mem origin origins
+    in
+    let add_cors resp =
+      if not allowed then resp
+      else
+        resp
+        |> header "Access-Control-Allow-Origin"
+             (if List.mem "*" origins then "*" else origin)
+        |> header "Access-Control-Allow-Methods"
+             (String.concat ", " methods)
+        |> header "Access-Control-Allow-Headers"
+             (String.concat ", " headers)
+    in
+    if req.meth = "OPTIONS" then
+      add_cors (`Text "" |> status 204)
+      |> header "Access-Control-Max-Age" (string_of_int max_age)
+    else
+      add_cors (next req)
+
+(* ── Error handler middleware ────────────────────────────────────── *)
+
+let _dev_mode = ref true
+let _custom_error_handler : (exn -> request -> response) option ref = ref None
+
+let dev_mode b = _dev_mode := b
+
+let on_error fn = _custom_error_handler := Some fn
+
+let dev_error_page exn bt (req : request) =
+  let esc = Html.escape_html in
+  let exn_str = esc (Printexc.to_string exn) in
+  let bt_str = esc (Printexc.raw_backtrace_to_string bt) in
+  let headers_str =
+    req.headers
+    |> List.map (fun (k, v) ->
+           Printf.sprintf "<tr><td>%s</td><td>%s</td></tr>" (esc k) (esc v))
+    |> String.concat "\n"
+  in
+  Printf.sprintf
+    {|<!DOCTYPE html>
+<html>
+<head><title>500 — %s</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:2rem;color:#1a1a1a}
+h1{color:#dc2626}
+pre{background:#f3f4f6;padding:1rem;overflow-x:auto;border-radius:4px}
+table{border-collapse:collapse;margin-top:0.5rem}
+td{padding:0.25rem 0.75rem;border:1px solid #e5e7eb;font-family:monospace;font-size:0.85rem}
+.section{margin-top:1.5rem}
+</style></head>
+<body>
+<h1>500 — Internal Server Error</h1>
+<div class="section"><h2>Exception</h2><pre>%s</pre></div>
+<div class="section"><h2>Backtrace</h2><pre>%s</pre></div>
+<div class="section"><h2>Request</h2>
+<p><strong>%s %s</strong></p>
+<table>%s</table></div>
+</body></html>|}
+    exn_str exn_str bt_str (esc req.meth) (esc req.path) headers_str
+
+let error_handler : middleware = fun next req ->
+  try next req
+  with exn ->
+    let bt = Printexc.get_raw_backtrace () in
+    Printf.eprintf "[well] %s %s ERROR: %s\n%s\n%!" req.meth req.path
+      (Printexc.to_string exn) (Printexc.raw_backtrace_to_string bt);
+    match !_custom_error_handler with
+    | Some h ->
+        (try h exn req with _ -> `Text "Internal Server Error" |> status 500)
+    | None ->
+        if !_dev_mode then
+          `Html (dev_error_page exn bt req) |> status 500
+        else
+          `Text "Internal Server Error" |> status 500
+
+(* ── CSRF middleware ─────────────────────────────────────────────── *)
+
+let _csrf_tokens : (string, string) Hashtbl.t = Hashtbl.create 64
+
+module Csrf_ctx = Context(struct type t = string let empty = "" end)
+
+let generate_csrf_token () =
+  let data = Printf.sprintf "csrf-%f-%d" (Unix.gettimeofday ()) (Random.bits ()) in
+  Digestif.SHA1.(digest_string data |> to_hex)
+
+let csrf_token req = Csrf_ctx.get req
+
+let csrf : middleware = fun next req ->
+  let token =
+    match Hashtbl.find_opt _csrf_tokens req.session_id with
+    | Some t -> t
+    | None ->
+        let t = generate_csrf_token () in
+        Hashtbl.replace _csrf_tokens req.session_id t;
+        t
+  in
+  let req = Csrf_ctx.set token req in
+  let safe_method =
+    req.meth = "GET" || req.meth = "HEAD" || req.meth = "OPTIONS"
+  in
+  if safe_method then next req
+  else
+    let is_xhr =
+      match List.assoc_opt "x-requested-with" req.headers with
+      | Some v -> String.lowercase_ascii v = "xmlhttprequest"
+      | None -> false
+    in
+    if is_xhr then next req
+    else
+      let submitted =
+        let from_form =
+          match List.assoc_opt "_csrf_token" (form_params req) with
+          | Some t -> t
+          | None -> ""
+        in
+        if from_form <> "" then from_form
+        else
+          match List.assoc_opt "x-csrf-token" req.headers with
+          | Some t -> t
+          | None -> ""
+      in
+      if submitted = token then next req
+      else `Text "Forbidden — invalid CSRF token" |> status 403
+
+(* ── Rate limiting middleware ────────────────────────────────────── *)
+
+let _rate_limit_store : (string, float list) Hashtbl.t = Hashtbl.create 256
+let _rate_limit_counter = ref 0
+
+let rate_limit ~max_requests ~window_ms () : middleware = fun next req ->
+  let now = Unix.gettimeofday () *. 1000.0 in
+  let window = float_of_int window_ms in
+  let client_key =
+    match List.assoc_opt "x-forwarded-for" req.headers with
+    | Some ip -> ip
+    | None ->
+        match List.assoc_opt "x-real-ip" req.headers with
+        | Some ip -> ip
+        | None -> req.session_id
+  in
+  (* Cleanup stale entries every 100 requests *)
+  incr _rate_limit_counter;
+  if !_rate_limit_counter >= 100 then begin
+    _rate_limit_counter := 0;
+    let cutoff = now -. window in
+    Hashtbl.filter_map_inplace
+      (fun _k timestamps ->
+        let filtered = List.filter (fun t -> t > cutoff) timestamps in
+        if filtered = [] then None else Some filtered)
+      _rate_limit_store
+  end;
+  let timestamps =
+    match Hashtbl.find_opt _rate_limit_store client_key with
+    | Some ts -> List.filter (fun t -> t > now -. window) ts
+    | None -> []
+  in
+  if List.length timestamps >= max_requests then
+    let retry_after = int_of_float (window /. 1000.0) in
+    `Text "Too Many Requests" |> status 429
+    |> header "Retry-After" (string_of_int retry_after)
+  else begin
+    Hashtbl.replace _rate_limit_store client_key (now :: timestamps);
+    next req
+  end
+
+(* ── Auth middleware ──────────────────────────────────────────────── *)
+
+let _auth_store : (string, string) Hashtbl.t = Hashtbl.create 64
+
+module Auth_ctx = Context(struct type t = string option let empty = None end)
+
+let login req user_id =
+  Hashtbl.replace _auth_store req.session_id user_id
+
+let logout req =
+  Hashtbl.remove _auth_store req.session_id
+
+let current_user req =
+  match Auth_ctx.get req with
+  | Some _ as v -> v
+  | None -> Hashtbl.find_opt _auth_store req.session_id
+
+let require_auth ?(login_path = "/login") () : middleware = fun next req ->
+  let user = Hashtbl.find_opt _auth_store req.session_id in
+  match user with
+  | Some uid ->
+      let req = Auth_ctx.set (Some uid) req in
+      next req
+  | None ->
+      let accepts_html =
+        match List.assoc_opt "accept" req.headers with
+        | Some v -> String.lowercase_ascii v |> fun s ->
+            (try ignore (Str.search_forward (Str.regexp_string "text/html") s 0); true
+             with Not_found -> false)
+        | None -> true
+      in
+      if accepts_html then
+        `Redirect (login_path ^ "?return_to=" ^ req.path)
+      else
+        `Text "Unauthorized" |> status 401
 
 (* ── Fetch (HTTP client) ───────────────────────────────────────────── *)
 
@@ -792,20 +1127,19 @@ let handle_connection flow _addr =
        | Some i -> String.sub raw_path 0 i
        | None -> raw_path
      in
-     (* Session handling *)
-     let existing_session = parse_session_id hdrs in
-     let session_id, new_session =
-       match existing_session with
-       | Some sid -> (sid, false)
-       | None -> (generate_session_id (), true)
-     in
-     (* Check for WebSocket upgrade *)
+     (* Check for WebSocket upgrade — bypasses middleware *)
      let is_upgrade =
        match List.assoc_opt "upgrade" hdrs with
        | Some v -> String.lowercase_ascii v = "websocket"
        | None -> false
      in
      if is_upgrade then begin
+       let existing_session = parse_session_id hdrs in
+       let session_id =
+         match existing_session with
+         | Some sid -> sid
+         | None -> generate_session_id ()
+       in
        match match_ws_route path with
        | Some (route, params) ->
            (match Websocket.handshake hdrs flow reader with
@@ -813,7 +1147,7 @@ let handle_connection flow _addr =
                 let body = read_body reader hdrs in
                 let req =
                   { meth; path; headers = hdrs; body; params;
-                    query = query_params; session_id }
+                    query = query_params; session_id; _context = [] }
                 in
                 (try route.ws_handler req ws
                  with exn ->
@@ -831,38 +1165,31 @@ let handle_connection flow _addr =
            close_flow ()
      end else begin
        let body = read_body reader hdrs in
-       let resolved =
-         match match_route meth path with
+       let base_handler (req : request) =
+         match match_route req.meth req.path with
          | Some (route, params) ->
-             let req =
-               { meth; path; headers = hdrs; body; params;
-                 query = query_params; session_id }
-             in
-             let resp =
-               try route.handler req
-               with exn ->
-                 let msg = Printexc.to_string exn in
-                 Printf.eprintf "[well] handler error: %s\n%!" msg;
-                 `Text ("Internal Server Error: " ^ msg)
-                 |> status 500
-             in
-             resolve resp
-         | None -> (
-             match try_serve_static meth path hdrs with
-             | Some r -> r
-             | None -> resolve (`Text "Not Found" |> status 404))
+             (try route.handler { req with params }
+              with exn ->
+                let msg = Printexc.to_string exn in
+                Printf.eprintf "[well] handler error: %s\n%!" msg;
+                `Text ("Internal Server Error: " ^ msg) |> status 500)
+         | None ->
+             (match try_serve_static req.meth req.path req.headers with
+              | Some r ->
+                  `Custom { status = Some r.r_status;
+                            headers = r.r_headers; body = `Text r.r_body }
+              | None -> `Text "Not Found" |> status 404)
        in
-       (* Add session cookie for new sessions *)
-       let resolved =
-         if new_session then
-           let cookie =
-             Printf.sprintf "well_session=%s; HttpOnly; SameSite=Strict; Path=/"
-               session_id
-           in
-           { resolved with
-             r_headers = ("Set-Cookie", cookie) :: resolved.r_headers }
-         else resolved
+       let pipeline =
+         session_middleware
+           (apply_middlewares (List.rev !global_middlewares) base_handler)
        in
+       let req =
+         { meth; path; headers = hdrs; body; params = [];
+           query = query_params; session_id = ""; _context = [] }
+       in
+       let resp = pipeline req in
+       let resolved = resolve resp in
        write_response flow resolved;
        close_flow ()
      end
@@ -903,6 +1230,7 @@ let load_tls_config ~env ~cert ~key =
   | Error (`Msg msg) -> failwith ("TLS config error: " ^ msg)
 
 let run ?(port = 4000) ?cert ?key () =
+  Printexc.record_backtrace true;
   let tls_enabled =
     match (cert, key) with
     | Some _, Some _ -> true

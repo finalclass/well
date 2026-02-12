@@ -174,14 +174,12 @@ my-app/
 - REPL: `blossom repl`
 - Migracje: `blossom db migrate`
 
-### 2.4 Ekstrakcja kontraktów
-- Ujednolicenie mechanizmu kontraktów (dziś: TOML → Go generator → OCaml/TS)
-- Opcje:
-  - A) Kontrakty w samym Reason (derive z typów OCaml → klient TS)
-  - B) Oddzielny IDL (Protocol Buffers, własny DSL)
-  - C) Uproszczony TOML jak dziś, ale generator jako część frameworka
-- Generowanie klienta TypeScript z definicji OCaml
-- Walidacja kontraktów w compile time
+### 2.4 System kontraktów i usług (aktorów)
+
+System inspirowany Erlang/OTP + kontraktami z dg. Kontrakty TOML definiują interfejsy,
+usługi (aktorzy) je implementują z izolacją crashy i mailboxami.
+
+Szczegóły → sekcja 9.
 
 ---
 
@@ -594,50 +592,416 @@ Podejście jak ExDoc w Elixirze - dokumentacja W KODZIE.
 
 ---
 
+## 9. Kontrakty i usługi (aktorzy)
+
+### 9.1 Wizja
+
+System inspirowany trzema źródłami:
+- **Erlang/OTP** — izolacja procesów, mailboxy, let-it-crash, supervisory
+- **dg/contract** — TOML kontrakty → codegen (OCaml, TS, Go, Dart)
+- **IDesign / SOA** — volatility-based decomposition, warstwy usług
+
+**Kluczowa idea:** kontrakt TOML definiuje interfejs usługi. Usługa (aktor) implementuje
+ten interfejs. Framework zapewnia izolację crashy (`try...with` wokół każdego komunikatu),
+mailbox (kolejkę wiadomości), supervision (restart po awarii).
+
+W przeciwieństwie do Erlanga nie mamy izolacji na poziomie VM — używamy EIO fiber +
+`try...with` jako granicy izolacji. Crash jednej usługi nie zabija reszty systemu.
+
+### 9.2 Kontrakty — TOML → codegen
+
+Wzorzec z dg, wbudowany w framework jako standard.
+
+```toml
+# contract/UserManager.toml
+
+[service.rpc]
+create = "CreateRequest -> CreateResponse"
+find = "FindRequest -> UserResponse"
+list = "ListRequest -> ListResponse"
+authenticate = "AuthRequest -> AuthResponse"
+
+[msg.CreateRequest.struct]
+name = "string"
+email = "string"
+password = "string"
+
+[msg.CreateResponse.variant]
+Ok = "User"
+AlreadyExists = "void"
+ValidationError = "string"
+
+[msg.User.struct]
+id = "int"
+name = "string"
+email = "string"
+active = "bool"
+```
+
+**Format TOML (sprawdzony w dg):**
+- `[service.rpc]` — endpointy: `nazwa = "Request -> Response"`
+- `[msg.Name.struct]` — typy produktowe (rekordy)
+- `[msg.Name.variant]` — typy sumowe (tagged unions)
+- Typy prymitywne: `string`, `int`, `float`, `bool`, `void`, `date`, `record`
+- Typy złożone: `{ type = "list", of = "Item" }`, `{ type = "string", optional = true }`
+- Referencje między kontraktami: `Common.UserCtx`, `UserManager.User`
+
+**Common.toml** — współdzielone typy (jak w dg):
+```toml
+# contract/Common.toml
+[msg.UserCtx.struct]
+session_id = "string"
+user_id = { type = "int", optional = true }
+
+[msg.OkResponse.variant]
+Ok = "void"
+Failed = "string"
+```
+
+### 9.3 Codegen — generowany kod
+
+`well contract build` czyta `contract/*.toml` i generuje:
+
+**OCaml (primary):**
+```ocaml
+(* _build/contract/user_manager.ml — wygenerowane *)
+module CreateRequest = struct
+  type t = { name : string; email : string; password : string }
+  val to_yojson : t -> Yojson.Safe.t
+  val of_yojson : Yojson.Safe.t -> (t, string) result
+end
+
+module CreateResponse = struct
+  type t = Ok of User.t | AlreadyExists | ValidationError of string
+  val to_yojson : t -> Yojson.Safe.t
+  val of_yojson : Yojson.Safe.t -> (t, string) result
+end
+
+(* Interfejs usługi — to musi zaimplementować aktor *)
+module type SERVICE = sig
+  val create : CreateRequest.t -> CreateResponse.t
+  val find : FindRequest.t -> UserResponse.t
+  val list : ListRequest.t -> ListResponse.t
+  val authenticate : AuthRequest.t -> AuthResponse.t
+end
+```
+
+**TypeScript (opcjonalnie):**
+```typescript
+// _build/contract/user_manager.ts
+interface CreateRequest { name: string; email: string; password: string }
+type CreateResponse = { tag: "Ok"; value: User } | { tag: "AlreadyExists" } | ...
+```
+
+### 9.4 Usługi (aktorzy) — Erlang-inspired na EIO
+
+Każda usługa to aktor z:
+- **Mailbox** — kolejka wiadomości (EIO Stream lub Mutex + Queue)
+- **Stan** — prywatny, mutowalny w obrębie aktora
+- **Izolacja** — `try...with` wokół obsługi każdego komunikatu
+- **Supervision** — restart po crash, backoff, circuit breaker
+
+```ocaml
+(* Definicja usługi — implementuje kontrakt *)
+module UserService = Well.Service.Make(UserManager_contract)(struct
+  type state = {
+    db : Sqlite3.db;
+    cache : (int, User.t) Hashtbl.t;
+  }
+
+  let init _ctx =
+    { db = Sqlite3.db_open "users.db"; cache = Hashtbl.create 256 }
+
+  (* Każdy handler wywoływany w try...with — crash nie zabija usługi *)
+  let create state req =
+    match validate req with
+    | Error msg -> UserManager.CreateResponse.ValidationError msg
+    | Ok () ->
+      let user = insert_user state.db req in
+      Hashtbl.replace state.cache user.id user;
+      UserManager.CreateResponse.Ok user
+
+  let find state req = ...
+  let list state req = ...
+  let authenticate state req = ...
+end)
+```
+
+**Lifecycle aktora:**
+
+```
+spawn → init → [loop: receive → try handle with _ → log + continue] → terminate
+                  ↑                                                         |
+                  └── supervisor restart (backoff: 1s, 2s, 4s, max 30s) ←──┘
+```
+
+### 9.5 Mailbox i komunikacja
+
+```ocaml
+(* Wywołanie synchroniczne — czeka na odpowiedź *)
+let result = Well.Service.call UserService.ref (fun svc -> svc.create request)
+
+(* Wywołanie asynchroniczne — fire-and-forget *)
+Well.Service.cast Logger.ref (fun svc -> svc.log entry)
+
+(* Broadcast do wszystkich instancji *)
+Well.Service.broadcast Notification.ref (fun svc -> svc.notify event)
+```
+
+**Mailbox internals:**
+- EIO `Stream.t` jako kolejka (bounded, backpressure)
+- Fiber per aktor — blokuje się na `Stream.take`
+- `call` = send + `Promise.await` (synchroniczne)
+- `cast` = send (asynchroniczne, fire-and-forget)
+
+### 9.6 Supervision
+
+```ocaml
+(* Supervisor tree — deklaratywny *)
+let () = Well.Supervisor.start [
+  Well.Supervisor.worker UserService.spec;
+  Well.Supervisor.worker OrderService.spec ~restart:`Permanent;
+  Well.Supervisor.worker Logger.spec ~restart:`Permanent;
+  Well.Supervisor.worker EmailWorker.spec ~restart:`Transient;
+]
+```
+
+**Strategie restartu:**
+- `Permanent` — zawsze restartuj (usługi krytyczne)
+- `Transient` — restartuj tylko po crash (nie po normalnym zakończeniu)
+- `Temporary` — nigdy nie restartuj (jednorazowe zadania)
+
+**Backoff:** 1s → 2s → 4s → 8s → 16s → 30s (max)
+**Circuit breaker:** po N crashów w M sekund → usługa oznaczona jako `down`
+
+### 9.7 Izolacja — granice crashy
+
+```ocaml
+(* Wewnętrznie, pętla aktora: *)
+let rec loop state mailbox =
+  let msg = Eio.Stream.take mailbox in
+  let state' =
+    try handle_message state msg
+    with exn ->
+      (* Crash izolowany — log + kontynuacja z poprzednim stanem *)
+      Log.error "Service %s crashed: %s" name (Printexc.to_string exn);
+      Telemetry.increment ~tags:[("service", name)] "service.crash";
+      state (* zachowaj poprzedni stan *)
+  in
+  loop state' mailbox
+```
+
+**Co izolujemy:**
+- Każdy `call`/`cast` w `try...with` — crash nie propaguje się do callera
+- Caller dostaje `Error` wariant zamiast wyjątku
+- Stan usługi przeżywa crash pojedynczego requestu
+- Pełny restart (z `init`) tylko gdy supervisor zdecyduje
+
+### 9.8 Integracja z resztą frameworka
+
+**Routes → Services:**
+```ocaml
+(* Route handler wywołuje usługę — izolacja automatyczna *)
+let () = Well.post "/api/users" (fun req ->
+  let body = parse_json req.body in
+  match Well.Service.call UserService.ref (fun s -> s.create body) with
+  | Ok (UserManager.CreateResponse.Ok user) ->
+    Well.json (User.to_yojson user) |> Well.status 201
+  | Ok (UserManager.CreateResponse.ValidationError msg) ->
+    Well.json (`Assoc [("error", `String msg)]) |> Well.status 422
+  | Error _ ->
+    Well.json (`Assoc [("error", `String "service unavailable")]) |> Well.status 503
+)
+```
+
+**LiveView → Services:**
+```ocaml
+(* LiveView update bezpośrednio woła usługi *)
+let update ctx model = function
+  | CreateUser form_data ->
+    (* EIO: blokuje tę fiberę, reszta systemu działa *)
+    let result = Well.Service.call UserService.ref (fun s -> s.create form_data) in
+    { model with users = result :: model.users; loading = false }
+```
+
+### 9.9 Implementacja — plan
+
+**Krok 1: Contract parser + codegen (~800 LOC)**
+- TOML parser (użyć biblioteki `toml` z opam lub wbudowany)
+- AST kontraktu: `Service`, `Msg` (Struct | Variant), typy
+- Codegen OCaml: typy, to/of_yojson, module type SERVICE
+- Codegen TS (opcjonalnie)
+- CLI: `well contract build`
+
+**Krok 2: Actor runtime (~600 LOC)**
+- `Well.Service.Make` funktor — kontrakt → aktor
+- Mailbox na `Eio.Stream.t`
+- Pętla aktora z `try...with`
+- `call` (sync), `cast` (async)
+- Ref type (jak Erlang pid)
+
+**Krok 3: Supervision (~400 LOC)**
+- Supervisor tree (deklaratywny)
+- Strategie restartu (Permanent, Transient, Temporary)
+- Backoff + circuit breaker
+- Telemetria crashy
+
+**Krok 4: Integracja (~200 LOC)**
+- `Well.Service.call` w route handlerach
+- Error handling (service down → 503)
+- Health check endpoint (status usług)
+
+---
+
+## Status implementacji (aktualizacja)
+
+### ✅ Zrobione
+
+**Faza 0 — Setup projektu:**
+- [x] dune-project z MLX dialect + merlin_reader
+- [x] Struktura pakietów: `well.core`, `well.cli`, `well.html`
+- [x] CLI framework (registry komend, dispatch, help)
+- [x] `well init` z walidacją i scaffoldem (15 plików)
+- [x] HTML library z XSS protection (`escape_html`, `txt`, `raw`)
+- [x] Makefile (build/check/test/dev/install/release)
+- [x] Release bundling z patchelf
+- [x] Vendored .so libraries
+
+**Faza 1 — Core HTTP + WebSocket + LiveView (częściowo):**
+- [x] Raw EIO HTTP/1.1 server (bez Cohttp), request parsing, response writing
+- [x] Routing: `Well.get/post/put/delete`, `:param` segments, query string
+- [x] Response types: JSON/HTML/Text/Redirect/Custom + `status`/`header` transformers
+- [x] Static file serving: MIME types, ETag/304, path safety, text/binary
+- [x] WebSocket: RFC 6455 handshake, frames, masking, ping/pong, `Well.ws`
+- [x] LiveView engine: Elm arch, diffing (values + keyed lists), persistence (Ephemeral/Session/User)
+- [x] LiveView store: SQLite persistence, session store z timeout
+- [x] TLS/HTTPS: `Well.run ~cert ~key ()` via tls-eio
+- [x] HTTP client: `Well.fetch` z chunked encoding + TLS
+- [x] Html: tagi, LiveView helpers (`dynamic`, `each`), key registry
+- [x] Testing DSL: describe/it/expect/matchery (well_test.ml, 402 LOC)
+- [x] PPX: `[@@deriving table]` + `let%query` — parsowanie i generowanie typów (500 LOC)
+
+### 🔨 Do zrobienia
+
+**Faza 1 — dokończenie bazy:**
+- [x] Middleware pipeline (`request -> (request -> response) -> response`)
+- [x] Middleware: logging, CORS, CSRF, rate limiting, auth, error handler
+- [ ] Session persistence (teraz in-memory, potrzebny SQLite/signed cookie store)
+- [ ] Flash messages (one-time data between requests)
+- [x] Routing: scope (nested routes + route groups + middleware per-group)
+- [ ] Routing: named routes, route constraints (`:id` musi być int)
+- [ ] Test runner: autodiscovery `*_test.ml`, parallel via fork, watch mode
+- [ ] Test helpers: `test_server`, `test_client`, `test_ws` do testów HTTP/LiveView
+- [ ] Streaming responses (SSE, chunked transfer)
+- [ ] File upload (multipart/form-data)
+- [ ] Compression (gzip/brotli) dla static + responses
+
+**Faza 2 — Type-safe SQL runtime:**
+- [ ] SQL runtime: execute query, bind params, map results → OCaml types
+- [ ] Connection pool (EIO-based)
+- [ ] Transactions (begin/commit/rollback)
+- [ ] Migracje: `well db migrate`, `well db rollback`, tracking w `_migrations`
+- [ ] Seed data: `well db seed`
+- [ ] Database testing: sandbox (transakcja per test, rollback)
+
+**Faza 2.5 — Kontrakty i usługi (NOWE):**
+- [ ] Contract parser: TOML → AST kontraktu (Service, Msg, types)
+- [ ] Contract codegen OCaml: typy, to/of_yojson, `module type SERVICE`
+- [ ] Contract codegen TypeScript (opcjonalnie)
+- [ ] CLI: `well contract build`
+- [ ] Actor runtime: `Well.Service.Make` funktor, mailbox (`Eio.Stream.t`)
+- [ ] Actor loop z `try...with` izolacją crashy
+- [ ] `call` (sync z Promise), `cast` (async fire-and-forget)
+- [ ] Supervision tree: deklaratywny, strategie restartu (Permanent/Transient/Temporary)
+- [ ] Backoff + circuit breaker
+- [ ] Integracja: `Well.Service.call` w route handlerach i LiveView update
+- [ ] Health check endpoint (status usług)
+
+**Faza 3 — Ekstrakcja i CLI:**
+- [ ] Podział framework / app (osobne pakiety)
+- [ ] CLI generatory: `well gen route`, `well gen model`, `well gen component`
+- [ ] CRUD generator: `well gen crud User name:string email:string`
+- [ ] `well dev` — dev server z hot reload
+- [ ] `well build` — build produkcyjny
+- [ ] `well release` — archiwum gotowe do deployu
+
+**Faza 3 — LiveView gaps:**
+- [ ] Lifecycle hooks: mount, unmount, handle_info, handle_params
+- [ ] Live navigation: `live_navigate`, `live_patch`, pushState
+- [ ] JS hooks: `data-lv-hook`, mounted/updated/destroyed, pushEvent/handleEvent
+- [ ] Debounce / throttle: `data-lv-debounce="300"`
+- [ ] Nested components (stateless function + stateful z własnym stanem)
+- [ ] Temporary assigns (flash, duże listy — reset po render)
+
+**Faza 4 — Dojrzałość:**
+- [ ] Frontend build system z bun (JS/TS/CSS)
+- [ ] Dokumentacja w kodzie + generator (`well docs`)
+- [ ] Hot reload z LiveView reconnection
+- [x] Error pages (dev: stack trace, prod: custom 404/500) — `Well.error_handler` + `Well.on_error`
+- [ ] Snapshot testing (`to_match_snapshot`)
+- [ ] Coverage z bisect_ppx
+
+**Faza 5 — Produkcja:**
+- [ ] Clustering: broadcast between nodes (PubSub)
+- [ ] Telemetria: metryki, Prometheus/OpenTelemetry, health checks
+- [ ] Graceful shutdown: drain connections, save sessions, close WS
+- [ ] HTTP/2: multiplexing, server push
+- [ ] Dev toolbar: request inspector, LiveView state, WS log, SQL log
+- [ ] Let's Encrypt / ACME automatyczny renewal
+
+---
+
 ## Priorytety (sugerowana kolejność)
 
-### Faza 0 - Migracja
-1. Migracja Reason → OCaml + MLX (0)
-   - `.re` bez JSX → `.ml`
-   - `.re` z JSX → `.mlx`
-   - Konfiguracja dune dialect
-   - Weryfikacja że wszystko buduje się i działa
+### Faza 0 - Setup ✅ DONE
+- Migracja Reason → OCaml + MLX
+- Struktura projektu, CLI, HTML library, Makefile
 
-### Faza 1 - Solidna baza
-2. Testing framework - port z well/test + integracja z HTTP/LiveView (6.0, 6.1)
-3. Middleware pipeline (3.1, 3.2)
-4. Static file serving z cache (1.2)
-5. Session management (3.4)
-6. JS hooks (4.4)
-7. Debounce / throttle (4.7)
+### Faza 1 - Solidna baza (OBECNA)
+1. Middleware pipeline + middleware (logging, CORS, CSRF, auth)
+2. Session persistence (SQLite store, signed cookies, flash messages)
+3. Test runner z autodiscovery + test helpers HTTP/LiveView
+4. Routing: nested routes, groups, named routes
+5. Compression (gzip/brotli)
+6. File upload (multipart/form-data)
 
 ### Faza 2 - Type-safe SQL (killer feature)
-8. PPX `[@@deriving table]` - schema z typów OCaml (5.3)
-9. SQL parser w compile time (5.5 krok 1)
-10. PPX `let%query` - walidacja SQL vs schema (5.4, 5.5 krok 2-3)
-11. Code generator - typed queries (5.5 krok 4)
-12. Migracje (5.6)
+7. SQL runtime — execute, bind, map results
+8. Connection pool (EIO)
+9. Transactions
+10. Migracje + seed
+11. Database testing sandbox
 
-### Faza 3 - Ekstrakcja
-13. Podział framework / app (2.1)
-14. CLI narzędzie z generatorami + CRUD generator (2.3, 4.6)
-15. SSL/TLS (1.1)
-16. Live navigation (4.3)
-17. Dokumentacja w kodzie + generator (7.4)
+### Faza 2.5 - Kontrakty i usługi (aktorzy)
+12. Contract parser (TOML → AST)
+13. Contract codegen (OCaml types, yojson, module type)
+14. Actor runtime (mailbox, loop, try...with isolation)
+15. call/cast + Ref type
+16. Supervision tree (restart strategies, backoff, circuit breaker)
+17. Integracja z routes + LiveView
+18. CLI: `well contract build`
+
+### Faza 3 - Ekstrakcja + LiveView
+19. CLI generatory + CRUD generator
+20. LiveView lifecycle (mount, unmount, handle_info)
+21. Live navigation (pushState)
+22. JS hooks / interop
+23. Debounce / throttle
+24. Nested components
 
 ### Faza 4 - Dojrzałość
-18. Ekstrakcja kontraktów (2.4)
-19. Nested components (4.9)
-20. Frontend build system z bun (7.5)
-21. Hot reload (7.1)
+25. Frontend build z bun
+26. Dokumentacja + generator
+27. Hot reload
+28. Error pages (dev/prod)
 
 ### Faza 5 - Produkcja
-22. Clustering (8.3)
-23. Telemetria (8.1)
-24. Uploads (4.5)
-25. HTTP/2 (1.3)
-26. Dev toolbar (7.3)
-27. Build system + dystrybucja (2.2)
+29. Clustering + PubSub
+30. Telemetria + OpenTelemetry
+31. Graceful shutdown
+32. HTTP/2
+33. Dev toolbar
+34. Let's Encrypt / ACME
 
 ---
 
@@ -645,14 +1009,12 @@ Podejście jak ExDoc w Elixirze - dokumentacja W KODZIE.
 
 | Projekt | Lokalizacja | Rola |
 |---------|-------------|------|
-| gateway_client_v2 | `src/gateway_client_v2/` | POC frameworka (LiveView, Blossom, HTML, WebSocket) |
-| well | `~/Documents/well/` | Prototyp frameworka (CLI, testing, ORM, kontrakty, views) |
-| dg | `~/Documents/dg/` | Wzorzec deploymentu (patchelf + bundled .so, unified binary) |
+| gateway_client_v2 | `_reference/gateway_client_v2/` | POC (LiveView, HTTP, WebSocket, HTML) |
+| dg | `~/Documents/dg/` | Wzorzec: deployment (patchelf), kontrakty (TOML → codegen) |
 
-Docelowo: merge well + gateway_client_v2 → jeden framework.
-- LiveView, Blossom, HTML, WebSocket ← z gateway_client_v2
-- CLI, testing, ORM, kontrakty, views ← z well
-- Deployment model (patchelf + .so bundle) ← z dg
-- **Bez Nix** — shipujemy .so jak w dg
-- **OCaml + MLX** — nie Reason (JSX przez mlx dialect, reszta czysty .ml)
-- **Type-safe SQL** — `let%query` + `[@@deriving table]` (killer feature)
+**Zasady:**
+- **Bez Nix** — patchelf + bundled .so (jak dg)
+- **OCaml + MLX** — nie Reason
+- **Type-safe SQL** — `let%query` + `[@@deriving table]`
+- **Kontrakty TOML** — sprawdzony format z dg, wbudowane w framework
+- **Aktorzy** — Erlang-inspired na EIO fibers, izolacja crashy

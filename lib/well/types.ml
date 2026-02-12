@@ -6,4 +6,5 @@ type request = {
   params : (string * string) list;
   query : (string * string) list;
   session_id : string;
+  _context : (int * Obj.t) list;
 }

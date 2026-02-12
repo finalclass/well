@@ -12,17 +12,13 @@ type persistence =
   | Session
   | User
 
-type ctx = {
-  session_id : string;
-}
-
 module type VIEW = sig
   type model
   type msg
 
   val persistence : persistence
-  val init : ctx -> Yojson.Safe.t -> model
-  val update : ctx -> model -> msg -> model
+  val init : Types.request -> Yojson.Safe.t -> model
+  val update : Types.request -> model -> msg -> model
   val render : model -> Html.node
 
   val model_to_yojson : model -> Yojson.Safe.t
@@ -214,7 +210,7 @@ type view_instance = {
 (* ── Registry ──────────────────────────────────────────────────────── *)
 
 type view_entry = {
-  factory : ctx -> Yojson.Safe.t -> view_instance;
+  factory : Types.request -> Yojson.Safe.t -> view_instance;
   view_persistence : persistence;
 }
 
@@ -260,7 +256,6 @@ type topic_state = {
 let handler (req : Types.request) (ws : Websocket.t) =
   let topics : (string, topic_state) Hashtbl.t = Hashtbl.create 8 in
   let session_id = req.session_id in
-  let ctx = { session_id } in
   let conn_topics : (string, unit) Hashtbl.t = Hashtbl.create 8 in
   let conn = { ws; topics = conn_topics } in
   register_connection session_id conn;
@@ -288,8 +283,8 @@ let handler (req : Types.request) (ws : Websocket.t) =
                   let instance, msg_type =
                     match saved_state with
                     | Some model_json ->
-                        (factory ctx model_json, "restored")
-                    | None -> (factory ctx init_args, "full")
+                        (factory req model_json, "restored")
+                    | None -> (factory req init_args, "full")
                   in
                   let html = instance.get_html () in
                   Hashtbl.replace topics topic
@@ -361,11 +356,11 @@ let register
     (type m msg)
     endpoint
     (module View : VIEW with type model = m and type msg = msg) =
-  let factory (ctx : ctx) (props_or_saved : Yojson.Safe.t) =
+  let factory (req : Types.request) (props_or_saved : Yojson.Safe.t) =
     let initial_model =
       match View.model_of_yojson props_or_saved with
       | Ok model -> model
-      | Error _ -> View.init ctx props_or_saved
+      | Error _ -> View.init req props_or_saved
     in
     let state = ref initial_model in
     let initial_html = View.render !state |> Html.element_to_string in
@@ -379,7 +374,7 @@ let register
     let handle_msg msg_json =
       match View.msg_of_yojson msg_json with
       | Ok msg ->
-          state := View.update ctx !state msg;
+          state := View.update req !state msg;
           let new_html = View.render !state |> Html.element_to_string in
           let new_dynamics = collect_dynamics new_html in
           let new_lists = Html.collect_and_clear_lists () in
@@ -412,18 +407,17 @@ let register
 let render_initial
     (type m msg)
     (module View : VIEW with type model = m and type msg = msg)
-    ~session_id ~topic init_args =
-  let ctx = { session_id } in
+    ~(req : Types.request) ~topic init_args =
   let model =
-    match (View.persistence, session_id) with
+    match (View.persistence, req.session_id) with
     | User, uid ->
         (match Liveview_store.load ~user_id:uid ~topic with
          | Some (_, model_json) ->
              (match View.model_of_yojson model_json with
               | Ok m -> m
-              | Error _ -> View.init ctx init_args)
-         | None -> View.init ctx init_args)
-    | _ -> View.init ctx init_args
+              | Error _ -> View.init req init_args)
+         | None -> View.init req init_args)
+    | _ -> View.init req init_args
   in
   let el = View.render model in
   let _ = Html.collect_and_clear_lists () in

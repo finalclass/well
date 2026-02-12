@@ -1,0 +1,6 @@
+(library
+ (name well_ppx)
+ (public_name well.ppx)
+ (kind ppx_rewriter)
+ (libraries ppxlib sqlite3)
+ (preprocess (pps ppxlib.metaquot)))

@@ -85,6 +85,23 @@ let label = tag "label"
 let ul = tag "ul"
 let ol = tag "ol"
 let li = tag "li"
+let strong = tag "strong"
+let em = tag "em"
+let b = tag "b"
+let i = tag "i"
+let small = tag "small"
+let pre = tag "pre"
+let code = tag "code"
+let blockquote = tag "blockquote"
+let table = tag "table"
+let thead = tag "thead"
+let tbody = tag "tbody"
+let tr = tag "tr"
+let th = tag "th"
+let td = tag "td"
+let textarea = tag "textarea"
+let select = tag "select"
+let option = tag "option"
 
 let meta ?id ?class_ ?charset ?content ?name_ ?lang ?children () =
   void_tag "meta" ?id ?class_ ?charset ?content ?name_ ?lang ?children ()
@@ -96,6 +113,10 @@ let script = tag "script"
 
 let txt s : node = `Html (escape_html s)
 let raw s : node = `Html s
+
+let csrf_input token : node =
+  `Html (Printf.sprintf {|<input type="hidden" name="_csrf_token" value="%s" />|}
+           (escape_html token))
 
 (* ── LiveView support ─────────────────────────────────────────────── *)
 
