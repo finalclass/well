@@ -97,18 +97,16 @@ let run args =
     Sys.command full_cmd
   in
   Printf.printf "Resolving dependencies...\n%!";
-  let lock_rc = run_in_dir "dune pkg lock > /dev/null 2>&1" in
+  let lock_rc = run_in_dir "dune pkg lock" in
   if lock_rc <> 0 then (
-    Printf.eprintf "Warning: 'dune pkg lock' failed (exit %d)\n" lock_rc;
-    Printf.eprintf "Run it manually to see details.\n%!")
+    Printf.eprintf "\nWarning: 'dune pkg lock' failed (exit %d)\n" lock_rc;
+    Printf.eprintf "You can run it manually later.\n%!")
   else (
-    Printf.printf "Building (this may take a minute)...\n%!";
-    let build_rc = run_in_dir "dune build > /dev/null 2>&1" in
+    Printf.printf "\nBuilding...\n%!";
+    let build_rc = run_in_dir "dune build" in
     if build_rc <> 0 then (
-      Printf.eprintf "Warning: 'dune build' failed (exit %d)\n" build_rc;
-      Printf.eprintf "Run 'dune build' manually to see details.\n%!")
-    else
-      Printf.printf "Done!\n%!");
+      Printf.eprintf "\nWarning: 'dune build' failed (exit %d)\n" build_rc;
+      Printf.eprintf "You can run 'dune build' manually later.\n%!"));
   Printf.printf "\n";
   if init_in_current_dir then
     Printf.printf "Initialized well project: %s (in current directory)\n\n" name
