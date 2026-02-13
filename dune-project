@@ -21,4 +21,5 @@
   tls-eio
   digestif
   base64
-  ppxlib))
+  ppxlib
+  otoml))

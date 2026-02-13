@@ -1269,6 +1269,17 @@ let run ?(port = 4000) ?cert ?key () =
       else send_and_receive tcp_flow);
   let start_server () =
     Eio.Switch.run @@ fun sw ->
+    (* Wire up Service forward refs *)
+    Service._register_post_json :=
+      (fun path handler ->
+        register "POST" path (fun req ->
+          let result_json = handler req.body in
+          `Custom { status = Some 200;
+                    headers = [("Content-Type", "application/json")];
+                    body = `Text result_json }));
+    Service._cast_sw := Some sw;
+    (* Start all registered service actors *)
+    Service.start_all ~sw;
     let tls_cfg =
       if tls_enabled then
         Some (load_tls_config ~env
@@ -1309,3 +1320,4 @@ let live path (module View : Liveview.VIEW) =
 
 module Websocket = Websocket
 module LiveView = Liveview
+module Service = Service

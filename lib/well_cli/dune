@@ -1,4 +1,4 @@
 (library
  (name well_cli)
  (public_name well.cli)
- (libraries well unix))
+ (libraries well unix otoml))

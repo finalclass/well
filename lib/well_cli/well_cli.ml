@@ -42,3 +42,4 @@ let run argv =
       exit 1)
 
 let () = register Cmd_init.cmd
+let () = register Cmd_contract.cmd

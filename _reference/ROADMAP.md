@@ -171,7 +171,7 @@ my-app/
   - Generuje: model, LiveView list/form/show, routes, migracje
   - Wzorowany na `rails generate scaffold`
 - Dev server: `blossom dev --port 4000`
-- REPL: `blossom repl`
+- REPL: `well repl` (patrz sekcja 10)
 - Migracje: `blossom db migrate`
 
 ### 2.4 System kontraktów i usług (aktorów)
@@ -584,11 +584,10 @@ Podejście jak ExDoc w Elixirze - dokumentacja W KODZIE.
 - Save session state
 - Close WebSocket connections cleanly
 
-### 8.3 Clustering
-- Dziś: single-node only
-- Potrzebne: broadcast between nodes (PubSub)
-- Distributed session store
-- Load balancing aware (sticky sessions for WS)
+### 8.3 Skalowanie
+- Jeden proces, wiele domen (`Eio.Executor_pool`) — wykorzystuje wszystkie rdzenie
+- Nie pre-fork — stateful architektura (aktorzy, LiveView) wymaga wspólnej pamięci
+- Skalowanie horyzontalne: wiele instancji za load balancerem (przyszłość, jeśli potrzebne)
 
 ---
 
@@ -660,21 +659,30 @@ Failed = "string"
 
 ### 9.3 Codegen — generowany kod
 
-`well contract build` czyta `contract/*.toml` i generuje:
+`well contract build` czyta `contract/*.toml` i generuje kod.
+
+**Codegen napisany w OCaml** (nie Go jak w dg — spójność frameworka).
+**TOML parser: `otoml`** (zero zależności, TOML 1.0 compliant, z opam).
 
 **OCaml (primary):**
 ```ocaml
 (* _build/contract/user_manager.ml — wygenerowane *)
 module CreateRequest = struct
   type t = { name : string; email : string; password : string }
-  val to_yojson : t -> Yojson.Safe.t
-  val of_yojson : Yojson.Safe.t -> (t, string) result
+  let make ~name ~email ~password () = { name; email; password }
+  let to_wire (v : t) : Yojson.Safe.t = `List [`String v.name; `String v.email; `String v.password]
+  let of_wire = function
+    | `List [`String name; `String email; `String password] -> { name; email; password }
+    | _ -> failwith "invalid wire format"
 end
 
 module CreateResponse = struct
   type t = Ok of User.t | AlreadyExists | ValidationError of string
-  val to_yojson : t -> Yojson.Safe.t
-  val of_yojson : Yojson.Safe.t -> (t, string) result
+  let to_wire = function
+    | Ok user -> `List [`String "Ok"; User.to_wire user]
+    | AlreadyExists -> `List [`String "AlreadyExists"; `Null]
+    | ValidationError msg -> `List [`String "ValidationError"; `String msg]
+  (* ... of_wire ... *)
 end
 
 (* Interfejs usługi — to musi zaimplementować aktor *)
@@ -684,6 +692,17 @@ module type SERVICE = sig
   val list : ListRequest.t -> ListResponse.t
   val authenticate : AuthRequest.t -> AuthResponse.t
 end
+
+(* Convenience functions — CZYSTE API bez call/cast boilerplate *)
+(* Użytkownik woła: UserManager.create ~name:"Jan" ~email:"jan@x.com" ~password:"..." *)
+val create : name:string -> email:string -> password:string -> CreateResponse.t
+val find : id:int -> UserResponse.t
+val authenticate : email:string -> password:string -> AuthResponse.t
+
+(* Pod spodem: *)
+let create ~name ~email ~password =
+  let req = CreateRequest.make ~name ~email ~password () in
+  Runtime.call ref (fun svc -> svc.create req)
 ```
 
 **TypeScript (opcjonalnie):**
@@ -692,6 +711,29 @@ end
 interface CreateRequest { name: string; email: string; password: string }
 type CreateResponse = { tag: "Ok"; value: User } | { tag: "AlreadyExists" } | ...
 ```
+
+### 9.3.1 Wire format — pozycyjny JSON
+
+Identyczny z dg. Obie strony znają kontrakt → nazwy pól zbędne.
+
+**Structs** → tablice w kolejności definicji:
+```
+{"name": "Jan", "email": "jan@x.com"}  →  ["Jan", "jan@x.com"]
+```
+
+**Variants** → `["ConstructorName", payload]`:
+```
+Ok(user)        →  ["Ok", ["Jan", "jan@x.com", true]]
+AlreadyExists   →  ["AlreadyExists", null]
+```
+
+**Optional** → zawsze obecne, `null` jeśli brak.
+**Lists** → standardowe JSON arrays.
+**Records** → JSON objects (klucze dynamiczne).
+
+**WAŻNE:** Wire format wymaga specyfikacji dokumentacyjnej — ktoś integrujący się
+z well musi wiedzieć jak kodować/dekodować komunikaty. Do opisania w dokumentacji
+frameworka (format, reguły kodowania, przykłady). Wzorzec: ściągnąć z dg.
 
 ### 9.4 Usługi (aktorzy) — Erlang-inspired na EIO
 
@@ -735,24 +777,40 @@ spawn → init → [loop: receive → try handle with _ → log + continue] → 
                   └── supervisor restart (backoff: 1s, 2s, 4s, max 30s) ←──┘
 ```
 
-### 9.5 Mailbox i komunikacja
+### 9.5 API wywołań — czyste, jak zwykłe funkcje
+
+**Zasada: wywołanie usługi wygląda jak zwykłe wywołanie funkcji OCaml.**
+Żadnego `call`, `handle_call`, pattern matchingu na komunikatach.
 
 ```ocaml
-(* Wywołanie synchroniczne — czeka na odpowiedź *)
-let result = Well.Service.call UserService.ref (fun svc -> svc.create request)
+(* Synchroniczne wywołanie — domyślne *)
+let response = UserManager.create ~name:"Jan" ~email:"jan@x.com" ~password:"secret"
+(* response : CreateResponse.t = Ok { id = 1; name = "Jan"; ... } *)
 
-(* Wywołanie asynchroniczne — fire-and-forget *)
-Well.Service.cast Logger.ref (fun svc -> svc.log entry)
+let user = UserManager.find ~id:42
+(* user : FindResponse.t = Ok { ... } | NotFound *)
 
-(* Broadcast do wszystkich instancji *)
-Well.Service.broadcast Notification.ref (fun svc -> svc.notify event)
+(* Fire-and-forget — caller decyduje, nie kontrakt *)
+Well.Service.cast (fun () ->
+  Logger.log ~entity:"user" ~op:"create" ~entity_id:"42"
+)
+(* zwraca unit natychmiast, wykonanie w osobnym fiberze *)
 ```
+
+**cast nie jest właściwością RPC — jest właściwością wywołania.** Każde RPC
+można wywołać sync lub async. `Well.Service.cast` to `Fiber.fork_daemon`
+pod spodem. Zero dodatkowego codegenu, zero duplikacji API.
+
+**Transport — transparentny:**
+- In-process (domyślnie): direct call przez mailbox, zero serializacji
+- Remote (Unix socket): wire format + HTTP, konfiguracja w `Well.Service.connect`
+- API identyczne — caller nie wie jaki transport jest pod spodem
 
 **Mailbox internals:**
 - EIO `Stream.t` jako kolejka (bounded, backpressure)
 - Fiber per aktor — blokuje się na `Stream.take`
-- `call` = send + `Promise.await` (synchroniczne)
-- `cast` = send (asynchroniczne, fire-and-forget)
+- In-process `call` = send + `Promise.await` (synchroniczne)
+- Remote `call` = wire format + POST na socket + deserializacja
 
 ### 9.6 Supervision
 
@@ -799,18 +857,39 @@ let rec loop state mailbox =
 
 ### 9.8 Integracja z resztą frameworka
 
+**Rejestracja w main.ml:**
+```ocaml
+let () =
+  (* In-process services — fiber per service *)
+  Well.Service.register (module UserService);
+  Well.Service.register (module OrderService);
+  Well.Service.register (module Logger);
+
+  (* Remote services — Unix socket + cookie auth *)
+  Well.Service.connect "analytics"
+    ~socket:"/tmp/analytics.sock"
+    ~cookie:(Well.Service.read_cookie ());  (* ~/.well/cookie *)
+
+  Well.get "/users/:id" (fun req -> ...);
+  Well.run ~workers:4 ()
+  (* workers = Executor_pool domain count *)
+```
+
 **Routes → Services:**
 ```ocaml
-(* Route handler wywołuje usługę — izolacja automatyczna *)
+(* Czyste wywołanie — wygląda jak zwykła funkcja *)
 let () = Well.post "/api/users" (fun req ->
-  let body = parse_json req.body in
-  match Well.Service.call UserService.ref (fun s -> s.create body) with
-  | Ok (UserManager.CreateResponse.Ok user) ->
-    Well.json (User.to_yojson user) |> Well.status 201
-  | Ok (UserManager.CreateResponse.ValidationError msg) ->
+  let data = Well.form_params req in
+  match UserManager.create
+    ~name:(List.assoc "name" data)
+    ~email:(List.assoc "email" data)
+    ~password:(List.assoc "password" data) with
+  | Ok user ->
+    Well.json (User.to_wire user) |> Well.status 201
+  | ValidationError msg ->
     Well.json (`Assoc [("error", `String msg)]) |> Well.status 422
-  | Error _ ->
-    Well.json (`Assoc [("error", `String "service unavailable")]) |> Well.status 503
+  | AlreadyExists ->
+    Well.json (`Assoc [("error", `String "already exists")]) |> Well.status 409
 )
 ```
 
@@ -819,35 +898,50 @@ let () = Well.post "/api/users" (fun req ->
 (* LiveView update bezpośrednio woła usługi *)
 let update ctx model = function
   | CreateUser form_data ->
-    (* EIO: blokuje tę fiberę, reszta systemu działa *)
-    let result = Well.Service.call UserService.ref (fun s -> s.create form_data) in
-    { model with users = result :: model.users; loading = false }
+    let result = UserManager.create
+      ~name:form_data.name ~email:form_data.email ~password:form_data.password in
+    { model with last_result = result; loading = false }
 ```
 
 ### 9.9 Implementacja — plan
 
-**Krok 1: Contract parser + codegen (~800 LOC)**
-- TOML parser (użyć biblioteki `toml` z opam lub wbudowany)
+**Krok 1: Contract parser + codegen (~800 LOC, OCaml)**
+- TOML parser: `otoml` (zero-dep, TOML 1.0 compliant, z opam)
 - AST kontraktu: `Service`, `Msg` (Struct | Variant), typy
-- Codegen OCaml: typy, to/of_yojson, module type SERVICE
+- Two-pass parsing: 1) collect names, 2) validate references (jak w dg)
+- Codegen OCaml: typy, `make`, `to_wire`/`of_wire`, `module type SERVICE`
+- Codegen convenience functions: `Service.rpc_name ~arg:val -> Response.t`
 - Codegen TS (opcjonalnie)
 - CLI: `well contract build`
 
 **Krok 2: Actor runtime (~600 LOC)**
 - `Well.Service.Make` funktor — kontrakt → aktor
-- Mailbox na `Eio.Stream.t`
-- Pętla aktora z `try...with`
-- `call` (sync), `cast` (async)
+- Mailbox na `Eio.Stream.t` (bounded, backpressure)
+- Pętla aktora z `try...with` izolacją
+- Connection-per-actor SQLite (własne `Sqlite3.db` w `init`)
+- `Well.Service.cast` — `Fiber.fork_daemon` wrapper
 - Ref type (jak Erlang pid)
 
-**Krok 3: Supervision (~400 LOC)**
+**Krok 3: Transport (~400 LOC)**
+- In-process: direct call przez mailbox (domyślnie)
+- Remote: Unix socket + wire format (pozycyjny JSON)
+- Cookie auth (`~/.well/cookie`) dla remote services
+- `Well.Service.register` (in-process) vs `Well.Service.connect` (remote)
+- Transparentne API — caller nie widzi różnicy
+
+**Krok 4: Supervision (~400 LOC)**
 - Supervisor tree (deklaratywny)
 - Strategie restartu (Permanent, Transient, Temporary)
 - Backoff + circuit breaker
 - Telemetria crashy
 
-**Krok 4: Integracja (~200 LOC)**
-- `Well.Service.call` w route handlerach
+**Krok 5: Executor_pool (~100 LOC)**
+- `Well.run ~workers:N ()` — multi-domain
+- `Eio.Executor_pool` dispatch connections na domeny
+- Domyślnie `Domain.recommended_domain_count ()`
+
+**Krok 6: Integracja (~200 LOC)**
+- `Well.Service.register` / `Well.Service.connect` w main.ml
 - Error handling (service down → 503)
 - Health check endpoint (status usług)
 
@@ -861,15 +955,16 @@ let update ctx model = function
 - [x] dune-project z MLX dialect + merlin_reader
 - [x] Struktura pakietów: `well.core`, `well.cli`, `well.html`
 - [x] CLI framework (registry komend, dispatch, help)
-- [x] `well init` z walidacją i scaffoldem (15 plików)
+- [x] `well init` z walidacją i scaffoldem (~35 plików, w tym kontrakt Tasks + TS client)
 - [x] HTML library z XSS protection (`escape_html`, `txt`, `raw`)
 - [x] Makefile (build/check/test/dev/install/release)
 - [x] Release bundling z patchelf
 - [x] Vendored .so libraries
 
-**Faza 1 — Core HTTP + WebSocket + LiveView (częściowo):**
+**Faza 1 — Core HTTP + WebSocket + LiveView:**
 - [x] Raw EIO HTTP/1.1 server (bez Cohttp), request parsing, response writing
 - [x] Routing: `Well.get/post/put/delete`, `:param` segments, query string
+- [x] Routing: scope (nested routes + route groups + middleware per-group)
 - [x] Response types: JSON/HTML/Text/Redirect/Custom + `status`/`header` transformers
 - [x] Static file serving: MIME types, ETag/304, path safety, text/binary
 - [x] WebSocket: RFC 6455 handshake, frames, masking, ping/pong, `Well.ws`
@@ -878,8 +973,32 @@ let update ctx model = function
 - [x] TLS/HTTPS: `Well.run ~cert ~key ()` via tls-eio
 - [x] HTTP client: `Well.fetch` z chunked encoding + TLS
 - [x] Html: tagi, LiveView helpers (`dynamic`, `each`), key registry
+- [x] Middleware pipeline (`request -> (request -> response) -> response`)
+- [x] Middleware: logging, CORS, CSRF, rate limiting, auth, error handler
+- [x] Session cookies: `well_session=<sha1-hex>; HttpOnly; SameSite=Strict; Path=/`
+- [x] Context funktor: `Well.Context` — type-safe per-request data
+- [x] Form parsing: `Well.form req "key"` / `Well.form_params req`
+- [x] Error pages: dev stack trace + custom `Well.on_error` handler
 - [x] Testing DSL: describe/it/expect/matchery (well_test.ml, 402 LOC)
-- [x] PPX: `[@@deriving table]` + `let%query` — parsowanie i generowanie typów (500 LOC)
+
+**Faza 2 — Type-safe SQL PPX:**
+- [x] PPX: `[@@deriving table ~name:"tbl"]` — rejestracja schema, `_create_table_sql`
+- [x] PPX: `let%query` — walidacja SQL przez sqlite3_prepare, generowanie typowanych modułów
+- [x] Parametry `:name` z inferencją typów z zarejestrowanych schematów
+- [x] SELECT → moduł z `type row`, `val query`; INSERT/UPDATE/DELETE → `val exec`
+
+**Faza 2.5 — Kontrakty i usługi (częściowo):**
+- [x] Contract parser: TOML → AST kontraktu (two-pass, topo sort, cross-module refs)
+- [x] Contract codegen OCaml: typy, `to_wire`/`of_wire` (pozycyjny JSON), `module type IMPL`, `make_spec`
+- [x] Contract codegen: convenience functions (labeled args, cross-module resolution)
+- [x] Contract codegen: cross-module refs (`TaskAccess.Task` → `Task_access.Task.t`)
+- [x] CLI: `well contract build [contract_dir] [output_dir]`
+- [x] Actor runtime: `Well.Service` — mailbox (`Eio.Stream.t`), fiber per actor, izolacja crashy
+- [x] `call` (sync z `Eio.Promise`), `cast` (async `Eio.Fiber.fork`)
+- [x] Transport: in-process (direct call przez mailbox)
+- [x] Exposed services: `Well.Service.expose` → HTTP routes `/rpc/Service/Method`
+- [x] Integracja: convenience fns + `Well.Service.register` / `Well.Service.expose` w main.ml
+- [x] Scaffold: Tasks example (TaskManager → TaskAccess → SQLite, TS client, dune-integrated builds)
 
 ### 🔨 Do zrobienia
 
@@ -898,24 +1017,28 @@ let update ctx model = function
 
 **Faza 2 — Type-safe SQL runtime:**
 - [ ] SQL runtime: execute query, bind params, map results → OCaml types
-- [ ] Connection pool (EIO-based)
+- [ ] Connection-per-actor (każdy aktor otwiera własne `Sqlite3.db` — patrz sekcja 11)
 - [ ] Transactions (begin/commit/rollback)
 - [ ] Migracje: `well db migrate`, `well db rollback`, tracking w `_migrations`
 - [ ] Seed data: `well db seed`
 - [ ] Database testing: sandbox (transakcja per test, rollback)
 
 **Faza 2.5 — Kontrakty i usługi (NOWE):**
+- [ ] Executor_pool: `Well.run ~workers:N ()` — multi-domain, wszystkie rdzenie CPU (patrz sekcja 11)
 - [ ] Contract parser: TOML → AST kontraktu (Service, Msg, types)
-- [ ] Contract codegen OCaml: typy, to/of_yojson, `module type SERVICE`
+- [ ] Contract codegen OCaml: typy, to/of_yojson, wire format, `module type SERVICE`
 - [ ] Contract codegen TypeScript (opcjonalnie)
 - [ ] CLI: `well contract build`
-- [ ] Actor runtime: `Well.Service.Make` funktor, mailbox (`Eio.Stream.t`)
+- [ ] Actor runtime: `Well.Service.Make` funktor, mailbox (`Eio.Stream.t`), connection-per-actor SQLite
 - [ ] Actor loop z `try...with` izolacją crashy
 - [ ] `call` (sync z Promise), `cast` (async fire-and-forget)
+- [ ] Transport: in-process (direct call) domyślnie, Unix socket + wire format opcjonalnie
+- [ ] Cookie auth dla remote services (~/.well/cookie, wzorzec Erlang)
 - [ ] Supervision tree: deklaratywny, strategie restartu (Permanent/Transient/Temporary)
 - [ ] Backoff + circuit breaker
 - [ ] Integracja: `Well.Service.call` w route handlerach i LiveView update
 - [ ] Health check endpoint (status usług)
+- [ ] `well repl` — interaktywna konsola do odpytywania działającego systemu (aktorów, kontraktów, SQL)
 
 **Faza 3 — Ekstrakcja i CLI:**
 - [ ] Podział framework / app (osobne pakiety)
@@ -942,7 +1065,6 @@ let update ctx model = function
 - [ ] Coverage z bisect_ppx
 
 **Faza 5 — Produkcja:**
-- [ ] Clustering: broadcast between nodes (PubSub)
 - [ ] Telemetria: metryki, Prometheus/OpenTelemetry, health checks
 - [ ] Graceful shutdown: drain connections, save sessions, close WS
 - [ ] HTTP/2: multiplexing, server push
@@ -967,41 +1089,142 @@ let update ctx model = function
 
 ### Faza 2 - Type-safe SQL (killer feature)
 7. SQL runtime — execute, bind, map results
-8. Connection pool (EIO)
+8. Connection-per-actor (nie pool — patrz sekcja 11)
 9. Transactions
 10. Migracje + seed
 11. Database testing sandbox
 
 ### Faza 2.5 - Kontrakty i usługi (aktorzy)
-12. Contract parser (TOML → AST)
-13. Contract codegen (OCaml types, yojson, module type)
-14. Actor runtime (mailbox, loop, try...with isolation)
-15. call/cast + Ref type
-16. Supervision tree (restart strategies, backoff, circuit breaker)
-17. Integracja z routes + LiveView
-18. CLI: `well contract build`
+12. Executor_pool — multi-domain, `Well.run ~workers:N ()`
+13. Contract parser (TOML → AST)
+14. Contract codegen (OCaml types, yojson, wire format, module type)
+15. Actor runtime (mailbox, loop, try...with isolation, connection-per-actor)
+16. call/cast + Ref type + transport (in-process / Unix socket)
+17. Cookie auth dla remote services
+18. Supervision tree (restart strategies, backoff, circuit breaker)
+19. Integracja z routes + LiveView
+20. CLI: `well contract build`
+21. `well repl` — konsola do działającego systemu
 
 ### Faza 3 - Ekstrakcja + LiveView
-19. CLI generatory + CRUD generator
-20. LiveView lifecycle (mount, unmount, handle_info)
-21. Live navigation (pushState)
-22. JS hooks / interop
-23. Debounce / throttle
-24. Nested components
+22. CLI generatory + CRUD generator
+23. LiveView lifecycle (mount, unmount, handle_info)
+24. Live navigation (pushState)
+25. JS hooks / interop
+26. Debounce / throttle
+27. Nested components
 
 ### Faza 4 - Dojrzałość
-25. Frontend build z bun
-26. Dokumentacja + generator
-27. Hot reload
-28. Error pages (dev/prod)
+28. Frontend build z bun
+29. Dokumentacja + generator
+30. Hot reload
+31. Error pages (dev/prod)
 
 ### Faza 5 - Produkcja
-29. Clustering + PubSub
-30. Telemetria + OpenTelemetry
-31. Graceful shutdown
-32. HTTP/2
-33. Dev toolbar
-34. Let's Encrypt / ACME
+32. Telemetria + OpenTelemetry
+33. Graceful shutdown
+34. HTTP/2
+35. Dev toolbar
+36. Let's Encrypt / ACME
+
+---
+
+## 10. REPL — `well repl`
+
+### 10.1 Wizja
+
+Interaktywna konsola podłączająca się do działającego systemu. Pozwala odpytywać
+usługi (aktorów), wywoływać kontrakty, badać stan systemu — bez restartowania
+ani pisania jednorazowych skryptów.
+
+Inspiracja: `iex` (Elixir), `rails console`, Erlang shell.
+
+**Kluczowe cechy:**
+- Łączy się z działającą instancją `well` (przez Unix socket lub TCP)
+- Wysyła komunikaty do aktorów (`call`/`cast`) i wyświetla odpowiedzi
+- Pozwala odpytywać stan usług, sprawdzać supervision tree, metryki
+- Wykonuje zapytania SQL na żywo (z typami z PPX)
+- Przydatny do debugowania, eksploracji i operacji na produkcji
+
+**Przykład użycia:**
+```
+$ well repl
+well> UserService.find { id = 42 }
+=> Ok { id = 42; name = "Jan"; email = "jan@example.com"; active = true }
+
+well> Well.Service.status UserService
+=> { state = Running; uptime = 3h42m; processed = 12847; errors = 3 }
+
+well> Well.Service.list ()
+=> [UserService (running), OrderService (running), EmailWorker (restarting)]
+```
+
+Szczegóły implementacji do rozwinięcia w przyszłości.
+
+---
+
+## 11. Model współbieżności i SQLite — WAŻNE
+
+### 11.1 Executor_pool — multi-domain (nie pre-fork)
+
+Well używa `Eio.Executor_pool` do wykorzystania wszystkich rdzeni CPU.
+Jeden proces, N domen OCaml (= N rdzeni). **Nie używamy pre-fork** — byłoby
+to sprzeczne ze stateful architekturą (aktorzy, LiveView, sesje).
+
+```ocaml
+(* Well.run wewnętrznie: *)
+let run ?(workers = Domain.recommended_domain_count ()) ?port () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let pool = Eio.Executor_pool.create
+    ~sw ~domain_count:workers env#domain_mgr in
+  spawn_services ~sw;
+  accept_loop ~sw ~pool (fun flow ->
+    Eio.Executor_pool.submit_fork pool ~sw (fun () ->
+      handle_connection flow
+    )
+  )
+```
+
+**Dlaczego nie pre-fork:**
+- Pre-fork tworzy N kopii wszystkich aktorów → N rozjechanych stanów
+- LiveView sessions żyją w jednym procesie → reconnect do innego = utrata stanu
+- SQLite lock contention przy N procesach piszących do jednego pliku
+- Executor_pool daje identyczną moc CPU bez tych problemów
+
+### 11.2 SQLite connection-per-actor (KRYTYCZNE)
+
+**`Sqlite3.db` handle (C pointer) NIE jest thread-safe.** Użycie tego samego
+handle z dwóch domen = undefined behavior (crash, corrupted data).
+
+**Zasada: każdy aktor otwiera WŁASNE połączenie do SQLite w `init`.**
+
+```ocaml
+(* Poprawnie — każdy aktor ma swoje połączenie *)
+let init _ctx =
+  let db = Sqlite3.db_open "app.db" in
+  ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
+  ignore (Sqlite3.exec db "PRAGMA busy_timeout=5000");
+  { db; ... }
+
+let terminate state =
+  ignore (Sqlite3.db_close state.db)
+```
+
+**Dlaczego to działa dobrze:**
+- SQLite connection = otwarcie pliku, koszt pomijalny (nie ma network roundtripu)
+- WAL mode: wielu readerów jednocześnie, pisanie nie blokuje czytania
+- `busy_timeout=5000`: jeśli inny aktor pisze, czekaj do 5s zamiast SQLITE_BUSY
+- Aktorzy przetwarzają komunikaty sekwencyjnie → minimalne write contention
+
+**Nie potrzeba connection poola** — to wzorzec dla baz sieciowych (PostgreSQL, MySQL).
+SQLite jest in-process, połączenie jest tanie. Jeden handle per aktor = proste i bezpieczne.
+
+**UWAGA dla użytkowników frameworka:**
+Nigdy nie przekazuj `Sqlite3.db` handle między aktorami ani nie dziel go
+między fibrami na różnych domenach. Jeśli potrzebujesz dostępu do bazy
+z wielu miejsc — każde miejsce otwiera własne połączenie. Framework
+powinien to wymuszać przez API (aktor dostaje `db` w `init`, nie z zewnątrz).
 
 ---
 

@@ -88,17 +88,34 @@ let run args =
       write_file full_path file.content)
     files;
   Printf.printf "\n";
-  if init_in_current_dir then (
-    Printf.printf "Initialized well project: %s (in current directory)\n\n" name;
-    Printf.printf "  dune pkg lock\n";
-    Printf.printf "  dune build\n";
-    Printf.printf "  dune exec bin/main.exe\n")
+  (* Run dune pkg lock + dune build inside the project dir *)
+  let run_in_dir cmd_str =
+    let full_cmd =
+      if base_dir = "." then cmd_str
+      else Printf.sprintf "cd %s && %s" base_dir cmd_str
+    in
+    Sys.command full_cmd
+  in
+  Printf.printf "Resolving dependencies...\n%!";
+  let lock_rc = run_in_dir "dune pkg lock > /dev/null 2>&1" in
+  if lock_rc <> 0 then (
+    Printf.eprintf "Warning: 'dune pkg lock' failed (exit %d)\n" lock_rc;
+    Printf.eprintf "Run it manually to see details.\n%!")
+  else (
+    Printf.printf "Building (this may take a minute)...\n%!";
+    let build_rc = run_in_dir "dune build > /dev/null 2>&1" in
+    if build_rc <> 0 then (
+      Printf.eprintf "Warning: 'dune build' failed (exit %d)\n" build_rc;
+      Printf.eprintf "Run 'dune build' manually to see details.\n%!")
+    else
+      Printf.printf "Done!\n%!");
+  Printf.printf "\n";
+  if init_in_current_dir then
+    Printf.printf "Initialized well project: %s (in current directory)\n\n" name
   else (
     Printf.printf "Created new well project: %s\n\n" name;
-    Printf.printf "  cd %s\n" name;
-    Printf.printf "  dune pkg lock\n";
-    Printf.printf "  dune build\n";
-    Printf.printf "  dune exec bin/main.exe\n");
+    Printf.printf "  cd %s\n" name);
+  Printf.printf "  dune exec bin/main.exe\n";
   Printf.printf "\nHappy hacking!\n"
 
 let cmd : Command.t =
