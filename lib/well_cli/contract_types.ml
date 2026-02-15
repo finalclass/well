@@ -8,6 +8,7 @@ type prim_type =
   | Void
   | Date
   | Record
+  | Ctx
 
 type type_info =
   | Prim of prim_type

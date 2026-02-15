@@ -28,6 +28,7 @@ let resolve_prim = function
   | "void" -> Some Void
   | "date" -> Some Date
   | "record" -> Some Record
+  | "ctx" -> Some Ctx
   | _ -> None
 
 (* ── Type resolution ──────────────────────────────────────────────── *)

@@ -187,6 +187,43 @@ let open_db path =
   auto_migrate db;
   db
 
+(* ── Transactions ────────────────────────────────────────────────── *)
+
+let transaction db f =
+  ignore (Sqlite3.exec db "BEGIN");
+  let committed = ref false in
+  Fun.protect
+    ~finally:(fun () ->
+      if not !committed then
+        ignore (Sqlite3.exec db "ROLLBACK"))
+    (fun () ->
+      let result = f db in
+      (match Sqlite3.exec db "COMMIT" with
+       | Sqlite3.Rc.OK -> committed := true
+       | rc ->
+           failwith ("Well.Db.transaction: COMMIT failed: "
+                      ^ Sqlite3.Rc.to_string rc));
+      result)
+
+let transaction_result db f =
+  ignore (Sqlite3.exec db "BEGIN");
+  let committed = ref false in
+  Fun.protect
+    ~finally:(fun () ->
+      if not !committed then
+        ignore (Sqlite3.exec db "ROLLBACK"))
+    (fun () ->
+      match f db with
+      | Ok _ as result ->
+          (match Sqlite3.exec db "COMMIT" with
+           | Sqlite3.Rc.OK -> committed := true
+           | rc ->
+               failwith ("Well.Db.transaction: COMMIT failed: "
+                          ^ Sqlite3.Rc.to_string rc));
+          result
+      | Error _ as result ->
+          result)
+
 (* ── Backup / rollback ────────────────────────────────────────────── *)
 
 let backup path =
@@ -200,6 +237,18 @@ let backup path =
   output_bytes oc data;
   close_out oc;
   Printf.printf "[well] backup created: %s\n%!" bak
+
+(* ── Test sandbox ────────────────────────────────────────────────── *)
+
+let with_test_db f =
+  let db = Sqlite3.db_open ":memory:" in
+  ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
+  auto_migrate db;
+  Fun.protect
+    ~finally:(fun () -> ignore (Sqlite3.db_close db))
+    (fun () -> f db)
+
+(* ── Backup / rollback ────────────────────────────────────────────── *)
 
 let rollback path =
   let bak = path ^ ".bak" in

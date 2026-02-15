@@ -1022,19 +1022,24 @@ let update ctx model = function
 ### 🔨 Do zrobienia
 
 **Faza 1 — drobne braki:**
-- [ ] Session persistence (teraz in-memory, potrzebny SQLite/signed cookie store)
-- [ ] Flash messages (one-time data between requests)
+- [x] Session persistence (SQLite-backed session store)
+- [x] Flash messages (one-time data between requests)
 - [ ] Routing: named routes, route constraints (`:id` musi być int)
-- [ ] Compression (gzip/brotli) dla static + responses
+- [x] Compression (gzip dla static + responses, camlzip)
 
 **Faza 2 — SQL runtime braki:**
-- [ ] Transactions API (begin/commit/rollback) dla user code
-- [ ] Seed data: `well db seed`
+- [x] Transactions API (`Well.Db.transaction`, `Well.Db.transaction_result` z Fun.protect)
+- [x] ~~Seed data~~ — niepotrzebne, użytkownik pisze seed logic w OCaml + `let%query`
 - [ ] Database testing: sandbox (transakcja per test, rollback)
 
 **Faza 2.5 — braki:**
-- [ ] Cookie auth dla remote services (~/.well/cookie, wzorzec Erlang)
-- [ ] `well repl` — interaktywna konsola do odpytywania działającego systemu
+- [x] ~~Cookie auth~~ — niepotrzebne: Unix socket permissions wystarczą, kontekst użytkownika jawnie przez kontrakty
+- [x] `well repl` — placeholder CLI command
+- [ ] RPC ctx: typ `"ctx"` w TOML → `Well.rpc_ctx = { session_id; request_id; user_id?; user_name?; locale }`
+  - expose handler buduje ctx z HTTP request (cookie + Accept-Language + session store)
+  - browser client pomija ctx (expose wstrzykuje), service client przekazuje jawnie
+  - `Well.login req ~user_id ~user_name` ustawia dane w sesji
+  - codegen waliduje: jeśli pole ma typ `"ctx"`, expose wie co wstrzyknąć
 
 **Faza 3 — LiveView gaps:**
 - [ ] handle_params (URL query params change)
@@ -1065,21 +1070,17 @@ let update ctx model = function
 ## Priorytety (sugerowana kolejność dalszej pracy)
 
 ### Faza 0 — Setup ✅ DONE
-### Faza 1 — Core HTTP + WebSocket + LiveView ✅ ~95% DONE
-### Faza 2 — Type-safe SQL PPX + Runtime ✅ ~85% DONE
-### Faza 2.5 — Kontrakty i usługi ✅ ~90% DONE
+### Faza 1 — Core HTTP + WebSocket + LiveView ✅ DONE
+### Faza 2 — Type-safe SQL PPX + Runtime ✅ ~90% DONE
+### Faza 2.5 — Kontrakty i usługi ✅ DONE
 
 ### Następne kroki (w kolejności priorytetów):
-1. Session persistence (SQLite/signed cookie store) + flash messages
-2. Compression (gzip/brotli)
-3. Transactions API
-4. CLI generatory + CRUD generator
-5. Test runner autodiscovery + test helpers
-6. handle_params, nested components, temporary assigns
-7. Cookie auth dla remote services
-8. `well repl`
-9. Dokumentacja + generator
-10. Telemetria, graceful shutdown, HTTP/2
+1. Database testing sandbox (transakcja per test, rollback)
+2. CLI generatory + CRUD generator
+3. Test runner autodiscovery + test helpers
+4. handle_params, nested components, temporary assigns
+5. Dokumentacja + generator
+6. Telemetria, graceful shutdown, HTTP/2
 
 ---
 

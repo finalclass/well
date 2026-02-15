@@ -476,6 +476,66 @@ let session_delete req key =
 let session_clear req =
   Session_store.clear ~session_id:req.session_id
 
+(* ── RPC context ─────────────────────────────────────────────────── *)
+
+type rpc_ctx = {
+  session_id : string;
+  request_id : string;
+  user_id : string option;
+  user_name : string option;
+  locale : string;
+}
+
+let rpc_ctx_to_wire (ctx : rpc_ctx) : Yojson.Safe.t =
+  `List [
+    `String ctx.session_id;
+    `String ctx.request_id;
+    (match ctx.user_id with Some s -> `String s | None -> `Null);
+    (match ctx.user_name with Some s -> `String s | None -> `Null);
+    `String ctx.locale;
+  ]
+
+let rpc_ctx_of_wire (wire : Yojson.Safe.t) : rpc_ctx =
+  match wire with
+  | `List [ sid; rid; uid; uname; loc ] ->
+    { session_id = (match sid with `String s -> s | _ -> "");
+      request_id = (match rid with `String s -> s | _ -> "");
+      user_id = (match uid with `String s -> Some s | _ -> None);
+      user_name = (match uname with `String s -> Some s | _ -> None);
+      locale = (match loc with `String s -> s | _ -> "en");
+    }
+  | _ ->
+    { session_id = ""; request_id = ""; user_id = None;
+      user_name = None; locale = "en" }
+
+let _request_id_counter = ref 0
+
+let build_rpc_ctx (req : request) : rpc_ctx =
+  incr _request_id_counter;
+  let request_id =
+    Printf.sprintf "%s-%d-%f" req.session_id !_request_id_counter
+      (Unix.gettimeofday ())
+    |> Digestif.SHA1.(fun s -> digest_string s |> to_hex)
+  in
+  let user_id = Session_store.get ~session_id:req.session_id ~key:"user_id" in
+  let user_name = Session_store.get ~session_id:req.session_id ~key:"user_name" in
+  let locale =
+    match Session_store.get ~session_id:req.session_id ~key:"locale" with
+    | Some l -> l
+    | None ->
+      match List.assoc_opt "accept-language" req.headers with
+      | Some v ->
+        (match String.split_on_char ',' v with
+         | lang :: _ ->
+           let lang = String.trim lang in
+           (match String.index_opt lang ';' with
+            | Some i -> String.sub lang 0 i
+            | None -> lang)
+         | [] -> "en")
+      | None -> "en"
+  in
+  { session_id = req.session_id; request_id; user_id; user_name; locale }
+
 (* ── Flash API ───────────────────────────────────────────────────── *)
 
 let put_flash req kind message =
@@ -1283,15 +1343,9 @@ let rate_limit ~max_requests ~window_ms () : middleware = fun next req ->
 
 (* ── Auth middleware ──────────────────────────────────────────────── *)
 
-let _auth_key = "_user_id"
+let _auth_key = "user_id"
 
 module Auth_ctx = Context(struct type t = string option let empty = None end)
-
-let login req user_id =
-  Session_store.set ~session_id:req.session_id ~key:_auth_key ~value:user_id
-
-let logout req =
-  Session_store.delete ~session_id:req.session_id ~key:_auth_key
 
 let current_user req =
   match Auth_ctx.get req with
@@ -1705,10 +1759,12 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key () =
     Service._register_post_json :=
       (fun path handler ->
         register "POST" path (fun req ->
-          let result_json = handler req.body in
+          let result_json = handler req in
           `Custom { status = Some 200;
                     headers = [("Content-Type", "application/json")];
                     body = `Text result_json }));
+    Service._build_rpc_ctx :=
+      (fun req -> rpc_ctx_to_wire (build_rpc_ctx req));
     Service._cast_sw := Some sw;
     (* Start all registered service actors *)
     Service.start_all ~sw;

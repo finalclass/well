@@ -7,8 +7,8 @@ type rpc_info = { rname : string; params : param_info list; returns : param_info
 
 type spec = {
   name : string;
-  handler : string -> Yojson.Safe.t -> Yojson.Safe.t;
-  set_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t) -> unit;
+  handler : string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t;
+  set_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) -> unit;
   rpcs : rpc_info list;
 }
 
@@ -22,6 +22,7 @@ type child_status =
 type mailbox_msg =
   | Call of {
       rpc : string;
+      ctx : Yojson.Safe.t;
       payload : Yojson.Safe.t;
       reply : Yojson.Safe.t Eio.Promise.u;
     }
@@ -45,10 +46,14 @@ let supervised_states : (string, supervised) Hashtbl.t = Hashtbl.create 8
 let exposed_services : string list ref = ref []
 
 (* Forward ref — set by well.ml
-   Takes: POST path, handler (request_body_string -> response_json_string) *)
+   Takes: POST path, handler (request -> response_json_string) *)
 let _register_post_json :
-  (string -> (string -> string) -> unit) ref =
+  (string -> (Types.request -> string) -> unit) ref =
   ref (fun _path _handler -> ())
+
+(* Forward ref — set by well.ml, builds rpc_ctx JSON from request *)
+let _build_rpc_ctx : (Types.request -> Yojson.Safe.t) ref =
+  ref (fun _ -> `Null)
 
 let _cast_sw : Eio.Switch.t option ref = ref None
 
@@ -69,9 +74,9 @@ let actor_loop actor =
   let rec loop () =
     match Eio.Stream.take actor.mailbox with
     | Stop -> ()
-    | Call { rpc; payload; reply } ->
+    | Call { rpc; ctx; payload; reply } ->
       let result =
-        try actor.spec.handler rpc payload
+        try actor.spec.handler rpc ctx payload
         with exn ->
           Printf.eprintf "[well] service %s rpc %s error: %s\n%!"
             actor.spec.name rpc (Printexc.to_string exn);
@@ -84,12 +89,12 @@ let actor_loop actor =
 
 (* ── Dispatch function (wired to convenience fns via set_ref) ─────── *)
 
-let dispatch_by_name name rpc payload =
+let dispatch_by_name name rpc ctx payload =
   match Hashtbl.find_opt actors name with
   | None -> `Assoc [("error", `String (name ^ " is down"))]
   | Some actor ->
       let promise, resolver = Eio.Promise.create () in
-      Eio.Stream.add actor.mailbox (Call { rpc; payload; reply = resolver });
+      Eio.Stream.add actor.mailbox (Call { rpc; ctx; payload; reply = resolver });
       Eio.Promise.await promise
 
 (* ── Expose service over HTTP ─────────────────────────────────────── *)
@@ -102,12 +107,13 @@ let expose_http_routes () =
     | Some actor ->
       List.iter (fun (rpc : rpc_info) ->
         let path = Printf.sprintf "/rpc/%s/%s" name rpc.rname in
-        !_register_post_json path (fun body_str ->
+        !_register_post_json path (fun req ->
+          let ctx = !_build_rpc_ctx req in
           let payload =
-            if body_str = "" then `Null
-            else Yojson.Safe.from_string body_str
+            if req.body = "" then `Null
+            else Yojson.Safe.from_string req.body
           in
-          let result = dispatch_by_name name rpc.rname payload in
+          let result = dispatch_by_name name rpc.rname ctx payload in
           Yojson.Safe.to_string result)
       ) actor.spec.rpcs
   ) !exposed_services
@@ -249,7 +255,7 @@ let handle_socket_line line =
       ) statuses) in
       Yojson.Safe.to_string (`Assoc [("result", result)])
     else
-      let result = dispatch_by_name service rpc payload in
+      let result = dispatch_by_name service rpc `Null payload in
       Yojson.Safe.to_string (`Assoc [("result", result)])
   with exn ->
     Yojson.Safe.to_string

@@ -45,6 +45,7 @@ let rec type_to_display = function
   | Prim Void -> "void"
   | Prim Date -> "date"
   | Prim Record -> "record"
+  | Prim Ctx -> "ctx"
   | Custom { msg_name; _ } -> msg_name
   | List inner -> type_to_display inner ^ " list"
   | Optional inner -> type_to_display inner ^ " option"
@@ -59,6 +60,7 @@ let rec type_to_ocaml ~local_module = function
   | Prim Void -> "unit"
   | Prim Date -> "string"
   | Prim Record -> "Yojson.Safe.t"
+  | Prim Ctx -> "Well.rpc_ctx"
   | Custom { module_name; msg_name } ->
     if module_name = local_module then
       msg_name ^ ".t"
@@ -79,6 +81,7 @@ let rec to_wire_expr ~local_module expr = function
   | Prim Void -> "`Null"
   | Prim Date -> Printf.sprintf "`String %s" expr
   | Prim Record -> Printf.sprintf "(%s :> Yojson.Safe.t)" expr
+  | Prim Ctx -> Printf.sprintf "Well.rpc_ctx_to_wire %s" expr
   | Custom { module_name; msg_name } ->
     if module_name = local_module then
       Printf.sprintf "%s.to_wire %s" msg_name expr
@@ -107,6 +110,8 @@ let rec of_wire_expr ~local_module expr = function
     Printf.sprintf "(match %s with `String s -> s | _ -> \"\")" expr
   | Prim Record ->
     Printf.sprintf "(%s :> Yojson.Safe.t)" expr
+  | Prim Ctx ->
+    Printf.sprintf "Well.rpc_ctx_of_wire %s" expr
   | Custom { module_name; msg_name } ->
     if module_name = local_module then
       Printf.sprintf "%s.of_wire %s" msg_name expr
@@ -272,7 +277,7 @@ let generate_impl_sig ~local_module service msgs =
   List.iter (fun (rpc : rpc) ->
     let req_type = resolve_msg_type ~local_module msgs rpc.request_msg in
     let resp_type = resolve_msg_type ~local_module msgs rpc.response_msg in
-    p "  val %s : state -> %s -> %s\n" (snake_case rpc.name) req_type resp_type
+    p "  val %s : state -> Well.rpc_ctx -> %s -> %s\n" (snake_case rpc.name) req_type resp_type
   ) service.rpcs;
   p "end\n";
   Buffer.contents buf
@@ -309,11 +314,12 @@ let generate_make_spec ~local_module:_ cm service =
     p "      ; returns_name = \"%s\" };\n" returns_name
   ) service.rpcs;
   p "    ]\n";
-  p "  ; handler = (fun rpc_name payload ->\n";
+  p "  ; handler = (fun rpc_name ctx_json payload ->\n";
+  p "      let ctx = Well.rpc_ctx_of_wire ctx_json in\n";
   p "      match rpc_name with\n";
   List.iter (fun (rpc : rpc) ->
     p "      | \"%s\" ->\n" rpc.name;
-    p "          %s.to_wire (I.%s !state (%s.of_wire payload))\n"
+    p "          %s.to_wire (I.%s !state ctx (%s.of_wire payload))\n"
       (ocaml_msg_path rpc.response_msg) (snake_case rpc.name) (ocaml_msg_path rpc.request_msg)
   ) service.rpcs;
   p "      | _ -> failwith (\"Unknown RPC: \" ^ rpc_name))\n";
@@ -338,7 +344,7 @@ let generate_convenience_fns cm service =
       let req_path = ocaml_msg_path rpc.request_msg in
       let resp_path = ocaml_msg_path rpc.response_msg in
       let has_optional = List.exists (fun (p : property) -> p.optional) props in
-      p "let %s" fn_name;
+      p "let %s ~ctx" fn_name;
       List.iter (fun (prop : property) ->
         if prop.optional then
           p " ?%s" prop.name
@@ -347,6 +353,7 @@ let generate_convenience_fns cm service =
       ) props;
       if has_optional then p " ()";
       p " =\n";
+      p "  let ctx_wire = Well.rpc_ctx_to_wire ctx in\n";
       p "  let wire = %s.to_wire (%s.make" req_path req_path;
       List.iter (fun (prop : property) ->
         if prop.optional then
@@ -357,17 +364,18 @@ let generate_convenience_fns cm service =
       p " ()) in\n";
       p "  %s.of_wire\n" resp_path;
       p "    ((match !_service_ref with\n";
-      p "      | Some f -> f \"%s\" wire\n" rpc.name;
+      p "      | Some f -> f \"%s\" ctx_wire wire\n" rpc.name;
       p "      | None -> failwith \"%s: service not registered\"))\n\n" cm.name
     | _ ->
       (* Variant or external request — take raw value *)
       let req_path = ocaml_msg_path rpc.request_msg in
       let resp_path = ocaml_msg_path rpc.response_msg in
-      p "let %s req =\n" fn_name;
+      p "let %s ~ctx req =\n" fn_name;
+      p "  let ctx_wire = Well.rpc_ctx_to_wire ctx in\n";
       p "  let wire = %s.to_wire req in\n" req_path;
       p "  %s.of_wire\n" resp_path;
       p "    ((match !_service_ref with\n";
-      p "      | Some f -> f \"%s\" wire\n" rpc.name;
+      p "      | Some f -> f \"%s\" ctx_wire wire\n" rpc.name;
       p "      | None -> failwith \"%s: service not registered\"))\n\n" cm.name
   ) service.rpcs;
   Buffer.contents buf
@@ -390,7 +398,7 @@ let generate_module cm =
   (match cm.service with
    | Some service ->
      (* Service ref *)
-     p "let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None\n\n";
+     p "let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None\n\n";
 
      (* IMPL module type *)
      p "%s\n" (generate_impl_sig ~local_module service cm.msgs);
@@ -444,6 +452,7 @@ let rec ts_type ~local_module = function
   | Prim Void -> "void"
   | Prim Date -> "string"
   | Prim Record -> "unknown"
+  | Prim Ctx -> "RpcCtx"
   | Custom { module_name; msg_name } ->
     if module_name = local_module then msg_name
     else module_name ^ "." ^ msg_name
@@ -456,6 +465,7 @@ let rec ts_type ~local_module = function
 
 let rec ts_encode ~local_module expr = function
   | Prim (String | Int | Float | Bool | Date | Record) -> expr
+  | Prim Ctx -> Printf.sprintf "encodeRpcCtx(%s)" expr
   | Prim Void -> "null"
   | Custom { module_name; msg_name } ->
     if module_name = local_module then
@@ -482,6 +492,7 @@ let rec ts_decode ~local_module expr = function
   | Prim Void -> "undefined"
   | Prim Date -> Printf.sprintf "%s as string" expr
   | Prim Record -> expr
+  | Prim Ctx -> Printf.sprintf "decodeRpcCtx(%s as unknown[])" expr
   | Custom { module_name; msg_name } ->
     if module_name = local_module then
       Printf.sprintf "decode%s(%s as unknown[])" msg_name expr
@@ -780,6 +791,7 @@ let rec go_type ~local_module = function
   | Prim Void -> "struct{}"
   | Prim Date -> "string"
   | Prim Record -> "map[string]any"
+  | Prim Ctx -> "RpcCtx"
   | Custom { module_name; msg_name } ->
     if module_name = local_module then msg_name
     else go_pkg_name module_name ^ "." ^ msg_name
@@ -794,6 +806,7 @@ let rec go_to_wire ~local_module expr = function
   | Prim (String | Int | Float | Bool | Date) -> expr
   | Prim Void -> "nil"
   | Prim Record -> expr
+  | Prim Ctx -> Printf.sprintf "%s.ToWire()" expr
   | Custom { module_name; msg_name = _ } ->
     if module_name = local_module then
       Printf.sprintf "%s.ToWire()" expr
@@ -824,6 +837,7 @@ let rec go_from_wire ~local_module expr = function
   | Prim Void -> "struct{}{}"
   | Prim Date -> Printf.sprintf "%s.(string)" expr
   | Prim Record -> Printf.sprintf "%s.(map[string]any)" expr
+  | Prim Ctx -> Printf.sprintf "RpcCtxFromWire(%s)" expr
   | Custom { module_name; msg_name } ->
     if module_name = local_module then
       Printf.sprintf "%sFromWire(%s)" msg_name expr
@@ -1198,6 +1212,7 @@ let rec dart_type ~local_module = function
   | Prim Void -> "void"
   | Prim Date -> "String"
   | Prim Record -> "Map<String, dynamic>"
+  | Prim Ctx -> "RpcCtx"
   | Custom { module_name; msg_name } ->
     if module_name = local_module then msg_name
     else module_name ^ "." ^ msg_name
@@ -1210,6 +1225,7 @@ let rec dart_type ~local_module = function
 
 let rec dart_to_wire ~local_module expr = function
   | Prim (String | Int | Float | Bool | Date | Record | Void) -> expr
+  | Prim Ctx -> Printf.sprintf "%s.toWire()" expr
   | Custom _ -> Printf.sprintf "%s.toWire()" expr
   | List inner ->
     let needs_map = match inner with
@@ -1235,6 +1251,7 @@ let rec dart_from_wire ~local_module expr = function
   | Prim Void -> "()"
   | Prim Date -> Printf.sprintf "(%s as String)" expr
   | Prim Record -> Printf.sprintf "Map<String, dynamic>.from(%s as Map)" expr
+  | Prim Ctx -> Printf.sprintf "RpcCtx.fromWire(%s)" expr
   | Custom { module_name; msg_name } ->
     if module_name = local_module then
       Printf.sprintf "%s.fromWire(%s)" msg_name expr
