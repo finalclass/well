@@ -43,3 +43,5 @@ let run argv =
 
 let () = register Cmd_init.cmd
 let () = register Cmd_contract.cmd
+let () = register Cmd_db.cmd
+let () = register Cmd_repl.cmd

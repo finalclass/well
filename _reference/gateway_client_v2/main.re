@@ -384,7 +384,7 @@ let run = () => {
       Stdlib.flush(Stdlib.stdout);
       Eio.Fiber.fork(
         ~sw,
-        () => {
+
           let ws_server =
             Websocket.create_server(
               ~make_ctx=WsRoutes.make_ctx,

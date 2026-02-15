@@ -22,4 +22,5 @@
   digestif
   base64
   ppxlib
-  otoml))
+  otoml
+  camlzip))

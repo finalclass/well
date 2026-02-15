@@ -173,10 +173,39 @@ let derive_table_impl ~ctxt (_rec_flag, type_decls) name_opt =
             in
             [%stri let _ = fun [%p x_pat] -> [%e body]]
           in
+          (* Generate: let () = Well.Db.register_table { Well.Db.name = "tbl"; columns = [...] } *)
+          let register_call =
+            let mk_field name =
+              { txt = Ldot (Ldot (Lident "Well", "Db"), name); loc }
+            in
+            let col_exprs =
+              List.map (fun c ->
+                Ast_builder.Default.pexp_record ~loc [
+                  (mk_field "cname", Ast_builder.Default.estring ~loc c.col_name);
+                  (mk_field "sqlite_type", Ast_builder.Default.estring ~loc c.col_sqlite_type);
+                  (mk_field "primary", Ast_builder.Default.ebool ~loc c.col_primary);
+                  (mk_field "nullable", Ast_builder.Default.ebool ~loc c.col_nullable);
+                ] None
+              ) cols
+            in
+            let tbl_expr =
+              Ast_builder.Default.pexp_record ~loc [
+                (mk_field "name", Ast_builder.Default.estring ~loc table_name);
+                (mk_field "columns", Ast_builder.Default.elist ~loc col_exprs);
+              ] None
+            in
+            let register_fn =
+              Ast_builder.Default.pexp_ident ~loc
+                { txt = Ldot (Ldot (Lident "Well", "Db"), "register_table"); loc }
+            in
+            [%stri let () = [%e Ast_builder.Default.pexp_apply ~loc
+              register_fn [(Nolabel, tbl_expr)]]]
+          in
           [
             field_use;
             [%stri
               let [%p pat] = [%e Ast_builder.Default.estring ~loc sql_str]];
+            register_call;
           ]
       | _ ->
           Location.raise_errorf ~loc

@@ -35,6 +35,20 @@ let indent n s =
   |> List.map (fun line -> if line = "" then "" else pad ^ line)
   |> String.concat "\n"
 
+(* ── Type display string (for REPL describe) ─────────────────────── *)
+
+let rec type_to_display = function
+  | Prim String -> "string"
+  | Prim Int -> "int"
+  | Prim Float -> "float"
+  | Prim Bool -> "bool"
+  | Prim Void -> "void"
+  | Prim Date -> "date"
+  | Prim Record -> "record"
+  | Custom { msg_name; _ } -> msg_name
+  | List inner -> type_to_display inner ^ " list"
+  | Optional inner -> type_to_display inner ^ " option"
+
 (* ── Type to OCaml string ─────────────────────────────────────────── *)
 
 let rec type_to_ocaml ~local_module = function
@@ -272,9 +286,29 @@ let generate_make_spec ~local_module:_ cm service =
   p "let make_spec (type s) (module I : IMPL with type state = s) : Well.Service.spec =\n";
   p "  let state = ref (I.init ()) in\n";
   p "  { name = \"%s\"\n" cm.name;
-  p "  ; rpcs = [%s]\n"
-    (String.concat "; "
-       (List.map (fun (rpc : rpc) -> Printf.sprintf "\"%s\"" rpc.name) service.rpcs));
+  p "  ; rpcs = [\n";
+  List.iter (fun (rpc : rpc) ->
+    let req_msg = List.find_opt (fun (m : msg) -> m.name = rpc.request_msg) cm.msgs in
+    let resp_msg = List.find_opt (fun (m : msg) -> m.name = rpc.response_msg) cm.msgs in
+    let gen_params msg_opt =
+      match msg_opt with
+      | Some { kind = Struct props; _ } ->
+        String.concat "; " (List.map (fun (prop : property) ->
+          let ty = if prop.optional then type_to_display (Optional prop.type_info)
+                   else type_to_display prop.type_info in
+          Printf.sprintf "{ Well.Service.pname = \"%s\"; ptype = \"%s\"; poptional = %b }"
+            prop.name ty prop.optional
+        ) props)
+      | _ -> ""
+    in
+    let returns_name = match resp_msg with
+      | Some m -> m.name | None -> rpc.response_msg in
+    p "      { Well.Service.rname = \"%s\"\n" rpc.name;
+    p "      ; params = [%s]\n" (gen_params req_msg);
+    p "      ; returns = [%s]\n" (gen_params resp_msg);
+    p "      ; returns_name = \"%s\" };\n" returns_name
+  ) service.rpcs;
+  p "    ]\n";
   p "  ; handler = (fun rpc_name payload ->\n";
   p "      match rpc_name with\n";
   List.iter (fun (rpc : rpc) ->

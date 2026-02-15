@@ -947,15 +947,15 @@ let update ctx model = function
 
 ---
 
-## Status implementacji (aktualizacja)
+## Status implementacji (aktualizacja 2026-02-15)
 
 ### ✅ Zrobione
 
 **Faza 0 — Setup projektu:**
 - [x] dune-project z MLX dialect + merlin_reader
-- [x] Struktura pakietów: `well.core`, `well.cli`, `well.html`
+- [x] Struktura pakietów: `well.core`, `well.cli`, `well.html`, `well.test`, `well.ppx`
 - [x] CLI framework (registry komend, dispatch, help)
-- [x] `well init` z walidacją i scaffoldem (~35 plików, w tym kontrakt Tasks + TS client)
+- [x] `well init` z walidacją i scaffoldem (~35 plików, w tym kontrakt Tasks + TS client + README)
 - [x] HTML library z XSS protection (`escape_html`, `txt`, `raw`)
 - [x] Makefile (build/check/test/dev/install/release)
 - [x] Release bundling z patchelf
@@ -965,10 +965,16 @@ let update ctx model = function
 - [x] Raw EIO HTTP/1.1 server (bez Cohttp), request parsing, response writing
 - [x] Routing: `Well.get/post/put/delete`, `:param` segments, query string
 - [x] Routing: scope (nested routes + route groups + middleware per-group)
-- [x] Response types: JSON/HTML/Text/Redirect/Custom + `status`/`header` transformers
+- [x] Response types: JSON/HTML/Text/Redirect/Custom/Stream + `status`/`header` transformers
+- [x] Streaming responses: `Well.stream` z chunked transfer encoding
 - [x] Static file serving: MIME types, ETag/304, path safety, text/binary
 - [x] WebSocket: RFC 6455 handshake, frames, masking, ping/pong, `Well.ws`
 - [x] LiveView engine: Elm arch, diffing (values + keyed lists), persistence (Ephemeral/Session/User)
+- [x] LiveView: debounce/throttle (`data-lv-debounce`, `data-lv-throttle`)
+- [x] LiveView: JS hooks (`data-lv-hook`, mounted/updated/destroyed, pushEvent/handleEvent)
+- [x] LiveView: PubSub + server push (`Well.LiveView.broadcast`, `send_event`)
+- [x] LiveView: live navigation (`data-lv-navigate`, `data-lv-patch`, pushState, popstate)
+- [x] LiveView: unified stream handler (Eio.Switch + concurrent WS reader + pubsub fiber)
 - [x] LiveView store: SQLite persistence, session store z timeout
 - [x] TLS/HTTPS: `Well.run ~cert ~key ()` via tls-eio
 - [x] HTTP client: `Well.fetch` z chunked encoding + TLS
@@ -978,94 +984,77 @@ let update ctx model = function
 - [x] Session cookies: `well_session=<sha1-hex>; HttpOnly; SameSite=Strict; Path=/`
 - [x] Context funktor: `Well.Context` — type-safe per-request data
 - [x] Form parsing: `Well.form req "key"` / `Well.form_params req`
+- [x] File upload: multipart/form-data parsing, `Well.file`, `Well.files`, `Well.all_files`
 - [x] Error pages: dev stack trace + custom `Well.on_error` handler
 - [x] Testing DSL: describe/it/expect/matchery (well_test.ml, 402 LOC)
+- [x] Dev server: `make dev` → `dune exec -w` (watch + rebuild + restart)
 
-**Faza 2 — Type-safe SQL PPX:**
+**Faza 2 — Type-safe SQL PPX + Runtime:**
 - [x] PPX: `[@@deriving table ~name:"tbl"]` — rejestracja schema, `_create_table_sql`
 - [x] PPX: `let%query` — walidacja SQL przez sqlite3_prepare, generowanie typowanych modułów
 - [x] Parametry `:name` z inferencją typów z zarejestrowanych schematów
 - [x] SELECT → moduł z `type row`, `val query`; INSERT/UPDATE/DELETE → `val exec`
+- [x] Well.Db: `open_db` (creates dir, WAL mode, auto-migrate)
+- [x] Well.Db: auto-migrate (CREATE TABLE for new, ALTER TABLE ADD COLUMN for new fields)
+- [x] Well.Db: `diff` — introspection of pending schema changes
+- [x] CLI: `well db diff` (Unix socket IPC to running app)
+- [x] CLI: `well db rollback` (swap .bak with current db)
 
-**Faza 2.5 — Kontrakty i usługi (częściowo):**
+**Faza 2.5 — Kontrakty i usługi:**
 - [x] Contract parser: TOML → AST kontraktu (two-pass, topo sort, cross-module refs)
 - [x] Contract codegen OCaml: typy, `to_wire`/`of_wire` (pozycyjny JSON), `module type IMPL`, `make_spec`
 - [x] Contract codegen: convenience functions (labeled args, cross-module resolution)
 - [x] Contract codegen: cross-module refs (`TaskAccess.Task` → `Task_access.Task.t`)
+- [x] Contract codegen: TypeScript, Go, Dart
 - [x] CLI: `well contract build [contract_dir] [output_dir]`
 - [x] Actor runtime: `Well.Service` — mailbox (`Eio.Stream.t`), fiber per actor, izolacja crashy
 - [x] `call` (sync z `Eio.Promise`), `cast` (async `Eio.Fiber.fork`)
 - [x] Transport: in-process (direct call przez mailbox)
+- [x] Transport: remote (Unix socket `data/well.sock` + JSON RPC)
 - [x] Exposed services: `Well.Service.expose` → HTTP routes `/rpc/Service/Method`
+- [x] Supervision: strategie restartu (Permanent/Transient/Temporary), backoff, circuit breaker
+- [x] Health check endpoint (`/health` — status usług)
+- [x] Executor_pool: `Well.run ~workers:N ()` — multi-domain via `Eio.Executor_pool`
 - [x] Integracja: convenience fns + `Well.Service.register` / `Well.Service.expose` w main.ml
 - [x] Scaffold: Tasks example (TaskManager → TaskAccess → SQLite, TS client, dune-integrated builds)
+- [x] Frontend build: bun/TS compilation wired through dune (static/dune, tsconfig.json)
 
 ### 🔨 Do zrobienia
 
-**Faza 1 — dokończenie bazy:**
-- [x] Middleware pipeline (`request -> (request -> response) -> response`)
-- [x] Middleware: logging, CORS, CSRF, rate limiting, auth, error handler
+**Faza 1 — drobne braki:**
 - [ ] Session persistence (teraz in-memory, potrzebny SQLite/signed cookie store)
 - [ ] Flash messages (one-time data between requests)
-- [x] Routing: scope (nested routes + route groups + middleware per-group)
 - [ ] Routing: named routes, route constraints (`:id` musi być int)
-- [ ] Test runner: autodiscovery `*_test.ml`, parallel via fork, watch mode
-- [ ] Test helpers: `test_server`, `test_client`, `test_ws` do testów HTTP/LiveView
-- [ ] Streaming responses (SSE, chunked transfer)
-- [ ] File upload (multipart/form-data)
 - [ ] Compression (gzip/brotli) dla static + responses
 
-**Faza 2 — Type-safe SQL runtime:**
-- [ ] SQL runtime: execute query, bind params, map results → OCaml types
-- [ ] Connection-per-actor (każdy aktor otwiera własne `Sqlite3.db` — patrz sekcja 11)
-- [ ] Transactions (begin/commit/rollback)
-- [ ] Migracje: `well db migrate`, `well db rollback`, tracking w `_migrations`
+**Faza 2 — SQL runtime braki:**
+- [ ] Transactions API (begin/commit/rollback) dla user code
 - [ ] Seed data: `well db seed`
 - [ ] Database testing: sandbox (transakcja per test, rollback)
 
-**Faza 2.5 — Kontrakty i usługi (NOWE):**
-- [ ] Executor_pool: `Well.run ~workers:N ()` — multi-domain, wszystkie rdzenie CPU (patrz sekcja 11)
-- [ ] Contract parser: TOML → AST kontraktu (Service, Msg, types)
-- [ ] Contract codegen OCaml: typy, to/of_yojson, wire format, `module type SERVICE`
-- [ ] Contract codegen TypeScript (opcjonalnie)
-- [ ] CLI: `well contract build`
-- [ ] Actor runtime: `Well.Service.Make` funktor, mailbox (`Eio.Stream.t`), connection-per-actor SQLite
-- [ ] Actor loop z `try...with` izolacją crashy
-- [ ] `call` (sync z Promise), `cast` (async fire-and-forget)
-- [ ] Transport: in-process (direct call) domyślnie, Unix socket + wire format opcjonalnie
+**Faza 2.5 — braki:**
 - [ ] Cookie auth dla remote services (~/.well/cookie, wzorzec Erlang)
-- [ ] Supervision tree: deklaratywny, strategie restartu (Permanent/Transient/Temporary)
-- [ ] Backoff + circuit breaker
-- [ ] Integracja: `Well.Service.call` w route handlerach i LiveView update
-- [ ] Health check endpoint (status usług)
-- [ ] `well repl` — interaktywna konsola do odpytywania działającego systemu (aktorów, kontraktów, SQL)
-
-**Faza 3 — Ekstrakcja i CLI:**
-- [ ] Podział framework / app (osobne pakiety)
-- [ ] CLI generatory: `well gen route`, `well gen model`, `well gen component`
-- [ ] CRUD generator: `well gen crud User name:string email:string`
-- [ ] `well dev` — dev server z hot reload
-- [ ] `well build` — build produkcyjny
-- [ ] `well release` — archiwum gotowe do deployu
+- [ ] `well repl` — interaktywna konsola do odpytywania działającego systemu
 
 **Faza 3 — LiveView gaps:**
-- [ ] Lifecycle hooks: mount, unmount, handle_info, handle_params
-- [ ] Live navigation: `live_navigate`, `live_patch`, pushState
-- [ ] JS hooks: `data-lv-hook`, mounted/updated/destroyed, pushEvent/handleEvent
-- [ ] Debounce / throttle: `data-lv-debounce="300"`
+- [ ] handle_params (URL query params change)
 - [ ] Nested components (stateless function + stateful z własnym stanem)
-- [ ] Temporary assigns (flash, duże listy — reset po render)
+- [ ] Temporary assigns (dane widoczne tylko w jednym renderze)
+- [ ] LiveView uploads (file upload z progress bar przez LiveView)
+
+**Faza 3 — CLI i generatory:**
+- [ ] CLI generatory: `well gen route`, `well gen model`, `well gen component`
+- [ ] CRUD generator: `well gen crud User name:string email:string`
 
 **Faza 4 — Dojrzałość:**
-- [ ] Frontend build system z bun (JS/TS/CSS)
-- [ ] Dokumentacja w kodzie + generator (`well docs`)
-- [ ] Hot reload z LiveView reconnection
-- [x] Error pages (dev: stack trace, prod: custom 404/500) — `Well.error_handler` + `Well.on_error`
+- [ ] Test runner: autodiscovery `*_test.ml`, parallel via fork, watch mode
+- [ ] Test helpers: `test_server`, `test_client`, `test_ws` do testów HTTP/LiveView
 - [ ] Snapshot testing (`to_match_snapshot`)
 - [ ] Coverage z bisect_ppx
+- [ ] Dokumentacja w kodzie + generator (`well docs`)
 
 **Faza 5 — Produkcja:**
-- [ ] Telemetria: metryki, Prometheus/OpenTelemetry, health checks
+- [ ] Telemetria: metryki, Prometheus/OpenTelemetry
 - [ ] Graceful shutdown: drain connections, save sessions, close WS
 - [ ] HTTP/2: multiplexing, server push
 - [ ] Dev toolbar: request inspector, LiveView state, WS log, SQL log
@@ -1073,59 +1062,24 @@ let update ctx model = function
 
 ---
 
-## Priorytety (sugerowana kolejność)
+## Priorytety (sugerowana kolejność dalszej pracy)
 
-### Faza 0 - Setup ✅ DONE
-- Migracja Reason → OCaml + MLX
-- Struktura projektu, CLI, HTML library, Makefile
+### Faza 0 — Setup ✅ DONE
+### Faza 1 — Core HTTP + WebSocket + LiveView ✅ ~95% DONE
+### Faza 2 — Type-safe SQL PPX + Runtime ✅ ~85% DONE
+### Faza 2.5 — Kontrakty i usługi ✅ ~90% DONE
 
-### Faza 1 - Solidna baza (OBECNA)
-1. Middleware pipeline + middleware (logging, CORS, CSRF, auth)
-2. Session persistence (SQLite store, signed cookies, flash messages)
-3. Test runner z autodiscovery + test helpers HTTP/LiveView
-4. Routing: nested routes, groups, named routes
-5. Compression (gzip/brotli)
-6. File upload (multipart/form-data)
-
-### Faza 2 - Type-safe SQL (killer feature)
-7. SQL runtime — execute, bind, map results
-8. Connection-per-actor (nie pool — patrz sekcja 11)
-9. Transactions
-10. Migracje + seed
-11. Database testing sandbox
-
-### Faza 2.5 - Kontrakty i usługi (aktorzy)
-12. Executor_pool — multi-domain, `Well.run ~workers:N ()`
-13. Contract parser (TOML → AST)
-14. Contract codegen (OCaml types, yojson, wire format, module type)
-15. Actor runtime (mailbox, loop, try...with isolation, connection-per-actor)
-16. call/cast + Ref type + transport (in-process / Unix socket)
-17. Cookie auth dla remote services
-18. Supervision tree (restart strategies, backoff, circuit breaker)
-19. Integracja z routes + LiveView
-20. CLI: `well contract build`
-21. `well repl` — konsola do działającego systemu
-
-### Faza 3 - Ekstrakcja + LiveView
-22. CLI generatory + CRUD generator
-23. LiveView lifecycle (mount, unmount, handle_info)
-24. Live navigation (pushState)
-25. JS hooks / interop
-26. Debounce / throttle
-27. Nested components
-
-### Faza 4 - Dojrzałość
-28. Frontend build z bun
-29. Dokumentacja + generator
-30. Hot reload
-31. Error pages (dev/prod)
-
-### Faza 5 - Produkcja
-32. Telemetria + OpenTelemetry
-33. Graceful shutdown
-34. HTTP/2
-35. Dev toolbar
-36. Let's Encrypt / ACME
+### Następne kroki (w kolejności priorytetów):
+1. Session persistence (SQLite/signed cookie store) + flash messages
+2. Compression (gzip/brotli)
+3. Transactions API
+4. CLI generatory + CRUD generator
+5. Test runner autodiscovery + test helpers
+6. handle_params, nested components, temporary assigns
+7. Cookie auth dla remote services
+8. `well repl`
+9. Dokumentacja + generator
+10. Telemetria, graceful shutdown, HTTP/2
 
 ---
 

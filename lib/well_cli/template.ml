@@ -52,8 +52,49 @@ lock:
 	dune pkg lock
 
 dev:
-	dune exec bin/main.exe
+	dune exec -w bin/main.exe
 |}
+
+let readme name =
+  Printf.sprintf {|# %s
+
+Built with [well](https://github.com/anthropics/well) — full-stack OCaml web framework.
+
+## Getting started
+
+```bash
+make dev          # start dev server with hot reload (dune exec -w)
+make build        # build
+make test         # run tests
+make check        # type-check only (faster)
+```
+
+The dev server runs at **http://localhost:4000**.
+
+`make dev` uses `dune exec -w` which watches for file changes, rebuilds, and restarts the server automatically.
+
+## Project structure
+
+```
+bin/main.ml                  # entry point
+lib/%s/                      # app module (name, version)
+lib/%s_web/                  # routes, pages, LiveViews
+  home_page.mlx              # welcome page
+  counter_live.mlx           # LiveView example (counter)
+  notes.ml + notes_page.mlx  # CRUD example with type-safe SQL
+  layout.mlx                 # HTML layout
+lib/contract/                # service contracts (TOML → generated code)
+static/                      # CSS, JS, assets
+test/                        # tests
+data/                        # SQLite databases (gitignored)
+```
+
+## File types
+
+- `.ml` — OCaml (logic, models, queries)
+- `.mlx` — OCaml + JSX (views, components)
+- `.ts` — TypeScript (compiled to JS via bun, wired through dune)
+|} name name name
 
 let gitignore =
   {|_build/
@@ -146,6 +187,7 @@ in
     <p><a href="/counter">(txt "Counter — LiveView demo")</a></p>
     <p><a href="/notes">(txt "Notes — SQLite demo (login required)")</a></p>
     <p><a href="/tasks">(txt "Tasks — Contract/RPC demo")</a></p>
+    <p><a href="/upload">(txt "Upload — File upload demo")</a></p>
     <p class_="request-id">(txt ("Request: " ^ Request_id.get req))</p>
 </div>
 </Layout>
@@ -283,88 +325,80 @@ let%query all_notes = "SELECT id, title, body FROM notes ORDER BY id DESC"
 let%query insert_note = "INSERT INTO notes (title, body) VALUES (:title, :body)"
 let%query delete_note = "DELETE FROM notes WHERE id = :id"
 
-let db =
-  lazy
-    (let d = Sqlite3.db_open "data/app.sqlite" in
-     ignore (Sqlite3.exec d "PRAGMA journal_mode=WAL");
-     ignore (Sqlite3.exec d "PRAGMA synchronous=NORMAL");
-     ignore (Sqlite3.exec d note_create_table_sql);
-     d)
-
+let db = lazy (Well.Db.open_db "data/app.sqlite")
 let get_db () = Lazy.force db
 |}
 
 let notes_page _name =
   {|(* Per-route middleware — only logged-in users can access /notes *)
 let auth = [Well.require_auth ()]
+;;
 
-let () =
-  Well.get ~middleware:auth "/notes" @@ fun req ->
-  let open Html in
-  let db = Notes.get_db () in
-  let notes = Notes.All_notes.query db in
-  <Layout title="Notes">
-  <div>
-    <h1>(txt "Notes")</h1>
-    <p>(txt "Type-safe SQLite queries, validated at compile time.")</p>
-    <form action="/notes" method_="POST" class_="notes-form">
-      (csrf_input (Well.csrf_token req))
-      <input type_="text" name_="title" placeholder="Title" />
-      <input type_="text" name_="body" placeholder="Write something..." />
-      <button type_="submit">(txt "Add note")</button>
-    </form>
-    <ul class_="notes-list">
-      (notes |> List.map (fun (n : Notes.All_notes.row) ->
-        <li>
-          <strong>(txt n.title)</strong>
-          (txt (" — " ^ n.body))
-        </li>
-      ) |> cat |> raw)
-    </ul>
-    <p><a href="/">(txt "← Back")</a></p>
-  </div>
-  </Layout>
+Well.get ~middleware:auth "/notes" @@ fun req ->
+let open Html in
+let db = Notes.get_db () in
+let notes = Notes.All_notes.query db in
+<Layout title="Notes">
+<div>
+  <h1>(txt "Notes")</h1>
+  <p>(txt "Type-safe SQLite queries, validated at compile time.")</p>
+  <form action="/notes" method_="POST" class_="notes-form">
+    (csrf_input (Well.csrf_token req))
+    <input type_="text" name_="title" placeholder="Title" />
+    <input type_="text" name_="body" placeholder="Write something..." />
+    <button type_="submit">(txt "Add note")</button>
+  </form>
+  <ul class_="notes-list">
+    (notes |> List.map (fun (n : Notes.All_notes.row) ->
+      <li>
+        <strong>(txt n.title)</strong>
+        (txt (" — " ^ n.body))
+      </li>
+    ) |> cat |> raw)
+  </ul>
+  <p><a href="/">(txt "← Back")</a></p>
+</div>
+</Layout>
+;;
 
-let () =
-  Well.post ~middleware:auth "/notes" @@ fun req ->
-  let db = Notes.get_db () in
-  let title = Well.form req "title" in
-  let body = Well.form req "body" in
-  if title <> "" then
-    Notes.Insert_note.exec db ~title ~body;
-  Well.redirect "/notes"
+Well.post ~middleware:auth "/notes" @@ fun req ->
+let db = Notes.get_db () in
+let title = Well.form req "title" in
+let body = Well.form req "body" in
+if title <> "" then
+  Notes.Insert_note.exec db ~title ~body;
+Well.redirect "/notes"
 |}
 
 let login_page _name =
-  {|let () =
-  Well.get "/login" @@ fun req ->
-  let open Html in
-  let return_to = match Well.query req "return_to" with Some p -> p | None -> "/" in
-  <Layout title="Login">
-  <div>
-    <h1>(txt "Login")</h1>
-    <p>(txt "Enter any username to try the auth flow.")</p>
-    <form action="/login" method_="POST" class_="login-form">
-      (csrf_input (Well.csrf_token req))
-      <input type_="hidden" name_="return_to" value=return_to />
-      <input type_="text" name_="username" placeholder="Username" />
-      <button type_="submit">(txt "Login")</button>
-    </form>
-    <p><a href="/">(txt "← Back")</a></p>
-  </div>
-  </Layout>
+  {|Well.get "/login" @@ fun req ->
+let open Html in
+let return_to = match Well.query req "return_to" with Some p -> p | None -> "/" in
+<Layout title="Login">
+<div>
+  <h1>(txt "Login")</h1>
+  <p>(txt "Enter any username to try the auth flow.")</p>
+  <form action="/login" method_="POST" class_="login-form">
+    (csrf_input (Well.csrf_token req))
+    <input type_="hidden" name_="return_to" value=return_to />
+    <input type_="text" name_="username" placeholder="Username" />
+    <button type_="submit">(txt "Login")</button>
+  </form>
+  <p><a href="/">(txt "← Back")</a></p>
+</div>
+</Layout>
+;;
 
-let () =
-  Well.post "/login" @@ fun req ->
-  let username = Well.form req "username" in
-  let return_to = let r = Well.form req "return_to" in if r = "" then "/" else r in
-  if username <> "" then Well.login req username;
-  Well.redirect return_to
+Well.post "/login" @@ fun req ->
+let username = Well.form req "username" in
+let return_to = let r = Well.form req "return_to" in if r = "" then "/" else r in
+if username <> "" then Well.login req username;
+Well.redirect return_to
+;;
 
-let () =
-  Well.post "/logout" @@ fun req ->
-  Well.logout req;
-  Well.redirect "/"
+Well.post "/logout" @@ fun req ->
+Well.logout req;
+Well.redirect "/"
 |}
 
 let counter_live _name =
@@ -396,7 +430,7 @@ let update _req model = function
   | Decrement -> {model with count= model.count - model.step}
   | Reset -> {model with count= 0}
 
-let render model =
+let view model =
   let open Html in
   <div class_="counter">
     <div class_="counter-display">
@@ -422,32 +456,121 @@ let render model =
 let counter_page _name =
   {|Well.get "/counter" @@ fun _req ->
 let open Html in
-let module LiveView = Well.LiveView in
 <Layout title="Counter">
 <div>
-    <h1>(txt "Counter — LiveView Demo")</h1>
-    <p>(txt "Real-time server-side state with WebSocket updates.")</p>
-    <LiveView name="counter" />
-    <p><a href="/">(txt "Back")</a></p>
+  <h1>(txt "Counter — LiveView Demo")</h1>
+  <p>(txt "Real-time server-side state with WebSocket updates.")</p>
+  <Well.LiveView name="counter" />
+  <p><a href="/">(txt "Back")</a></p>
 </div>
 </Layout>
 |}
 
 let static_well_live_js =
   {|// well-live.js — LiveView client
-// Handles WebSocket connection, DOM patching, and event delegation
+// Handles WebSocket connection, DOM patching, event delegation,
+// debounce/throttle, JS hooks, server push, and live navigation
 
 (function () {
   "use strict";
 
-  let ws = null;
-  let reconnectDelay = 500;
-  const maxReconnectDelay = 10000;
-  const liveViews = new Map();
+  var ws = null;
+  var reconnectDelay = 500;
+  var maxReconnectDelay = 10000;
+  var liveViews = new Map();
+
+  // ── Debounce / Throttle ──────────────────────────────────────────
+
+  var debounceTimers = new Map();
+  var throttleTimers = new Map();
+
+  function debouncedSend(key, ms, fn) {
+    clearTimeout(debounceTimers.get(key));
+    debounceTimers.set(key, setTimeout(fn, ms));
+  }
+  function throttledSend(key, ms, fn) {
+    var now = Date.now();
+    if (now - (throttleTimers.get(key) || 0) >= ms) {
+      throttleTimers.set(key, now);
+      fn();
+    }
+  }
+  function maybeSend(el, fn) {
+    var debounce = el.closest("[data-lv-debounce]");
+    var throttle = el.closest("[data-lv-throttle]");
+    if (debounce) {
+      var ms = parseInt(debounce.getAttribute("data-lv-debounce"), 10) || 300;
+      var key = debounce.getAttribute("id") || debounce.getAttribute("data-lv-change") || "d";
+      debouncedSend(key, ms, fn);
+    } else if (throttle) {
+      var ms2 = parseInt(throttle.getAttribute("data-lv-throttle"), 10) || 300;
+      var key2 = throttle.getAttribute("id") || throttle.getAttribute("data-lv-click") || "t";
+      throttledSend(key2, ms2, fn);
+    } else {
+      fn();
+    }
+  }
+
+  // ── JS Hooks ─────────────────────────────────────────────────────
+
+  var hooks = {};
+  var hookInstances = new Map();
+  window.WellLive = { hooks: hooks };
+
+  function mountHooks(container) {
+    var els = container.querySelectorAll("[data-lv-hook]");
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (hookInstances.has(el)) continue;
+      var name = el.getAttribute("data-lv-hook");
+      var hookDef = hooks[name];
+      if (!hookDef) continue;
+      var topic = findLiveView(el);
+      var instance = {
+        el: el, _topic: topic, _handlers: {},
+        pushEvent: function (event, payload) {
+          if (this._topic) sendMsg(this._topic, ["HookEvent", { event: event, payload: payload }]);
+        },
+        handleEvent: function (event, cb) {
+          if (!this._handlers[event]) this._handlers[event] = [];
+          this._handlers[event].push(cb);
+        }
+      };
+      hookInstances.set(el, instance);
+      if (hookDef.mounted) hookDef.mounted.call(instance);
+    }
+  }
+  function updateHooks(container) {
+    hookInstances.forEach(function (instance, el) {
+      if (!container.contains(el)) {
+        var name = el.getAttribute("data-lv-hook");
+        var hookDef = hooks[name];
+        if (hookDef && hookDef.destroyed) hookDef.destroyed.call(instance);
+        hookInstances.delete(el);
+      }
+    });
+    hookInstances.forEach(function (instance, el) {
+      if (container.contains(el)) {
+        var name = el.getAttribute("data-lv-hook");
+        var hookDef = hooks[name];
+        if (hookDef && hookDef.updated) hookDef.updated.call(instance);
+      }
+    });
+    mountHooks(container);
+  }
+  function dispatchHookEvent(topic, event, payload) {
+    hookInstances.forEach(function (instance) {
+      if (instance._topic === topic && instance._handlers[event]) {
+        instance._handlers[event].forEach(function (cb) { cb(payload); });
+      }
+    });
+  }
+
+  // ── Connection ───────────────────────────────────────────────────
 
   function connect() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = proto + "//" + location.host + "/live";
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var url = proto + "//" + location.host + "/live";
     ws = new WebSocket(url);
 
     ws.onopen = function () {
@@ -462,57 +585,70 @@ let static_well_live_js =
     };
 
     ws.onmessage = function (event) {
-      let msg;
+      var msg;
       try { msg = JSON.parse(event.data); } catch (e) { return; }
-      const topic = msg.topic;
-      const lv = liveViews.get(topic);
-      if (!lv) return;
+      var topic = msg.topic;
+      var lv = liveViews.get(topic);
 
       switch (msg.type) {
         case "full":
         case "restored":
-          lv.el.innerHTML = msg.html;
-          lv.el.classList.remove("lv-loading");
+          if (lv) {
+            lv.el.innerHTML = msg.html;
+            lv.el.classList.remove("lv-loading");
+            mountHooks(lv.el);
+          }
           break;
         case "patch":
+          if (!lv) break;
           if (msg.changes) {
-            const keys = Object.keys(msg.changes);
-            for (let i = 0; i < keys.length; i++) {
-              const id = keys[i];
-              const el = lv.el.querySelector('[data-lv="' + id + '"]');
+            var keys = Object.keys(msg.changes);
+            for (var i = 0; i < keys.length; i++) {
+              var id = keys[i];
+              var el = lv.el.querySelector('[data-lv="' + id + '"]');
               if (el) el.textContent = msg.changes[id];
             }
           }
           if (msg.list_ops) {
-            const listIds = Object.keys(msg.list_ops);
-            for (let i = 0; i < listIds.length; i++) {
-              const listId = listIds[i];
-              const ops = msg.list_ops[listId];
-              const container = lv.el.querySelector('[data-lv-each="' + listId + '"]');
+            var listIds = Object.keys(msg.list_ops);
+            for (var li = 0; li < listIds.length; li++) {
+              var listId = listIds[li];
+              var ops = msg.list_ops[listId];
+              var container = lv.el.querySelector('[data-lv-each="' + listId + '"]');
               if (!container) continue;
-              const existing = new Map();
-              for (let j = 0; j < container.children.length; j++) {
-                const key = container.children[j].getAttribute("data-lv-key");
+              var existing = new Map();
+              for (var j = 0; j < container.children.length; j++) {
+                var key = container.children[j].getAttribute("data-lv-key");
                 if (key) existing.set(key, container.children[j]);
               }
               if (ops.inserts) {
-                const insertKeys = Object.keys(ops.inserts);
-                for (let j = 0; j < insertKeys.length; j++) {
-                  const key = insertKeys[j];
-                  const tmp = document.createElement("div");
-                  tmp.innerHTML = ops.inserts[key];
-                  const newEl = tmp.firstElementChild;
-                  if (newEl) existing.set(key, newEl);
+                var insertKeys = Object.keys(ops.inserts);
+                for (var ij = 0; ij < insertKeys.length; ij++) {
+                  var ikey = insertKeys[ij];
+                  var tmp = document.createElement("div");
+                  tmp.innerHTML = ops.inserts[ikey];
+                  var newEl = tmp.firstElementChild;
+                  if (newEl) existing.set(ikey, newEl);
                 }
               }
               if (ops.order) {
                 while (container.firstChild) container.removeChild(container.firstChild);
-                for (let j = 0; j < ops.order.length; j++) {
-                  const el = existing.get(ops.order[j]);
-                  if (el) container.appendChild(el);
+                for (var oi = 0; oi < ops.order.length; oi++) {
+                  var oel = existing.get(ops.order[oi]);
+                  if (oel) container.appendChild(oel);
                 }
               }
             }
+          }
+          updateHooks(lv.el);
+          break;
+        case "event":
+          if (msg.event) dispatchHookEvent(topic, msg.event, msg.payload || null);
+          break;
+        case "navigate":
+          if (msg.url && msg.html) {
+            history.pushState({ wellNav: true }, "", msg.url);
+            applyNavigationHtml(msg.html);
           }
           break;
       }
@@ -536,7 +672,7 @@ let static_well_live_js =
   }
 
   function findLiveView(el) {
-    let node = el;
+    var node = el;
     while (node) {
       if (node.tagName === "LIVE-VIEW") {
         return node.getAttribute("data-topic") || node.getAttribute("data-liveview");
@@ -546,43 +682,133 @@ let static_well_live_js =
     return null;
   }
 
+  // ── Event delegation ─────────────────────────────────────────────
+
   document.addEventListener("click", function (e) {
-    const target = e.target.closest("[data-lv-click]");
+    var navTarget = e.target.closest("[data-lv-navigate]");
+    if (navTarget) {
+      e.preventDefault();
+      var url = navTarget.getAttribute("href") || navTarget.getAttribute("data-lv-navigate");
+      if (url) navigateTo(url);
+      return;
+    }
+    var patchTarget = e.target.closest("[data-lv-patch]");
+    if (patchTarget) {
+      e.preventDefault();
+      var patchUrl = patchTarget.getAttribute("href") || patchTarget.getAttribute("data-lv-patch");
+      if (patchUrl) navigateTo(patchUrl, true);
+      return;
+    }
+    var target = e.target.closest("[data-lv-click]");
     if (!target) return;
-    const action = target.getAttribute("data-lv-click");
-    const topic = findLiveView(target);
-    if (topic && action) sendMsg(topic, [action]);
+    var action = target.getAttribute("data-lv-click");
+    var topic = findLiveView(target);
+    if (topic && action) {
+      maybeSend(target, function () { sendMsg(topic, [action]); });
+    }
   });
 
   document.addEventListener("submit", function (e) {
-    const target = e.target.closest("[data-lv-submit]");
+    var target = e.target.closest("[data-lv-submit]");
     if (!target) return;
     e.preventDefault();
-    const action = target.getAttribute("data-lv-submit");
-    const topic = findLiveView(target);
+    var action = target.getAttribute("data-lv-submit");
+    var topic = findLiveView(target);
     if (!topic || !action) return;
-    const formData = new FormData(target);
-    const data = {};
+    var formData = new FormData(target);
+    var data = {};
     formData.forEach(function (value, key) { data[key] = value; });
-    sendMsg(topic, [action, data]);
+    maybeSend(target, function () { sendMsg(topic, [action, data]); });
     target.querySelectorAll('input:not([type="hidden"]):not([type="submit"])').forEach(function (input) { input.value = ""; });
   });
 
   document.addEventListener("input", function (e) {
-    const target = e.target.closest("[data-lv-change]");
+    var target = e.target.closest("[data-lv-change]");
     if (!target) return;
-    const action = target.getAttribute("data-lv-change");
-    const topic = findLiveView(target);
-    if (topic && action) sendMsg(topic, [action, e.target.value]);
+    var action = target.getAttribute("data-lv-change");
+    var topic = findLiveView(target);
+    if (topic && action) {
+      maybeSend(e.target, function () { sendMsg(topic, [action, e.target.value]); });
+    }
   });
 
-  document.addEventListener("DOMContentLoaded", function () {
-    const elements = document.querySelectorAll("live-view");
+  // ── Live Navigation ──────────────────────────────────────────────
+
+  function navigateTo(url, replace) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      window.location.href = url;
+      return;
+    }
+    liveViews.forEach(function (lv, topic) {
+      ws.send(JSON.stringify({ type: "leave", topic: topic }));
+    });
+    ws.send(JSON.stringify({ type: "navigate", url: url, replace: !!replace }));
+  }
+
+  function applyNavigationHtml(html) {
+    hookInstances.forEach(function (instance, el) {
+      var name = el.getAttribute("data-lv-hook");
+      var hookDef = hooks[name];
+      if (hookDef && hookDef.destroyed) hookDef.destroyed.call(instance);
+    });
+    hookInstances.clear();
+    liveViews.clear();
+    var tmp = document.createElement("html");
+    tmp.innerHTML = html;
+    var newMain = tmp.querySelector("main");
+    var oldMain = document.querySelector("main");
+    if (newMain && oldMain) {
+      oldMain.innerHTML = newMain.innerHTML;
+      var newTitle = tmp.querySelector("title");
+      if (newTitle) document.title = newTitle.textContent;
+    } else {
+      var newBody = tmp.querySelector("body");
+      if (newBody) document.body.innerHTML = newBody.innerHTML;
+    }
+    discoverAndJoin();
+  }
+
+  function discoverAndJoin() {
+    var elements = document.querySelectorAll("live-view");
     if (elements.length === 0) return;
     elements.forEach(function (el) {
-      const endpoint = el.getAttribute("data-liveview");
-      const topic = el.getAttribute("data-topic") || endpoint;
-      let props = {};
+      var endpoint = el.getAttribute("data-liveview");
+      var topic = el.getAttribute("data-topic") || endpoint;
+      var props = {};
+      try { props = JSON.parse(el.getAttribute("data-props") || "{}"); } catch (e) {}
+      liveViews.set(topic, { el: el, endpoint: endpoint, props: props });
+    });
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      liveViews.forEach(function (lv, topic) {
+        lv.el.classList.add("lv-loading");
+        ws.send(JSON.stringify({
+          type: "join", topic: topic,
+          endpoint: lv.endpoint, props: lv.props,
+        }));
+      });
+    }
+  }
+
+  window.addEventListener("popstate", function () {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      liveViews.forEach(function (lv, topic) {
+        ws.send(JSON.stringify({ type: "leave", topic: topic }));
+      });
+      ws.send(JSON.stringify({ type: "navigate", url: location.pathname + location.search }));
+    } else {
+      window.location.reload();
+    }
+  });
+
+  // ── Initialize ───────────────────────────────────────────────────
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var elements = document.querySelectorAll("live-view");
+    if (elements.length === 0) return;
+    elements.forEach(function (el) {
+      var endpoint = el.getAttribute("data-liveview");
+      var topic = el.getAttribute("data-topic") || endpoint;
+      var props = {};
       try { props = JSON.parse(el.getAttribute("data-props") || "{}"); } catch (e) {}
       liveViews.set(topic, { el: el, endpoint: endpoint, props: props });
     });
@@ -1185,14 +1411,7 @@ let%query update_completed = "UPDATE tasks SET completed = :completed WHERE id =
 let%query update_title = "UPDATE tasks SET title = :title WHERE id = :id"
 let%query delete_task = "DELETE FROM tasks WHERE id = :id"
 
-let db =
-  lazy
-    (let d = Sqlite3.db_open "data/app.sqlite" in
-     ignore (Sqlite3.exec d "PRAGMA journal_mode=WAL");
-     ignore (Sqlite3.exec d "PRAGMA synchronous=NORMAL");
-     ignore (Sqlite3.exec d task_row_create_table_sql);
-     d)
-
+let db = lazy (Well.Db.open_db "data/app.sqlite")
 let get_db () = Lazy.force db
 
 let task_of_row (r : All_tasks.row) : Task_access.Task.t =
@@ -1281,19 +1500,18 @@ let spec = Task_manager.make_spec (module Impl)
 |}
 
 let tasks_page _name =
-  {|let () =
-  Well.get "/tasks" @@ fun _req ->
-  let open Html in
-  <Layout title="Tasks">
-  <div>
-    <h1>(txt "Tasks — Contract/RPC Demo")</h1>
-    <p>(txt "Service contracts with TypeScript client and SQLite backend.")</p>
-    <div id="tasks-app" class_="tasks-container">
-      <p class_="loading">(txt "Loading...")</p>
-    </div>
-    <p><a href="/">(txt "← Back")</a></p>
+  {|Well.get "/tasks" @@ fun _req ->
+let open Html in
+<Layout title="Tasks">
+<div>
+  <h1>(txt "Tasks — Contract/RPC Demo")</h1>
+  <p>(txt "Service contracts with TypeScript client and SQLite backend.")</p>
+  <div id="tasks-app" class_="tasks-container">
+    <p class_="loading">(txt "Loading...")</p>
   </div>
-  </Layout>
+  <p><a href="/">(txt "← Back")</a></p>
+</div>
+</Layout>
 |}
 
 let tasks_ts =
@@ -1391,6 +1609,88 @@ document.addEventListener("DOMContentLoaded", () => loadTasks());
 
 let tasks_js =
   {|(function(){"use strict";async function rpc(s,m,p){const r=await fetch("/rpc/"+s+"/"+m,{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"XMLHttpRequest"},body:JSON.stringify(p)});if(!r.ok)throw new Error("RPC "+s+"."+m+": "+r.status);return r.json()}function decTask(w){return{id:w[0],title:w[1],completed:w[2]}}function decTaskListRes(w){return{tasks:w[0].map(v=>decTask(v))}}function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}let tasks=[];async function load(){const r=decTaskListRes(await rpc("TaskManager","list",[100]));tasks=r.tasks;render()}async function add(t){await rpc("TaskManager","add",[t]);await load()}async function toggle(id){await rpc("TaskManager","toggle",[id]);await load()}async function del(id){await rpc("TaskManager","delete",[id]);await load()}function render(){const app=document.getElementById("tasks-app");if(!app)return;const rem=tasks.filter(t=>!t.completed).length;let h='<form class="tasks-form" onsubmit="return false"><input type="text" id="task-input" placeholder="What needs to be done?" /><button type="submit">Add</button></form><ul class="tasks-list">';for(const t of tasks){h+='<li class="task-item'+(t.completed?" completed":"")+'"><label><input type="checkbox"'+(t.completed?" checked":"")+' data-id="'+t.id+'" class="task-toggle" /><span>'+esc(t.title)+'</span></label><button class="task-delete" data-id="'+t.id+'">\u00d7</button></li>'}h+='</ul><p class="tasks-remaining">'+rem+" task"+(rem!==1?"s":"")+" remaining</p>";app.innerHTML=h;const form=app.querySelector(".tasks-form");const input=app.querySelector("#task-input");form?.addEventListener("submit",e=>{e.preventDefault();const t=input.value.trim();if(t){add(t);input.value=""}});app.querySelectorAll(".task-toggle").forEach(el=>{el.addEventListener("change",()=>{toggle(parseInt(el.dataset.id))})});app.querySelectorAll(".task-delete").forEach(el=>{el.addEventListener("click",()=>{del(parseInt(el.dataset.id))})})}document.addEventListener("DOMContentLoaded",()=>load())})();
+|}
+
+let upload_page _name =
+  {|let upload_dir = "data/uploads"
+
+let ensure_dir () =
+  if not (Well.file_exists upload_dir) then
+    Well.mkdir upload_dir
+;;
+
+Well.get "/upload" @@ fun req ->
+let open Html in
+let token = Well.csrf_token req in
+let files = Well.list_dir upload_dir in
+<Layout title="Upload">
+<div>
+  <h1>(txt "Upload — File Upload Demo")</h1>
+  <p>(txt "Multipart form-data upload with streaming download.")</p>
+  <form action="/upload" method_="POST" enctype="multipart/form-data" class_="upload-form">
+    (csrf_input token)
+    <label for_="file" class_="upload-label">(txt "Choose a file")</label>
+    <input type_="file" name_="file" id="file" />
+    <button type_="submit">(txt "Upload")</button>
+  </form>
+  (match files with
+   | [] -> <p class_="upload-empty">(txt "No files uploaded yet.")</p>
+   | _ ->
+     <div>
+       <h2>(txt "Uploaded files")</h2>
+       <ul class_="upload-list">
+         (files |> List.map (fun name ->
+           <li>
+             <a href=("/upload/download/" ^ name)>(txt name)</a>
+           </li>
+         ) |> cat |> raw)
+       </ul>
+     </div>)
+  <p><a href="/">(txt "\xe2\x86\x90 Back")</a></p>
+</div>
+</Layout>
+;;
+
+Well.post "/upload" @@ fun req ->
+ensure_dir ();
+match Well.file req "file" with
+| None -> Well.redirect "/upload"
+| Some f ->
+    let safe_name =
+      String.map (fun c -> if c = '/' || c = '\\' || c = '\x00' then '_' else c) f.filename
+    in
+    let path = Filename.concat upload_dir safe_name in
+    Well.write_file path f.data;
+    Well.redirect "/upload"
+;;
+
+Well.get "/upload/download/:name" @@ fun req ->
+let name = Well.param req "name" in
+let safe_name =
+  String.map (fun c -> if c = '/' || c = '\\' || c = '\x00' then '_' else c) name
+in
+let path = Filename.concat upload_dir safe_name in
+if not (Well.file_exists path) then
+  Well.text "Not found" |> Well.status 404
+else
+  Well.stream_file
+    ~headers:[("Content-Disposition", "attachment; filename=\"" ^ safe_name ^ "\"")]
+    path
+|}
+
+let upload_css =
+  {|
+/* Upload */
+.upload-form { display: flex; gap: 0.5rem; align-items: center; margin: 1rem 0; flex-wrap: wrap; }
+.upload-form input[type="file"] { flex: 1; min-width: 200px; }
+.upload-form button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; }
+.upload-form button:hover { background: #1d4ed8; }
+.upload-label { font-weight: 600; }
+.upload-list { list-style: none; margin-top: 0.5rem; }
+.upload-list li { padding: 0.4rem 0; border-bottom: 1px solid #e5e7eb; }
+.upload-list a { text-decoration: none; }
+.upload-list a:hover { text-decoration: underline; }
+.upload-empty { color: #6b7280; margin: 1rem 0; }
 |}
 
 let tsconfig_json =
@@ -1670,6 +1970,7 @@ type file = {
 
 let project_files name =
   [
+    { path = "README.md"; content = readme name };
     { path = "dune-project"; content = dune_project name };
     { path = "dune"; content = root_dune };
     { path = "Makefile"; content = makefile };
@@ -1740,8 +2041,13 @@ let project_files name =
     { path = "static/dune"; content = static_dune };
     { path = "static/ts/tasks.ts"; content = tasks_ts };
     { path = "static/tasks.js"; content = tasks_js };
-    { path = "static/app.css"; content = static_app_css ^ notes_css ^ counter_css ^ auth_css ^ tasks_css };
+    { path = "static/app.css"; content = static_app_css ^ notes_css ^ counter_css ^ auth_css ^ tasks_css ^ upload_css };
     { path = "static/well-live.js"; content = static_well_live_js };
     { path = "tsconfig.json"; content = tsconfig_json };
     { path = "data/.gitkeep"; content = "" };
+    { path = "data/uploads/.gitkeep"; content = "" };
+    {
+      path = Printf.sprintf "lib/%s_web/upload_page.mlx" name;
+      content = upload_page name;
+    };
   ]

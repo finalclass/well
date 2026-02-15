@@ -5,6 +5,10 @@ let _register_ws_route :
   (string -> (Types.request -> Websocket.t -> unit) -> unit) ref =
   ref (fun _ _ -> ())
 
+(* Forward ref — set by well.ml to resolve routes for live navigation *)
+let _resolve_route : (Types.request -> string -> string option) ref =
+  ref (fun _ _ -> None)
+
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
 type persistence =
@@ -19,7 +23,7 @@ module type VIEW = sig
   val persistence : persistence
   val init : Types.request -> Yojson.Safe.t -> model
   val update : Types.request -> model -> msg -> model
-  val render : model -> Html.node
+  val view : model -> Html.node
 
   val model_to_yojson : model -> Yojson.Safe.t
   val model_of_yojson : Yojson.Safe.t -> (model, string) result
@@ -193,6 +197,61 @@ let encode_patch_with_lists topic changes list_ops =
   in
   encode_msg topic "patch" with_lists
 
+let encode_event topic event payload =
+  encode_msg topic "event" [("event", `String event); ("payload", payload)]
+
+let encode_navigate url html =
+  `Assoc [("type", `String "navigate"); ("url", `String url); ("html", `String html)]
+
+(* ── PubSub ───────────────────────────────────────────────────────── *)
+
+let _pubsub_mu = Mutex.create ()
+
+(* channel -> list of (id, callback) *)
+let pubsub : (string, (int * (Yojson.Safe.t -> unit)) list) Hashtbl.t =
+  Hashtbl.create 16
+
+let _next_sub_id = ref 0
+
+let subscribe channel cb =
+  Mutex.lock _pubsub_mu;
+  let id = incr _next_sub_id; !_next_sub_id in
+  let subs =
+    match Hashtbl.find_opt pubsub channel with
+    | Some s -> s
+    | None -> []
+  in
+  Hashtbl.replace pubsub channel ((id, cb) :: subs);
+  Mutex.unlock _pubsub_mu;
+  id
+
+let unsubscribe channel sub_id =
+  Mutex.lock _pubsub_mu;
+  (match Hashtbl.find_opt pubsub channel with
+   | Some subs ->
+       let filtered = List.filter (fun (id, _) -> id <> sub_id) subs in
+       if filtered = [] then Hashtbl.remove pubsub channel
+       else Hashtbl.replace pubsub channel filtered
+   | None -> ());
+  Mutex.unlock _pubsub_mu
+
+let broadcast channel msg_json =
+  Mutex.lock _pubsub_mu;
+  let subs =
+    match Hashtbl.find_opt pubsub channel with
+    | Some s -> s
+    | None -> []
+  in
+  Mutex.unlock _pubsub_mu;
+  List.iter (fun (_, cb) -> (try cb msg_json with _ -> ())) subs
+
+(* ── Unified handler message type ─────────────────────────────────── *)
+
+type handler_msg =
+  | WsMsg of Yojson.Safe.t
+  | WsClosed
+  | InfoMsg of Yojson.Safe.t  (* server-pushed msg *)
+
 (* ── View instance ─────────────────────────────────────────────────── *)
 
 type handle_result = {
@@ -253,17 +312,123 @@ type topic_state = {
 
 (* ── Multiplexed WebSocket handler ─────────────────────────────────── *)
 
+let save_all_topics topics session_id =
+  Hashtbl.iter
+    (fun _ ts ->
+      save_state ts.ts_persistence session_id ts.ts_topic
+        ts.ts_endpoint (ts.ts_instance.get_model_json ()))
+    topics
+
 let handler (req : Types.request) (ws : Websocket.t) =
   let topics : (string, topic_state) Hashtbl.t = Hashtbl.create 8 in
   let session_id = req.session_id in
   let conn_topics : (string, unit) Hashtbl.t = Hashtbl.create 8 in
   let conn = { ws; topics = conn_topics } in
+  let sub_ids : (string * int) list ref = ref [] in
   register_connection session_id conn;
   cleanup_sessions ();
-  let rec loop () =
-    match Websocket.receive_json ws with
+  Eio.Switch.run @@ fun sw ->
+  let unified = Eio.Stream.create 64 in
+  (* Fork: WS reader fiber *)
+  Eio.Fiber.fork ~sw (fun () ->
+    let rec read_loop () =
+      match Websocket.receive_json ws with
+      | None -> Eio.Stream.add unified WsClosed
+      | Some json -> Eio.Stream.add unified (WsMsg json); read_loop ()
+    in
+    read_loop ()
+  );
+  let handle_join topic endpoint init_args =
+    match Hashtbl.find_opt view_registry endpoint with
+    | Some { factory; view_persistence } ->
+        let saved_state =
+          load_state view_persistence session_id topic endpoint
+        in
+        let instance, msg_type =
+          match saved_state with
+          | Some model_json -> (factory req model_json, "restored")
+          | None -> (factory req init_args, "full")
+        in
+        let html = instance.get_html () in
+        Hashtbl.replace topics topic
+          { ts_endpoint = endpoint;
+            ts_topic = topic;
+            ts_persistence = view_persistence;
+            ts_instance = instance };
+        Hashtbl.replace conn_topics topic ();
+        (* Subscribe to pubsub for this topic *)
+        let sub_id = subscribe topic (fun msg_json ->
+          Eio.Stream.add unified (InfoMsg msg_json)
+        ) in
+        sub_ids := (topic, sub_id) :: !sub_ids;
+        let msg =
+          if msg_type = "restored" then encode_restored topic html
+          else encode_full topic html
+        in
+        Websocket.send_json ws msg
     | None -> ()
-    | Some json ->
+  in
+  let handle_leave topic =
+    (match Hashtbl.find_opt topics topic with
+     | Some ts ->
+         save_state ts.ts_persistence session_id ts.ts_topic
+           ts.ts_endpoint (ts.ts_instance.get_model_json ());
+         Hashtbl.remove topics topic;
+         Hashtbl.remove conn_topics topic;
+         (* Unsubscribe from pubsub *)
+         (match List.assoc_opt topic !sub_ids with
+          | Some sub_id ->
+              unsubscribe topic sub_id;
+              sub_ids := List.filter (fun (t, _) -> t <> topic) !sub_ids
+          | None -> ())
+     | None -> ())
+  in
+  let handle_msg topic msg_json =
+    match Hashtbl.find_opt topics topic with
+    | Some ts ->
+        (* For User persistence, reload from DB before processing *)
+        (match ts.ts_persistence with
+         | User ->
+             (match Liveview_store.load ~user_id:session_id ~topic with
+              | Some (_, model_json) -> ts.ts_instance.load_model model_json
+              | None -> ())
+         | _ -> ());
+        (match ts.ts_instance.handle_msg msg_json with
+         | Some { changes; list_ops } ->
+             let patch_msg =
+               encode_patch_with_lists topic changes list_ops
+             in
+             Websocket.send_json ws patch_msg;
+             save_state ts.ts_persistence session_id ts.ts_topic
+               ts.ts_endpoint (ts.ts_instance.get_model_json ());
+             (match ts.ts_persistence with
+              | User ->
+                  broadcast_to_user session_id topic ws patch_msg
+              | _ -> ())
+         | None -> ())
+    | None -> ()
+  in
+  let handle_navigate url =
+    (* Save all current topics *)
+    save_all_topics topics session_id;
+    (* Resolve the URL to HTML via the route system *)
+    match !_resolve_route req url with
+    | Some html ->
+        Websocket.send_json ws (encode_navigate url html)
+    | None ->
+        (* Send navigate with empty html — client will do full reload *)
+        Websocket.send_json ws (encode_navigate url "")
+  in
+  (* Main loop reads from unified stream *)
+  let rec loop () =
+    match Eio.Stream.take unified with
+    | WsClosed ->
+        (* Clean up subscriptions *)
+        List.iter (fun (ch, id) -> unsubscribe ch id) !sub_ids;
+        sub_ids := [];
+        save_all_topics topics session_id;
+        unregister_connection session_id ws
+    | WsMsg json ->
         let open Yojson.Safe.Util in
         let type_ = try json |> member "type" |> to_string with _ -> "" in
         let topic = try json |> member "topic" |> to_string with _ -> "" in
@@ -275,78 +440,69 @@ let handler (req : Types.request) (ws : Websocket.t) =
              let init_args =
                try json |> member "props" with _ -> `Null
              in
-             (match Hashtbl.find_opt view_registry endpoint with
-              | Some { factory; view_persistence } ->
-                  let saved_state =
-                    load_state view_persistence session_id topic endpoint
-                  in
-                  let instance, msg_type =
-                    match saved_state with
-                    | Some model_json ->
-                        (factory req model_json, "restored")
-                    | None -> (factory req init_args, "full")
-                  in
-                  let html = instance.get_html () in
-                  Hashtbl.replace topics topic
-                    { ts_endpoint = endpoint;
-                      ts_topic = topic;
-                      ts_persistence = view_persistence;
-                      ts_instance = instance };
-                  Hashtbl.replace conn_topics topic ();
-                  let msg =
-                    if msg_type = "restored" then
-                      encode_restored topic html
-                    else encode_full topic html
-                  in
-                  Websocket.send_json ws msg
-              | None -> ());
+             handle_join topic endpoint init_args;
              loop ()
          | "leave" ->
-             (match Hashtbl.find_opt topics topic with
-              | Some ts ->
-                  save_state ts.ts_persistence session_id ts.ts_topic
-                    ts.ts_endpoint
-                    (ts.ts_instance.get_model_json ());
-                  Hashtbl.remove topics topic;
-                  Hashtbl.remove conn_topics topic
-              | None -> ());
+             handle_leave topic;
              loop ()
          | "msg" ->
              let msg_json =
                try json |> member "msg" with _ -> `Null
              in
-             (match Hashtbl.find_opt topics topic with
-              | Some ts ->
-                  (* For User persistence, reload from DB before processing *)
-                  (match ts.ts_persistence with
-                   | User ->
-                       (match
-                          Liveview_store.load ~user_id:session_id ~topic
-                        with
-                        | Some (_, model_json) ->
-                            ts.ts_instance.load_model model_json
-                        | None -> ())
-                   | _ -> ());
-                  (match ts.ts_instance.handle_msg msg_json with
-                   | Some { changes; list_ops } ->
-                       let patch_msg =
-                         encode_patch_with_lists topic changes list_ops
-                       in
-                       Websocket.send_json ws patch_msg;
-                       save_state ts.ts_persistence session_id ts.ts_topic
-                         ts.ts_endpoint
-                         (ts.ts_instance.get_model_json ());
-                       (match ts.ts_persistence with
-                        | User ->
-                            broadcast_to_user session_id topic ws patch_msg
-                        | _ -> ())
-                   | None -> ())
-              | None -> ());
+             handle_msg topic msg_json;
+             loop ()
+         | "navigate" ->
+             let url =
+               try json |> member "url" |> to_string with _ -> ""
+             in
+             if url <> "" then handle_navigate url;
              loop ()
          | _ -> loop ())
+    | InfoMsg msg_json ->
+        let open Yojson.Safe.Util in
+        (* Check if this is a hook event or a regular broadcast *)
+        let is_hook_event =
+          try ignore (msg_json |> member "__well_event" |> to_string); true
+          with _ -> false
+        in
+        if is_hook_event then begin
+          (* Server→client hook event — send to all active topics *)
+          let event =
+            try msg_json |> member "__well_event" |> to_string with _ -> ""
+          in
+          let payload =
+            try msg_json |> member "__well_payload" with _ -> `Null
+          in
+          Hashtbl.iter
+            (fun topic _ts ->
+              let ev_msg = encode_event topic event payload in
+              (try Websocket.send_json ws ev_msg with _ -> ()))
+            topics
+        end else begin
+          (* Regular broadcast — dispatch through update cycle *)
+          Hashtbl.iter
+            (fun topic ts ->
+              (match ts.ts_persistence with
+               | User ->
+                   (match Liveview_store.load ~user_id:session_id ~topic with
+                    | Some (_, model_json) ->
+                        ts.ts_instance.load_model model_json
+                    | None -> ())
+               | _ -> ());
+              match ts.ts_instance.handle_msg msg_json with
+              | Some { changes; list_ops } ->
+                  let patch_msg =
+                    encode_patch_with_lists topic changes list_ops
+                  in
+                  Websocket.send_json ws patch_msg;
+                  save_state ts.ts_persistence session_id ts.ts_topic
+                    ts.ts_endpoint (ts.ts_instance.get_model_json ())
+              | None -> ())
+            topics
+        end;
+        loop ()
   in
-  loop ();
-  unregister_connection session_id ws
+  loop ()
 
 (* ── Registration ──────────────────────────────────────────────────── *)
 
@@ -363,11 +519,11 @@ let register
       | Error _ -> View.init req props_or_saved
     in
     let state = ref initial_model in
-    let initial_html = View.render !state |> Html.element_to_string in
+    let initial_html = View.view !state |> Html.element_to_string in
     let dynamics = ref (collect_dynamics initial_html) in
     let lists : list_state ref = ref (Html.collect_and_clear_lists ()) in
     let get_html () =
-      let html = View.render !state |> Html.element_to_string in
+      let html = View.view !state |> Html.element_to_string in
       let _ = Html.collect_and_clear_lists () in
       html
     in
@@ -375,7 +531,7 @@ let register
       match View.msg_of_yojson msg_json with
       | Ok msg ->
           state := View.update req !state msg;
-          let new_html = View.render !state |> Html.element_to_string in
+          let new_html = View.view !state |> Html.element_to_string in
           let new_dynamics = collect_dynamics new_html in
           let new_lists = Html.collect_and_clear_lists () in
           let changes = diff_dynamics !dynamics new_dynamics in
@@ -402,6 +558,13 @@ let register
     !_register_ws_route "/live" handler
   end
 
+(* ── Server push helpers ───────────────────────────────────────────── *)
+
+let send_event topic event payload =
+  broadcast topic
+    (`Assoc [("__well_event", `String event);
+             ("__well_payload", payload)])
+
 (* ── SSR: render initial HTML ──────────────────────────────────────── *)
 
 let render_initial
@@ -419,7 +582,7 @@ let render_initial
          | None -> View.init req init_args)
     | _ -> View.init req init_args
   in
-  let el = View.render model in
+  let el = View.view model in
   let _ = Html.collect_and_clear_lists () in
   el
 

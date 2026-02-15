@@ -23,43 +23,65 @@ let attrs_to_string attrs =
   in
   String.concat "" parts
 
+let bool_attrs_to_string attrs =
+  let parts =
+    List.filter_map
+      (fun (k, v) ->
+        if v then Some (Printf.sprintf " %s" k) else None)
+      attrs
+  in
+  String.concat "" parts
+
 let cat (children : node list) =
   String.concat "" (List.map (fun (`Html s) -> s) children)
 
 let void_tag name ?(id = "") ?(class_ = "") ?(charset = "")
     ?(content = "") ?(name_ = "") ?(lang = "") ?(rel = "") ?(href = "")
+    ?(enctype = "") ?(accept = "") ?(for_ = "") ?(multiple = false)
     ?(children : node list = []) () : node =
   ignore children;
   let attrs =
     [
       ("id", id); ("class", class_); ("charset", charset);
       ("content", content); ("name", name_); ("lang", lang);
-      ("rel", rel); ("href", href);
+      ("rel", rel); ("href", href); ("enctype", enctype);
+      ("accept", accept); ("for", for_);
     ]
   in
-  `Html (Printf.sprintf "<%s%s />" name (attrs_to_string attrs))
+  let bools = [("multiple", multiple)] in
+  `Html (Printf.sprintf "<%s%s%s />" name (attrs_to_string attrs) (bool_attrs_to_string bools))
 
 let tag name ?(id = "") ?(class_ = "") ?(lang = "")
     ?(data_lv_click = "") ?(data_lv_submit = "") ?(data_lv_change = "")
+    ?(data_lv_debounce = "") ?(data_lv_throttle = "")
+    ?(data_lv_hook = "") ?(data_lv_navigate = "") ?(data_lv_patch = "")
     ?(action = "") ?(method_ = "") ?(href = "")
     ?(type_ = "") ?(placeholder = "") ?(value = "")
     ?(name_ = "") ?(charset = "") ?(content = "")
-    ?(src = "")
+    ?(src = "") ?(enctype = "") ?(accept = "") ?(for_ = "")
+    ?(multiple = false)
     ?(children : node list = []) () : node =
   let attrs =
     [
       ("id", id); ("class", class_); ("lang", lang);
       ("data-lv-click", data_lv_click); ("data-lv-submit", data_lv_submit);
       ("data-lv-change", data_lv_change);
+      ("data-lv-debounce", data_lv_debounce);
+      ("data-lv-throttle", data_lv_throttle);
+      ("data-lv-hook", data_lv_hook);
+      ("data-lv-navigate", data_lv_navigate);
+      ("data-lv-patch", data_lv_patch);
       ("action", action); ("method", method_); ("href", href);
       ("type", type_); ("placeholder", placeholder); ("value", value);
       ("name", name_); ("charset", charset); ("content", content);
-      ("src", src);
+      ("src", src); ("enctype", enctype); ("accept", accept);
+      ("for", for_);
     ]
   in
+  let bools = [("multiple", multiple)] in
   `Html
-    (Printf.sprintf "<%s%s>%s</%s>" name (attrs_to_string attrs)
-       (cat children) name)
+    (Printf.sprintf "<%s%s%s>%s</%s>" name (attrs_to_string attrs)
+       (bool_attrs_to_string bools) (cat children) name)
 
 let html = tag "html"
 let head = tag "head"
