@@ -89,6 +89,8 @@ lib/%s/                      # app module (name, version)
 lib/%s_web/                  # routes, pages, LiveViews
   home_page.mlx              # welcome page
   counter_live.mlx           # LiveView example (counter)
+  activity_log_live.mlx      # LiveView communication example
+  dashboard_page.mlx         # Multi-LiveView dashboard
   notes.ml + notes_page.mlx  # CRUD example with type-safe SQL
   layout.mlx                 # HTML layout
 lib/contract/                # service contracts (TOML → generated code)
@@ -144,6 +146,7 @@ let bin_main _name =
   Well.Service.expose "TaskManager";
 
   Well.live "/counter" (module Counter_live);
+  Well.live "/activity_log" (module Activity_log_live);
   Well.static "/static" "static";
   Well.run ()
 |}
@@ -197,6 +200,7 @@ in
     <p>(txt "Edit lib/%s_web/home_page.mlx to get started.")</p>
     auth_section
     <p><a href="/counter">(txt "Counter — LiveView demo")</a></p>
+    <p><a href="/dashboard">(txt "Dashboard — LiveView communication demo")</a></p>
     <p><a href="/notes">(txt "Notes — SQLite demo (login required)")</a></p>
     <p><a href="/tasks">(txt "Tasks — Contract/RPC demo")</a></p>
     <p><a href="/upload">(txt "Upload — File upload demo")</a></p>
@@ -439,9 +443,20 @@ let init _req props =
   {count= get_int "initial" 0; step= get_int "step" 1}
 
 let update _req model = function
-  | Increment -> {model with count= model.count + model.step}
-  | Decrement -> {model with count= model.count - model.step}
-  | Reset -> {model with count= 0}
+  | Increment ->
+    let m = {model with count= model.count + model.step} in
+    Well.LiveView.broadcast "/live/activity_log"
+      (`List [`String "CounterEvent"; `String "increment"; `Int m.count]);
+    m
+  | Decrement ->
+    let m = {model with count= model.count - model.step} in
+    Well.LiveView.broadcast "/live/activity_log"
+      (`List [`String "CounterEvent"; `String "decrement"; `Int m.count]);
+    m
+  | Reset ->
+    Well.LiveView.broadcast "/live/activity_log"
+      (`List [`String "CounterEvent"; `String "reset"; `Int 0]);
+    {model with count= 0}
 
 let handle_params _req model = model
 let temporary_assigns model = model
@@ -478,6 +493,81 @@ let open Html in
   <p>(txt "Real-time server-side state with WebSocket updates.")</p>
   <Well.LiveView name="counter" />
   <p><a href="/">(txt "Back")</a></p>
+</div>
+</Layout>
+|}
+
+let activity_log_live _name =
+  {|type entry =
+  { id: int
+  ; action: string
+  ; value: int }
+[@@deriving yojson]
+
+type model =
+  { entries: entry list
+  ; next_id: int }
+[@@deriving yojson]
+
+type msg =
+  | CounterEvent of string * int
+[@@deriving yojson]
+
+let persistence = Well.LiveView.Ephemeral
+
+let init _req _props =
+  {entries= []; next_id= 1}
+
+let update _req model = function
+  | CounterEvent (action, value) ->
+    let entry = {id= model.next_id; action; value} in
+    let entries = entry :: model.entries in
+    let entries =
+      if List.length entries > 20 then
+        List.filteri (fun i _ -> i < 20) entries
+      else entries
+    in
+    {entries; next_id= model.next_id + 1}
+
+let handle_params _req model = model
+let temporary_assigns model = model
+
+let view model =
+  let open Html in
+  <div class_="activity-log">
+    <h2>(txt "Activity Log")</h2>
+    <p class_="activity-hint">
+      (dynamic "count" (string_of_int (List.length model.entries)))
+      (txt " events captured")
+    </p>
+    (each ~id:"log-entries" ~tag_name:"ul" model.entries
+       ~key:(fun e -> string_of_int e.id)
+       (fun e ->
+         <li class_="log-entry">
+           <span class_=("log-action " ^ e.action)>(txt e.action)</span>
+           (txt " → ")
+           <span class_="log-value">(txt (string_of_int e.value))</span>
+         </li>))
+  </div>
+|}
+
+let dashboard_page _name =
+  {|Well.get "/dashboard" @@ fun _req ->
+let open Html in
+<Layout title="Dashboard">
+<div>
+  <h1>(txt "Dashboard — LiveView Communication")</h1>
+  <p>(txt "Two LiveViews on one page. Counter broadcasts to Activity Log via Well.LiveView.broadcast.")</p>
+  <div class_="dashboard-grid">
+    <div class_="dashboard-panel">
+      <h2>(txt "Counter")</h2>
+      <Well.LiveView name="counter" />
+    </div>
+    <div class_="dashboard-panel">
+      <Well.LiveView name="activity_log" />
+    </div>
+  </div>
+  <p><a href="/">(txt "← Back")</a></p>
 </div>
 </Layout>
 |}
@@ -1140,6 +1230,25 @@ live-view::before { content: ''; display: block; height: 3px; background: #28a74
 live-view.lv-loading { pointer-events: none; opacity: 0.5; }
 live-view.lv-loading::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: #007bff; border-radius: 2px; animation: lv-loading-bar 1s ease-in-out infinite; }
 @keyframes lv-loading-bar { 0% { transform: scaleX(0); transform-origin: left; } 50% { transform: scaleX(1); transform-origin: left; } 50.1% { transform-origin: right; } 100% { transform: scaleX(0); transform-origin: right; } }
+|}
+
+let dashboard_css =
+  {|
+/* Dashboard */
+.dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.5rem 0; }
+@media (max-width: 768px) { .dashboard-grid { grid-template-columns: 1fr; } }
+.dashboard-panel { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1.5rem; }
+
+/* Activity Log */
+.activity-log { min-height: 200px; }
+.activity-log h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+.activity-hint { font-size: 0.85rem; color: #6b7280; margin-bottom: 0.75rem; }
+.log-entry { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid #e5e7eb; font-size: 0.9rem; }
+.log-action { font-weight: 600; text-transform: uppercase; font-size: 0.75rem; padding: 0.15rem 0.4rem; border-radius: 3px; }
+.log-action.increment { color: #059669; background: #d1fae5; }
+.log-action.decrement { color: #dc2626; background: #fee2e2; }
+.log-action.reset { color: #7c3aed; background: #ede9fe; }
+.log-value { font-family: monospace; font-weight: bold; }
 |}
 
 let tasks_css =
@@ -2325,6 +2434,14 @@ let project_files name =
       path = Printf.sprintf "lib/%s_web/counter_page.mlx" name;
       content = counter_page name;
     };
+    {
+      path = Printf.sprintf "lib/%s_web/activity_log_live.mlx" name;
+      content = activity_log_live name;
+    };
+    {
+      path = Printf.sprintf "lib/%s_web/dashboard_page.mlx" name;
+      content = dashboard_page name;
+    };
     { path = "test/dune"; content = test_dune name };
     {
       path = Printf.sprintf "test/%s_test.ml" name;
@@ -2353,7 +2470,7 @@ let project_files name =
     { path = "static/dune"; content = static_dune };
     { path = "static/ts/tasks.ts"; content = tasks_ts };
     { path = "static/tasks.js"; content = tasks_js };
-    { path = "static/app.css"; content = static_app_css ^ notes_css ^ counter_css ^ auth_css ^ tasks_css ^ upload_css };
+    { path = "static/app.css"; content = static_app_css ^ notes_css ^ counter_css ^ dashboard_css ^ auth_css ^ tasks_css ^ upload_css };
     { path = "static/well.ts"; content = static_well_ts };
     { path = "tsconfig.json"; content = tsconfig_json };
     { path = "data/.gitkeep"; content = "" };

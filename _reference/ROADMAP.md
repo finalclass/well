@@ -1048,7 +1048,7 @@ let update ctx model = function
 
 **Faza 3 — LiveView gaps:**
 - [x] handle_params (URL query params change)
-- [ ] Nested components (stateless function + stateful z własnym stanem)
+- [x] Nested components → rozwiązane przez `Well.LiveView.broadcast` + `MessageBus` + `Channel` (dashboard scaffold demo)
 - [x] Temporary assigns (dane widoczne tylko w jednym renderze)
 - [x] LiveView uploads (file upload z progress bar przez LiveView)
 
@@ -1077,14 +1077,13 @@ let update ctx model = function
 ### Faza 1 — Core HTTP + WebSocket + LiveView ✅ DONE
 ### Faza 2 — Type-safe SQL PPX + Runtime ✅ DONE
 ### Faza 2.5 — Kontrakty i usługi ✅ DONE
-### Faza 3 — LiveView gaps ✅ ~90% DONE (missing: nested stateful components)
+### Faza 3 — LiveView gaps ✅ DONE
 ### Faza 4 — Dojrzałość 🔨 ~80% DONE (test runner + helpers + snapshots + coverage done)
 
 ### Następne kroki (w kolejności priorytetów):
-1. Nested components (stateful z własnym stanem)
-2. Skille Claude (CLAUDE.md snippets, przykłady, kontekst)
-3. Dokumentacja + generator
-4. Telemetria, graceful shutdown, HTTP/2
+1. Skille Claude (CLAUDE.md snippets, przykłady, kontekst)
+2. Dokumentacja + generator
+3. Telemetria, graceful shutdown, HTTP/2
 
 ---
 
