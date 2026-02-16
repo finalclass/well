@@ -176,11 +176,17 @@ let auto_migrate db =
     end
   ) !registered_tables
 
+(* ── Data directory ───────────────────────────────────────────────── *)
+
+let data_dir = ref "data"
+
 (* ── open_db — replaces manual init ───────────────────────────────── *)
 
-let open_db path =
-  (try Unix.mkdir "data" 0o755
+let open_db ?(filename = "app.sqlite") () =
+  let dir = !data_dir in
+  (try Unix.mkdir dir 0o755
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  let path = Filename.concat dir filename in
   let db = Sqlite3.db_open path in
   ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
   ignore (Sqlite3.exec db "PRAGMA synchronous=NORMAL");

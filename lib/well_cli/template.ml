@@ -325,7 +325,7 @@ let%query all_notes = "SELECT id, title, body FROM notes ORDER BY id DESC"
 let%query insert_note = "INSERT INTO notes (title, body) VALUES (:title, :body)"
 let%query delete_note = "DELETE FROM notes WHERE id = :id"
 
-let db = lazy (Well.Db.open_db "data/app.sqlite")
+let db = lazy (Well.Db.open_db ())
 let get_db () = Lazy.force db
 |}
 
@@ -429,6 +429,9 @@ let update _req model = function
   | Increment -> {model with count= model.count + model.step}
   | Decrement -> {model with count= model.count - model.step}
   | Reset -> {model with count= 0}
+
+let handle_params _req model = model
+let temporary_assigns model = model
 
 let view model =
   let open Html in
@@ -575,11 +578,13 @@ let static_well_live_js =
 
     ws.onopen = function () {
       reconnectDelay = 500;
+      var queryParams = parseQueryParams(location.search);
       liveViews.forEach(function (lv, topic) {
         lv.el.classList.add("lv-loading");
+        var joinProps = Object.assign({}, lv.props, { _query: queryParams });
         ws.send(JSON.stringify({
           type: "join", topic: topic,
-          endpoint: lv.endpoint, props: lv.props,
+          endpoint: lv.endpoint, props: joinProps,
         }));
       });
     };
@@ -696,7 +701,7 @@ let static_well_live_js =
     if (patchTarget) {
       e.preventDefault();
       var patchUrl = patchTarget.getAttribute("href") || patchTarget.getAttribute("data-lv-patch");
-      if (patchUrl) navigateTo(patchUrl, true);
+      if (patchUrl) patchParams(patchUrl);
       return;
     }
     var target = e.target.closest("[data-lv-click]");
@@ -733,6 +738,33 @@ let static_well_live_js =
   });
 
   // ── Live Navigation ──────────────────────────────────────────────
+
+  function parseQueryParams(search) {
+    var params = {};
+    if (!search || search.length <= 1) return params;
+    var qs = search.charAt(0) === "?" ? search.substring(1) : search;
+    var pairs = qs.split("&");
+    for (var i = 0; i < pairs.length; i++) {
+      var pair = pairs[i].split("=");
+      if (pair[0]) {
+        params[decodeURIComponent(pair[0])] = pair.length > 1 ? decodeURIComponent(pair[1]) : "";
+      }
+    }
+    return params;
+  }
+
+  function patchParams(url) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      window.location.href = url;
+      return;
+    }
+    history.replaceState({ wellNav: true }, "", url);
+    var qmark = url.indexOf("?");
+    var params = qmark >= 0 ? parseQueryParams(url.substring(qmark)) : {};
+    liveViews.forEach(function (_lv, topic) {
+      ws.send(JSON.stringify({ type: "params", topic: topic, params: params }));
+    });
+  }
 
   function navigateTo(url, replace) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -799,6 +831,52 @@ let static_well_live_js =
       window.location.reload();
     }
   });
+
+  // ── File Upload ──────────────────────────────────────────────────
+
+  var CHUNK_SIZE = 64 * 1024;
+
+  function uploadFile(topic, file) {
+    var uploadId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    var chunkCount = Math.ceil(file.size / CHUNK_SIZE);
+    var chunkIndex = 0;
+    function sendChunk() {
+      if (chunkIndex >= chunkCount) return;
+      var start = chunkIndex * CHUNK_SIZE;
+      var end = Math.min(start + CHUNK_SIZE, file.size);
+      var slice = file.slice(start, end);
+      var reader = new FileReader();
+      reader.onload = function () {
+        var base64 = reader.result.split(",")[1] || "";
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: "upload", topic: topic, upload_id: uploadId,
+            filename: file.name, content_type: file.type || "application/octet-stream",
+            size: file.size, chunk_index: chunkIndex, chunk_count: chunkCount,
+            chunk_data: base64
+          }));
+        }
+        chunkIndex++;
+        sendChunk();
+      };
+      reader.readAsDataURL(slice);
+    }
+    sendChunk();
+  }
+
+  hooks.FileUpload = {
+    mounted: function () {
+      var self = this;
+      var input = self.el.querySelector('input[type="file"]') || self.el;
+      if (input.tagName !== "INPUT") return;
+      input.addEventListener("change", function (e) {
+        var files = e.target.files;
+        for (var i = 0; i < files.length; i++) {
+          uploadFile(self._topic, files[i]);
+        }
+      });
+    }
+  };
 
   // ── Initialize ───────────────────────────────────────────────────
 
@@ -1422,7 +1500,7 @@ let%query update_completed = "UPDATE tasks SET completed = :completed WHERE id =
 let%query update_title = "UPDATE tasks SET title = :title WHERE id = :id"
 let%query delete_task = "DELETE FROM tasks WHERE id = :id"
 
-let db = lazy (Well.Db.open_db "data/app.sqlite")
+let db = lazy (Well.Db.open_db ())
 let get_db () = Lazy.force db
 
 let task_of_row (r : All_tasks.row) : Task_access.Task.t =

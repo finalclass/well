@@ -23,7 +23,9 @@ module type VIEW = sig
   val persistence : persistence
   val init : Types.request -> Yojson.Safe.t -> model
   val update : Types.request -> model -> msg -> model
+  val handle_params : Types.request -> model -> model
   val view : model -> Html.node
+  val temporary_assigns : model -> model
 
   val model_to_yojson : model -> Yojson.Safe.t
   val model_of_yojson : Yojson.Safe.t -> (model, string) result
@@ -245,6 +247,28 @@ let broadcast channel msg_json =
   Mutex.unlock _pubsub_mu;
   List.iter (fun (_, cb) -> (try cb msg_json with _ -> ())) subs
 
+(* ── Uploads ──────────────────────────────────────────────────────── *)
+
+type upload_entry = {
+  upload_id : string;
+  filename : string;
+  content_type : string;
+  size : int;
+  chunks : Buffer.t;
+  mutable chunks_received : int;
+  chunk_count : int;
+}
+
+let active_uploads : (string, upload_entry) Hashtbl.t = Hashtbl.create 16
+
+let consume_upload upload_id =
+  match Hashtbl.find_opt active_uploads upload_id with
+  | Some entry ->
+      let data = Buffer.contents entry.chunks in
+      Hashtbl.remove active_uploads upload_id;
+      Some (entry.filename, entry.content_type, data)
+  | None -> None
+
 (* ── Unified handler message type ─────────────────────────────────── *)
 
 type handler_msg =
@@ -262,6 +286,7 @@ type handle_result = {
 type view_instance = {
   get_html : unit -> string;
   handle_msg : Yojson.Safe.t -> handle_result option;
+  handle_params : Types.request -> handle_result option;
   get_model_json : unit -> Yojson.Safe.t;
   load_model : Yojson.Safe.t -> unit;
 }
@@ -408,6 +433,21 @@ let handler (req : Types.request) (ws : Websocket.t) =
          | None -> ())
     | None -> ()
   in
+  let handle_params_change topic query_params =
+    match Hashtbl.find_opt topics topic with
+    | Some ts ->
+        let nav_req = { req with query = query_params } in
+        (match ts.ts_instance.handle_params nav_req with
+         | Some { changes; list_ops } ->
+             let patch_msg =
+               encode_patch_with_lists topic changes list_ops
+             in
+             Websocket.send_json ws patch_msg;
+             save_state ts.ts_persistence session_id ts.ts_topic
+               ts.ts_endpoint (ts.ts_instance.get_model_json ())
+         | None -> ())
+    | None -> ()
+  in
   let handle_navigate url =
     (* Save all current topics *)
     save_all_topics topics session_id;
@@ -456,6 +496,89 @@ let handler (req : Types.request) (ws : Websocket.t) =
                try json |> member "url" |> to_string with _ -> ""
              in
              if url <> "" then handle_navigate url;
+             loop ()
+         | "params" ->
+             let query_params =
+               try
+                 let params = json |> member "params" in
+                 match params with
+                 | `Assoc kvs ->
+                     List.map (fun (k, v) ->
+                       (k, try Yojson.Safe.Util.to_string v with _ -> ""))
+                       kvs
+                 | _ -> []
+               with _ -> []
+             in
+             handle_params_change topic query_params;
+             loop ()
+         | "upload" ->
+             let upload_id = try json |> member "upload_id" |> to_string with _ -> "" in
+             let filename = try json |> member "filename" |> to_string with _ -> "" in
+             let content_type = try json |> member "content_type" |> to_string with _ -> "" in
+             let _chunk_index = try json |> member "chunk_index" |> to_int with _ -> 0 in
+             let chunk_count = try json |> member "chunk_count" |> to_int with _ -> 1 in
+             let size = try json |> member "size" |> to_int with _ -> 0 in
+             let chunk_data = try json |> member "chunk_data" |> to_string with _ -> "" in
+             (* Decode base64 chunk *)
+             let decoded =
+               try
+                 let padded =
+                   let rem = String.length chunk_data mod 4 in
+                   if rem = 0 then chunk_data
+                   else chunk_data ^ String.make (4 - rem) '='
+                 in
+                 (* Simple base64 decode *)
+                 let b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" in
+                 let buf = Buffer.create (String.length padded * 3 / 4) in
+                 let i = ref 0 in
+                 let len = String.length padded in
+                 while !i + 3 < len do
+                   let a = try String.index b64 padded.[!i] with Not_found -> 0 in
+                   let b = try String.index b64 padded.[!i+1] with Not_found -> 0 in
+                   let c = if padded.[!i+2] = '=' then 0 else (try String.index b64 padded.[!i+2] with Not_found -> 0) in
+                   let d = if padded.[!i+3] = '=' then 0 else (try String.index b64 padded.[!i+3] with Not_found -> 0) in
+                   Buffer.add_char buf (Char.chr ((a lsl 2) lor (b lsr 4)));
+                   if padded.[!i+2] <> '=' then
+                     Buffer.add_char buf (Char.chr (((b land 0x0F) lsl 4) lor (c lsr 2)));
+                   if padded.[!i+3] <> '=' then
+                     Buffer.add_char buf (Char.chr (((c land 0x03) lsl 6) lor d));
+                   i := !i + 4
+                 done;
+                 Buffer.contents buf
+               with _ -> ""
+             in
+             (* Get or create upload entry *)
+             let entry =
+               match Hashtbl.find_opt active_uploads upload_id with
+               | Some e -> e
+               | None ->
+                   let e = { upload_id; filename; content_type; size;
+                             chunks = Buffer.create (max 1024 size);
+                             chunks_received = 0; chunk_count } in
+                   Hashtbl.replace active_uploads upload_id e;
+                   e
+             in
+             Buffer.add_string entry.chunks decoded;
+             entry.chunks_received <- entry.chunks_received + 1;
+             (* Send progress event to hooks *)
+             let progress_pct = entry.chunks_received * 100 / (max 1 entry.chunk_count) in
+             Websocket.send_json ws
+               (encode_event topic "upload_progress"
+                  (`Assoc [("upload_id", `String upload_id);
+                           ("filename", `String filename);
+                           ("progress", `Int progress_pct)]));
+             (* If complete, send upload_complete as a msg *)
+             if entry.chunks_received >= entry.chunk_count then begin
+               let complete_msg =
+                 `Assoc [("upload_id", `String upload_id);
+                         ("filename", `String filename);
+                         ("content_type", `String content_type);
+                         ("size", `Int (Buffer.length entry.chunks))]
+               in
+               (* Dispatch as a hook event *)
+               Websocket.send_json ws
+                 (encode_event topic "upload_complete" complete_msg)
+             end;
              loop ()
          | _ -> loop ())
     | InfoMsg msg_json ->
@@ -518,30 +641,40 @@ let register
       | Ok model -> model
       | Error _ -> View.init req props_or_saved
     in
-    let state = ref initial_model in
+    let state = ref (View.handle_params req initial_model) in
     let initial_html = View.view !state |> Html.element_to_string in
+    state := View.temporary_assigns !state;
     let dynamics = ref (collect_dynamics initial_html) in
     let lists : list_state ref = ref (Html.collect_and_clear_lists ()) in
     let get_html () =
       let html = View.view !state |> Html.element_to_string in
+      state := View.temporary_assigns !state;
       let _ = Html.collect_and_clear_lists () in
       html
+    in
+    let render_and_diff () =
+      let new_html = View.view !state |> Html.element_to_string in
+      state := View.temporary_assigns !state;
+      let new_dynamics = collect_dynamics new_html in
+      let new_lists = Html.collect_and_clear_lists () in
+      let changes = diff_dynamics !dynamics new_dynamics in
+      let lops = diff_lists !lists new_lists in
+      dynamics := new_dynamics;
+      lists := new_lists;
+      if changes <> [] || lops <> [] then
+        Some { changes; list_ops = lops }
+      else None
     in
     let handle_msg msg_json =
       match View.msg_of_yojson msg_json with
       | Ok msg ->
           state := View.update req !state msg;
-          let new_html = View.view !state |> Html.element_to_string in
-          let new_dynamics = collect_dynamics new_html in
-          let new_lists = Html.collect_and_clear_lists () in
-          let changes = diff_dynamics !dynamics new_dynamics in
-          let lops = diff_lists !lists new_lists in
-          dynamics := new_dynamics;
-          lists := new_lists;
-          if changes <> [] || lops <> [] then
-            Some { changes; list_ops = lops }
-          else None
+          render_and_diff ()
       | Error _ -> None
+    in
+    let handle_params nav_req =
+      state := View.handle_params nav_req !state;
+      render_and_diff ()
     in
     let get_model_json () = View.model_to_yojson !state in
     let load_model model_json =
@@ -549,7 +682,7 @@ let register
       | Ok new_model -> state := new_model
       | Error _ -> ()
     in
-    { get_html; handle_msg; get_model_json; load_model }
+    { get_html; handle_msg; handle_params; get_model_json; load_model }
   in
   Hashtbl.replace view_registry endpoint
     { factory; view_persistence = View.persistence };
@@ -582,6 +715,7 @@ let render_initial
          | None -> View.init req init_args)
     | _ -> View.init req init_args
   in
+  let model = View.handle_params req model in
   let el = View.view model in
   let _ = Html.collect_and_clear_lists () in
   el

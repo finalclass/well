@@ -1019,41 +1019,48 @@ let update ctx model = function
 - [x] Scaffold: Tasks example (TaskManager → TaskAccess → SQLite, TS client, dune-integrated builds)
 - [x] Frontend build: bun/TS compilation wired through dune (static/dune, tsconfig.json)
 
+**Faza 3 — LiveView gaps + DB testing:**
+- [x] LiveView: `handle_params` — URL query params change handler (VIEW module type + WS `params` message)
+- [x] LiveView: `temporary_assigns` — reset data after each render cycle
+- [x] LiveView: uploads — base64 chunks via WebSocket, server-side accumulation, progress events via hooks
+- [x] Database testing: `Well.Db.with_test_db` (`:memory:` per test), `Well.Db.data_dir` (configurable data directory)
+
+**Faza 4 — Test runner + helpers:**
+- [x] `well test` CLI command (watch mode `-w`, filter `-f`, CI output `--ci`)
+- [x] Test runner: autodiscovery `*_test.ml`, parallel execution via `Unix.fork`
+- [x] `Well.with_test_server` — starts server on random port, runs test fn, stops on return
+
 ### 🔨 Do zrobienia
 
 **Faza 1 — drobne braki:**
 - [x] Session persistence (SQLite-backed session store)
 - [x] Flash messages (one-time data between requests)
-- [ ] Routing: named routes, route constraints (`:id` musi być int)
+- [x] ~~Routing: named routes, route constraints~~ — niepotrzebne: constraints to walidacja w handlerze, named routes to zwykłe funkcje OCaml
 - [x] Compression (gzip dla static + responses, camlzip)
 
 **Faza 2 — SQL runtime braki:**
 - [x] Transactions API (`Well.Db.transaction`, `Well.Db.transaction_result` z Fun.protect)
 - [x] ~~Seed data~~ — niepotrzebne, użytkownik pisze seed logic w OCaml + `let%query`
-- [ ] Database testing: sandbox (transakcja per test, rollback)
+- [x] Database testing: `Well.Db.with_test_db` (`:memory:` per test), `Well.Db.data_dir` (configurable data directory)
 
 **Faza 2.5 — braki:**
 - [x] ~~Cookie auth~~ — niepotrzebne: Unix socket permissions wystarczą, kontekst użytkownika jawnie przez kontrakty
 - [x] `well repl` — placeholder CLI command
-- [ ] RPC ctx: typ `"ctx"` w TOML → `Well.rpc_ctx = { session_id; request_id; user_id?; user_name?; locale }`
-  - expose handler buduje ctx z HTTP request (cookie + Accept-Language + session store)
-  - browser client pomija ctx (expose wstrzykuje), service client przekazuje jawnie
-  - `Well.login req ~user_id ~user_name` ustawia dane w sesji
-  - codegen waliduje: jeśli pole ma typ `"ctx"`, expose wie co wstrzyknąć
+- [x] RPC ctx: `Well.rpc_ctx = { session_id; request_id; user_id?; user_name?; locale }`, expose wstrzykuje ctx z HTTP request, `Ctx` jako built-in prim_type, `Well.login`/`logout` usunięte na rzecz `session_set`/`session_delete`
 
 **Faza 3 — LiveView gaps:**
-- [ ] handle_params (URL query params change)
+- [x] handle_params (URL query params change)
 - [ ] Nested components (stateless function + stateful z własnym stanem)
-- [ ] Temporary assigns (dane widoczne tylko w jednym renderze)
-- [ ] LiveView uploads (file upload z progress bar przez LiveView)
+- [x] Temporary assigns (dane widoczne tylko w jednym renderze)
+- [x] LiveView uploads (file upload z progress bar przez LiveView)
 
 **Faza 3 — CLI i generatory:**
 - [ ] CLI generatory: `well gen route`, `well gen model`, `well gen component`
 - [ ] CRUD generator: `well gen crud User name:string email:string`
 
 **Faza 4 — Dojrzałość:**
-- [ ] Test runner: autodiscovery `*_test.ml`, parallel via fork, watch mode
-- [ ] Test helpers: `test_server`, `test_client`, `test_ws` do testów HTTP/LiveView
+- [x] Test runner: `well test` CLI, autodiscovery `*_test.ml`, parallel via fork, watch mode (`-w`)
+- [x] Test helpers: `Well.with_test_server` (starts server on random port, runs test fn, stops)
 - [ ] Snapshot testing (`to_match_snapshot`)
 - [ ] Coverage z bisect_ppx
 - [ ] Dokumentacja w kodzie + generator (`well docs`)
@@ -1071,16 +1078,17 @@ let update ctx model = function
 
 ### Faza 0 — Setup ✅ DONE
 ### Faza 1 — Core HTTP + WebSocket + LiveView ✅ DONE
-### Faza 2 — Type-safe SQL PPX + Runtime ✅ ~90% DONE
+### Faza 2 — Type-safe SQL PPX + Runtime ✅ DONE
 ### Faza 2.5 — Kontrakty i usługi ✅ DONE
+### Faza 3 — LiveView gaps ✅ ~90% DONE (missing: nested stateful components)
+### Faza 4 — Dojrzałość 🔨 ~40% DONE (test runner + helpers done)
 
 ### Następne kroki (w kolejności priorytetów):
-1. Database testing sandbox (transakcja per test, rollback)
+1. Nested components (stateful z własnym stanem)
 2. CLI generatory + CRUD generator
-3. Test runner autodiscovery + test helpers
-4. handle_params, nested components, temporary assigns
-5. Dokumentacja + generator
-6. Telemetria, graceful shutdown, HTTP/2
+3. Snapshot testing + coverage
+4. Dokumentacja + generator
+5. Telemetria, graceful shutdown, HTTP/2
 
 ---
 

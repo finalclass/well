@@ -1824,6 +1824,91 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key () =
   Mirage_crypto_rng_unix.use_default ();
   start_server ()
 
+(* ── Test server ──────────────────────────────────────────────────── *)
+
+let with_test_server ?(port = 0) f =
+  Random.self_init ();
+  let test_port = if port > 0 then port else 40000 + Random.int 20000 in
+  Eio_main.run @@ fun env ->
+  let net = Eio.Stdenv.net env in
+  let clock = Eio.Stdenv.clock env in
+  Service._sleep := (fun seconds -> Eio.Time.sleep clock seconds);
+  _fetch_impl :=
+    (fun ~method_ ~headers ~body url ->
+      let parsed = parse_fetch_url url in
+      let req_str =
+        build_fetch_request ~method_ ~host:parsed.p_host ~port:parsed.p_port
+          ~path:parsed.p_path ~headers ~body
+      in
+      let addr = fetch_resolve net parsed.p_host parsed.p_port in
+      Eio.Switch.run @@ fun sw ->
+      let tcp_flow = Eio.Net.connect ~sw net addr in
+      let send_and_receive flow =
+        Eio.Flow.copy_string req_str flow;
+        let reader = Eio.Buf_read.of_flow ~max_size:(10 * 1024 * 1024) flow in
+        let status = parse_fetch_status reader in
+        let resp_hdrs = parse_headers reader in
+        let body = read_fetch_body reader resp_hdrs in
+        { status; headers = resp_hdrs; body }
+      in
+      if parsed.p_scheme = "https" then (
+        let tls_cfg = fetch_tls_config () in
+        let host =
+          Option.bind
+            (Domain_name.of_string parsed.p_host |> Result.to_option)
+            (fun dn -> Domain_name.host dn |> Result.to_option)
+        in
+        let tls_flow = Tls_eio.client_of_flow ?host tls_cfg tcp_flow in
+        send_and_receive tls_flow)
+      else send_and_receive tcp_flow);
+  let cwd = Eio.Stdenv.cwd env in
+  _write_file_impl :=
+    (fun path data ->
+      Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(cwd / path) data);
+  _read_file_impl :=
+    (fun path -> Eio.Path.load Eio.Path.(cwd / path));
+  _file_exists_impl :=
+    (fun path ->
+      try ignore (Eio.Path.stat ~follow:true Eio.Path.(cwd / path)); true
+      with Eio.Io _ -> false);
+  _mkdir_impl :=
+    (fun path ->
+      try Eio.Path.mkdir ~perm:0o755 Eio.Path.(cwd / path)
+      with Eio.Io _ -> ());
+  _list_dir_impl :=
+    (fun path ->
+      try Eio.Path.read_dir Eio.Path.(cwd / path) |> List.sort String.compare
+      with Eio.Io _ -> []);
+  Mirage_crypto_rng_unix.use_default ();
+  Eio.Switch.run @@ fun sw ->
+  Service._register_post_json :=
+    (fun path handler ->
+      register "POST" path (fun req ->
+        let result_json = handler req in
+        `Custom { status = Some 200;
+                  headers = [("Content-Type", "application/json")];
+                  body = `Text result_json }));
+  Service._build_rpc_ctx :=
+    (fun req -> rpc_ctx_to_wire (build_rpc_ctx req));
+  Service._cast_sw := Some sw;
+  Service.start_all ~sw;
+  get "/health" (fun _req ->
+    let statuses = Service.health () in
+    `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
+  let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, test_port) in
+  let socket =
+    Eio.Net.listen net ~sw ~backlog:128 ~reuse_addr:true addr
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+    let rec accept_loop () =
+      Eio.Net.accept_fork socket ~sw
+        ~on_error:(fun _ -> ())
+        handle_connection;
+      accept_loop ()
+    in
+    accept_loop ());
+  f test_port
+
 (* ── LiveView registration ─────────────────────────────────────────── *)
 
 let live path (module View : Liveview.VIEW) =
