@@ -1,1 +1,1 @@
-(dirs :standard \ vendor _reference)
+(dirs :standard \ vendor)

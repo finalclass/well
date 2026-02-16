@@ -1,6 +1,7 @@
 _build/
 _release/
 _coverage/
+_docs/
 *.coverage
 vendor/
 *.install

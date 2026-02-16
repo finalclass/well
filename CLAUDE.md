@@ -56,11 +56,9 @@ well/
 ├── vendor/
 │   ├── dune                      # vendored dune binary
 │   └── lib/                      # bundled .so for release (libc, libsqlite3, etc.)
-├── _reference/                   # POC code from gateway_client_v2 (Reason)
-│   ├── ROADMAP.md                # full roadmap (Polish)
-│   └── gateway_client_v2/        # working LiveView POC (~2150 LOC)
+├── ROADMAP.md                    # full roadmap and design decisions (Polish)
 ├── dune-project                  # MLX dialect, package deps
-├── dune                          # (dirs :standard \ vendor _reference)
+├── dune                          # (dirs :standard \ vendor)
 ├── Makefile                      # build, check, test, dev, install, release
 ├── CLAUDE.md
 └── .gitignore
@@ -356,7 +354,7 @@ Deploy = copy directory. Works on any Linux x86_64.
 
 ## Testing Framework (planned)
 
-Jest-like DSL in pure OCaml. Reference implementation in `_reference/gateway_client_v2/test/`:
+Jest-like DSL in pure OCaml:
 
 ```ocaml
 open Well_test
@@ -378,25 +376,6 @@ let () =
 
 **Runner:** autodiscovery `*_test.ml`, parallel via `Unix.fork`, watch mode, CI output
 
-## Reference Files
-
-`_reference/` contains source material from the proof-of-concept:
-- `_reference/ROADMAP.md` — full roadmap with all planned features and phases (Polish)
-- `_reference/gateway_client_v2/` — working POC code (~2150 LOC):
-  - `blossom.ml` — HTTP framework on EIO (224 LOC, OCaml — reusable as-is)
-  - `websocket.ml` — RFC 6455 WebSocket (339 LOC, OCaml — reusable as-is)
-  - `liveview.re` — LiveView engine with keyed list diffing (483 LOC, Reason → needs OCaml port)
-  - `liveview_store.ml` — SQLite persistence (83 LOC, OCaml — reusable as-is)
-  - `html.re` — JSX-compatible HTML library (365 LOC, Reason → needs OCaml port)
-  - `main.re` — routes, SSR, CSS (404 LOC, Reason → needs MLX port)
-  - `counter.re`, `todo.re` — demo LiveView components (Reason → MLX)
-  - `test/well_test.ml` — Jest-like test DSL (~600 LOC)
-  - `test/runner.ml` — test runner with autodiscovery
-
-**Important:** Reference `.ml` files (blossom, websocket, liveview_store) can be reused.
-Reference `.re` files must be ported to OCaml (`.ml`) or MLX (`.mlx`).
-Reference code uses Cohttp. New code should use raw EIO HTTP (fewer deps).
-
 ## Dependencies (from dune.lock)
 
 **Core:** `eio` 1.3, `eio_main` 1.3, `eio_posix`, `eio_linux`
@@ -409,14 +388,14 @@ Avoid heavy deps: no Cohttp, no Conduit, no Jane Street Base.
 
 ## Priorities
 
-See `_reference/ROADMAP.md` for full roadmap. Summary:
+See `ROADMAP.md` for full roadmap and design decisions. All phases complete:
 
-1. **Faza 0** — Project setup (dune-project, MLX, basic structure) ← **CURRENT**
-2. **Faza 1** — Core HTTP + WebSocket + Router + LiveView (port from reference)
-3. **Faza 2** — Type-safe SQL PPX (killer feature)
-4. **Faza 3** — CLI + generators + static files + sessions
-5. **Faza 4** — Maturity (contracts, components, frontend build)
-6. **Faza 5** — Production (clustering, telemetry, HTTP/2)
+1. **Faza 0** — Project setup ✅
+2. **Faza 1** — Core HTTP + WebSocket + Router + LiveView ✅
+3. **Faza 2** — Type-safe SQL PPX ✅
+4. **Faza 3** — LiveView gaps + Claude skills ✅
+5. **Faza 4** — Maturity (test runner, snapshots, coverage, docs) ✅
+6. **Faza 5** — Production (graceful shutdown, auto-TLS) ✅
 
 ## Implementation Status
 

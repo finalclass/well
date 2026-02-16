@@ -89,3 +89,8 @@ let cleanup ?(max_age_days = 30) () =
   let _ = Sqlite3.step stmt in
   let _ = Sqlite3.finalize stmt in
   ()
+
+let close () =
+  match !db with
+  | Some d -> ignore (Sqlite3.db_close d); db := None
+  | None -> ()

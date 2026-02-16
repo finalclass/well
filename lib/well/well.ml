@@ -1,4 +1,4 @@
-let version = "0.1.0-dev"
+let version = "1.0.0"
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
@@ -1563,6 +1563,10 @@ let stream_file ?(content_type = "application/octet-stream") ?(headers = []) pat
     in
     loop 0)
 
+(* ── Shutdown state ────────────────────────────────────────────────── *)
+
+let _shutting_down = Atomic.make false
+
 (* ── Server ────────────────────────────────────────────────────────── *)
 
 let handle_connection flow _addr =
@@ -1696,18 +1700,84 @@ let load_tls_config ~env ~cert ~key =
   | Ok cfg -> cfg
   | Error (`Msg msg) -> failwith ("TLS config error: " ^ msg)
 
-let run ?(port = 4000) ?(workers = 0) ?cert ?key () =
+(* ── Port 80 HTTP handler (ACME challenges + HTTPS redirect) ───── *)
+
+let handle_http80 ~domain flow _addr =
+  let close_flow () = Eio.Flow.close flow in
+  let flow = (flow :> Eio.Flow.two_way_ty Eio.Resource.t) in
+  let reader =
+    Eio.Buf_read.of_flow ~max_size:4096 flow
+  in
+  (try
+    let _meth, raw_path = parse_request_line reader in
+    let _hdrs = parse_headers reader in
+    let path =
+      match String.index_opt raw_path '?' with
+      | Some i -> String.sub raw_path 0 i
+      | None -> raw_path
+    in
+    let acme_prefix = "/.well-known/acme-challenge/" in
+    let acme_plen = String.length acme_prefix in
+    if String.length path > acme_plen
+       && String.sub path 0 acme_plen = acme_prefix then begin
+      let token = String.sub path acme_plen (String.length path - acme_plen) in
+      match Acme.serve_challenge token with
+      | Some key_authz ->
+          let resolved = {
+            r_status = 200;
+            r_headers = [("Content-Type", "text/plain")];
+            r_body = key_authz;
+          } in
+          write_response flow resolved;
+          close_flow ()
+      | None ->
+          let resolved = {
+            r_status = 404;
+            r_headers = [("Content-Type", "text/plain")];
+            r_body = "Not Found";
+          } in
+          write_response flow resolved;
+          close_flow ()
+    end else begin
+      let location = Printf.sprintf "https://%s%s" domain raw_path in
+      let resolved = {
+        r_status = 301;
+        r_headers = [("Location", location)];
+        r_body = "";
+      } in
+      write_response flow resolved;
+      close_flow ()
+    end
+  with
+  | Eio.Io _ -> (try close_flow () with _ -> ())
+  | End_of_file -> (try close_flow () with _ -> ())
+  | _ -> (try close_flow () with _ -> ()))
+
+let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
+    ?(acme_staging = false) () =
   Printexc.record_backtrace true;
+  let acme_mode = domain <> None in
+  (* Validate: ~domain and ~cert/~key are mutually exclusive *)
+  (match domain, cert, key with
+   | Some _, Some _, _ | Some _, _, Some _ ->
+       failwith "~domain (auto-TLS) and ~cert/~key (manual TLS) cannot be used together"
+   | _ -> ());
   let tls_enabled =
     match (cert, key) with
     | Some _, Some _ -> true
     | None, None -> false
     | _ -> failwith "Both ~cert and ~key must be provided for TLS"
   in
+  (* Auto-switch port when ~domain is given and port is default *)
+  let port = if acme_mode && port = 4000 then 443 else port in
+  (* Warn if ~domain with non-443 port *)
+  if acme_mode && port <> 443 then
+    Printf.eprintf "[well] WARNING: ~domain given but port is %d (not 443) — ACME validation may fail\n%!" port;
   Eio_main.run @@ fun env ->
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
   Service._sleep := (fun seconds -> Eio.Time.sleep clock seconds);
+  Acme._sleep_ref := (fun seconds -> Eio.Time.sleep clock seconds);
   _fetch_impl :=
     (fun ~method_ ~headers ~body url ->
       let parsed = parse_fetch_url url in
@@ -1736,6 +1806,13 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key () =
         let tls_flow = Tls_eio.client_of_flow ?host tls_cfg tcp_flow in
         send_and_receive tls_flow)
       else send_and_receive tcp_flow);
+  (* Wire Acme._fetch_ref — converts fetch_response to Acme.http_response *)
+  Acme._fetch_ref :=
+    (fun ~method_ ~headers ~body url ->
+      let r = !_fetch_impl ~method_ ~headers ~body url in
+      { Acme.http_status = r.status;
+        http_headers = r.headers;
+        http_body = r.body });
   let cwd = Eio.Stdenv.cwd env in
   _write_file_impl :=
     (fun path data ->
@@ -1756,6 +1833,13 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key () =
       with Eio.Io _ -> []);
   let start_server () =
     Eio.Switch.run @@ fun sw ->
+    let shutdown_p, shutdown_r = Eio.Promise.create () in
+    let signal_handler _signum =
+      if not (Atomic.exchange _shutting_down true) then
+        Eio.Promise.resolve shutdown_r ()
+    in
+    Sys.set_signal Sys.sigterm (Sys.Signal_handle signal_handler);
+    Sys.set_signal Sys.sigint (Sys.Signal_handle signal_handler);
     (* Wire up Service forward refs *)
     Service._register_post_json :=
       (fun path handler ->
@@ -1779,51 +1863,109 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key () =
     get "/health" (fun _req ->
       let statuses = Service.health () in
       `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
+    (* ── TLS config: ACME auto-TLS / manual TLS / plain ────────── *)
     let tls_cfg =
-      if tls_enabled then
-        Some (load_tls_config ~env
-                ~cert:(Option.get cert) ~key:(Option.get key))
-      else None
+      match domain with
+      | Some dom when port = 443 ->
+          (* ACME mode: provision cert, start port 80 listener *)
+          (* Start port 80 first — needed for ACME HTTP-01 validation *)
+          let http80_addr = `Tcp (Eio.Net.Ipaddr.V4.any, 80) in
+          let http80_socket =
+            Eio.Net.listen net ~sw ~backlog:128 ~reuse_addr:true http80_addr
+          in
+          Eio.Fiber.fork ~sw (fun () ->
+            let rec accept_loop () =
+              Eio.Net.accept_fork http80_socket ~sw
+                ~on_error:(fun _ -> ())
+                (handle_http80 ~domain:dom);
+              accept_loop ()
+            in
+            accept_loop ());
+          Printf.printf "[well] HTTP on :80 (ACME challenges + redirect)\n%!";
+          (* Provision or load certificate *)
+          let cert_pem, domain_key =
+            Acme.ensure_certificate ~staging:acme_staging dom
+          in
+          let cfg = Acme.build_tls_config cert_pem domain_key in
+          Acme._tls_config := Some cfg;
+          (* Fork renewal fiber *)
+          Eio.Fiber.fork ~sw (fun () ->
+            Acme.renewal_fiber ~staging:acme_staging dom);
+          Some cfg
+      | Some _ ->
+          (* ~domain with non-443 port — skip ACME, plain HTTP *)
+          None
+      | None ->
+          if tls_enabled then
+            Some (load_tls_config ~env
+                    ~cert:(Option.get cert) ~key:(Option.get key))
+          else None
     in
-    let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
+    (* Bind address: 0.0.0.0 for ACME (external access needed), loopback otherwise *)
+    let bind_addr =
+      if acme_mode then Eio.Net.Ipaddr.V4.any
+      else Eio.Net.Ipaddr.V4.loopback
+    in
+    let addr = `Tcp (bind_addr, port) in
     let socket =
       Eio.Net.listen net ~sw ~backlog:128 ~reuse_addr:true addr
     in
-    let scheme = if tls_enabled then "https" else "http" in
-    Printf.printf "[well] listening on %s://localhost:%d%s\n%!" scheme port
+    let scheme = if tls_cfg <> None then "https" else "http" in
+    let host = if acme_mode then "0.0.0.0" else "localhost" in
+    Printf.printf "[well] listening on %s://%s:%d%s\n%!" scheme host port
       (if workers > 0 then Printf.sprintf " (%d workers)" workers else "");
     let handler =
-      match tls_cfg with
-      | Some cfg -> handle_tls_connection cfg
-      | None -> handle_connection
+      match domain with
+      | Some _ ->
+          (* ACME mode: read TLS config from mutable ref for hot-reload *)
+          (fun flow addr ->
+            match !(Acme._tls_config) with
+            | Some cfg -> handle_tls_connection cfg flow addr
+            | None -> Eio.Flow.close flow)
+      | None ->
+          (match tls_cfg with
+           | Some cfg -> handle_tls_connection cfg
+           | None -> handle_connection)
     in
-    if workers > 0 then begin
-      let pool =
-        Eio.Executor_pool.create ~sw ~domain_count:workers
-          (Eio.Stdenv.domain_mgr env)
-      in
-      let rec accept_loop () =
-        let flow, addr = Eio.Net.accept ~sw socket in
-        ignore (Eio.Executor_pool.submit_fork ~sw pool ~weight:0.1
-          (fun () ->
-            try handler flow addr
-            with exn ->
-              Printf.eprintf "[well] worker error: %s\n%!"
-                (Printexc.to_string exn)));
+    (* Fork accept loop — runs until switch is cancelled *)
+    Eio.Fiber.fork ~sw (fun () ->
+      if workers > 0 then begin
+        let pool =
+          Eio.Executor_pool.create ~sw ~domain_count:workers
+            (Eio.Stdenv.domain_mgr env)
+        in
+        let rec accept_loop () =
+          let flow, addr = Eio.Net.accept ~sw socket in
+          ignore (Eio.Executor_pool.submit_fork ~sw pool ~weight:0.1
+            (fun () ->
+              try handler flow addr
+              with exn ->
+                Printf.eprintf "[well] worker error: %s\n%!"
+                  (Printexc.to_string exn)));
+          accept_loop ()
+        in
         accept_loop ()
-      in
-      accept_loop ()
-    end else begin
-      let rec accept_loop () =
-        Eio.Net.accept_fork socket ~sw
-          ~on_error:(fun exn ->
-            Printf.eprintf "[well] accept error: %s\n%!"
-              (Printexc.to_string exn))
-          handler;
+      end else begin
+        let rec accept_loop () =
+          Eio.Net.accept_fork socket ~sw
+            ~on_error:(fun exn ->
+              Printf.eprintf "[well] accept error: %s\n%!"
+                (Printexc.to_string exn))
+            handler;
+          accept_loop ()
+        in
         accept_loop ()
-      in
-      accept_loop ()
-    end
+      end);
+    (* Main fiber: await shutdown signal *)
+    Eio.Promise.await shutdown_p;
+    Printf.printf "\n[well] shutting down...\n%!";
+    Eio.Time.sleep clock 0.5;
+    Session_store.close ();
+    Liveview_store.close ();
+    Message_bus.close ();
+    (try Unix.unlink "data/well.sock" with Unix.Unix_error _ -> ());
+    Printf.printf "[well] stopped.\n%!"
+    (* Switch exits here → cancels accept loop + all connection fibers *)
   in
   Mirage_crypto_rng_unix.use_default ();
   start_server ()
@@ -1951,6 +2093,7 @@ let () = Liveview._resolve_route := (fun req url ->
 
 (* ── Re-export submodules ─────────────────────────────────────────── *)
 
+module Acme = Acme
 module Db = Db
 module Websocket = Websocket
 module LiveView = Liveview

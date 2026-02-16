@@ -19,8 +19,10 @@
   yojson
   sqlite3
   tls-eio
+  mirage-crypto-pk
   digestif
   base64
+  zarith
   ppxlib
   otoml
   bisect_ppx

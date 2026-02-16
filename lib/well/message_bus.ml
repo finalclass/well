@@ -120,6 +120,11 @@ let publish ?(ephemeral = false) channel payload =
 
 (* ── Replay ────────────────────────────────────────────────────────── *)
 
+let close () =
+  match !db with
+  | Some d -> ignore (Sqlite3.db_close d); db := None
+  | None -> ()
+
 let replay ?(since_id = 0) pattern cb =
   let db = get_db () in
   let sql =

@@ -1053,21 +1053,18 @@ let update ctx model = function
 - [x] LiveView uploads (file upload z progress bar przez LiveView)
 
 **Faza 3 — Skille Claude:**
-- [ ] Przygotowanie skilli dla Claude (CLAUDE.md snippets, przykłady, kontekst do generowania kodu)
+- [x] Przygotowanie skilli dla Claude (CLAUDE.md snippets, przykłady, kontekst do generowania kodu)
 
 **Faza 4 — Dojrzałość:**
 - [x] Test runner: `well test` CLI, autodiscovery `*_test.ml`, parallel via fork, watch mode (`-w`)
 - [x] Test helpers: `Well.with_test_server` (starts server on random port, runs test fn, stops)
 - [x] Snapshot testing (`to_match_snapshot`, `.snap` files, `--update-snapshots`/`-u`)
 - [x] Coverage z bisect_ppx (`--coverage`, `make coverage`, `(instrumentation (backend bisect_ppx))`)
-- [ ] Dokumentacja w kodzie + generator (`well docs`)
+- [x] Dokumentacja w kodzie + generator (`well docs`)
 
 **Faza 5 — Produkcja:**
-- [ ] Telemetria: metryki, Prometheus/OpenTelemetry
-- [ ] Graceful shutdown: drain connections, save sessions, close WS
-- [ ] HTTP/2: multiplexing, server push
-- [ ] Dev toolbar: request inspector, LiveView state, WS log, SQL log
-- [ ] Let's Encrypt / ACME automatyczny renewal
+- [x] Graceful shutdown: drain connections, save sessions, close WS
+- [x] Let's Encrypt / ACME: automatyczny renewal, `Well.run ~domain:"app.com" ()`
 
 ---
 
@@ -1078,12 +1075,13 @@ let update ctx model = function
 ### Faza 2 — Type-safe SQL PPX + Runtime ✅ DONE
 ### Faza 2.5 — Kontrakty i usługi ✅ DONE
 ### Faza 3 — LiveView gaps ✅ DONE
-### Faza 4 — Dojrzałość 🔨 ~80% DONE (test runner + helpers + snapshots + coverage done)
+### Faza 3 — Skille Claude ✅ DONE
+### Faza 4 — Dojrzałość ✅ DONE (test runner + helpers + snapshots + coverage + docs)
 
 ### Następne kroki (w kolejności priorytetów):
-1. Skille Claude (CLAUDE.md snippets, przykłady, kontekst)
-2. Dokumentacja + generator
-3. Telemetria, graceful shutdown, HTTP/2
+1. ~~Skille Claude~~ ✅ DONE
+2. ~~Dokumentacja + generator~~ ✅ DONE
+3. ~~Graceful shutdown~~ ✅ DONE, ~~Let's Encrypt / ACME~~ ✅ DONE
 
 ---
 
@@ -1190,7 +1188,7 @@ powinien to wymuszać przez API (aktor dostaje `db` w `init`, nie z zewnątrz).
 
 | Projekt | Lokalizacja | Rola |
 |---------|-------------|------|
-| gateway_client_v2 | `_reference/gateway_client_v2/` | POC (LiveView, HTTP, WebSocket, HTML) |
+| gateway_client_v2 | (usunięte, było w `_reference/`) | POC (LiveView, HTTP, WebSocket, HTML) — wszystko zaimplementowane od nowa |
 | dg | `~/Documents/dg/` | Wzorzec: deployment (patchelf), kontrakty (TOML → codegen) |
 
 **Zasady:**
