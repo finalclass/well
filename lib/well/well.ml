@@ -323,6 +323,40 @@ let parse_segments parts =
       else Static part)
     parts
 
+(* ── Console routes (bypass global middleware) ────────────────────── *)
+
+let console_routes : route list ref = ref []
+
+let register_console meth path handler =
+  let segments = parse_segments (split_path path) in
+  console_routes := { meth; segments; handler } :: !console_routes
+
+let match_console_route meth path =
+  let parts = split_path path in
+  let try_route r =
+    if r.meth <> meth then None
+    else
+      let rec go parts segs acc =
+        match (parts, segs) with
+        | [], [] -> Some (List.rev acc)
+        | p :: ps, Static s :: ss ->
+            if p = s then go ps ss acc else None
+        | p :: ps, Param name :: ss ->
+            go ps ss ((name, p) :: acc)
+        | _ -> None
+      in
+      go parts r.segments []
+  in
+  let candidates = List.rev !console_routes in
+  let rec find = function
+    | [] -> None
+    | r :: rest -> (
+        match try_route r with
+        | Some params -> Some (r, params)
+        | None -> find rest)
+  in
+  find candidates
+
 (* ── Scope support ────────────────────────────────────────────────── *)
 
 type scope_ctx = { prefix : string; scope_middlewares : middleware list }
@@ -1162,8 +1196,16 @@ let logger : middleware = fun next req ->
   let t0 = Unix.gettimeofday () in
   let resp = next req in
   let dt = (Unix.gettimeofday () -. t0) *. 1000.0 in
+  let st = response_status resp in
   Printf.printf "[well] %s %s -> %d (%.1fms)\n%!"
-    req.meth req.path (response_status resp) dt;
+    req.meth req.path st dt;
+  (* Console log hook — push to ring buffer + broadcast *)
+  (match !(Console._console_log_hook) with
+   | Some hook ->
+       Console.Log_buffer.push ~meth:req.meth ~path:req.path
+         ~status:st ~duration_ms:dt;
+       (try hook req.meth req.path st dt with _ -> ())
+   | None -> ());
   resp
 
 let cors ?(origins = ["*"])
@@ -1625,7 +1667,22 @@ let handle_connection flow _addr =
            close_flow ()
      end else begin
        let body = read_body reader hdrs in
+       let is_console_path =
+         let p = path in
+         String.length p >= 7 && String.sub p 0 7 = "/_well/"
+         || p = "/_well"
+       in
        let base_handler (req : request) =
+         (* Check console routes first (bypass global middleware) *)
+         match (if is_console_path then match_console_route req.meth req.path
+                else None) with
+         | Some (route, params) ->
+             (try route.handler { req with params }
+              with exn ->
+                let msg = Printexc.to_string exn in
+                Printf.eprintf "[well] console handler error: %s\n%!" msg;
+                `Text ("Internal Server Error: " ^ msg) |> status 500)
+         | None ->
          match match_route req.meth req.path with
          | Some (route, params) ->
              (try route.handler { req with params }
@@ -1641,8 +1698,12 @@ let handle_connection flow _addr =
               | None -> `Text "Not Found" |> status 404)
        in
        let pipeline =
-         session_middleware
-           (apply_middlewares (List.rev !global_middlewares) base_handler)
+         if is_console_path then
+           (* Console routes: session middleware only, skip global middleware *)
+           session_middleware base_handler
+         else
+           session_middleware
+             (apply_middlewares (List.rev !global_middlewares) base_handler)
        in
        let req =
          { meth; path; headers = hdrs; body; params = [];
@@ -1754,7 +1815,7 @@ let handle_http80 ~domain flow _addr =
   | _ -> (try close_flow () with _ -> ()))
 
 let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
-    ?(acme_staging = false) () =
+    ?(acme_staging = false) ?(console = false) () =
   Printexc.record_backtrace true;
   let acme_mode = domain <> None in
   (* Validate: ~domain and ~cert/~key are mutually exclusive *)
@@ -1863,6 +1924,20 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     get "/health" (fun _req ->
       let statuses = Service.health () in
       `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
+    (* Console *)
+    if console then begin
+      Console._register_console_get := (fun path handler ->
+        register_console "GET" path (fun req ->
+          match handler req with
+          | Console.CRHtml s -> `Html s
+          | Console.CRRedirect url -> `Redirect url));
+      Console._register_console_post := (fun path handler ->
+        register_console "POST" path (fun req ->
+          match handler req with
+          | Console.CRHtml s -> `Html s
+          | Console.CRRedirect url -> `Redirect url));
+      Console.init ()
+    end;
     (* ── TLS config: ACME auto-TLS / manual TLS / plain ────────── *)
     let tls_cfg =
       match domain with
@@ -1972,7 +2047,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
 
 (* ── Test server ──────────────────────────────────────────────────── *)
 
-let with_test_server ?(port = 0) f =
+let with_test_server ?(port = 0) ?(console = false) f =
   Random.self_init ();
   let test_port = if port > 0 then port else 40000 + Random.int 20000 in
   Eio_main.run @@ fun env ->
@@ -2043,6 +2118,19 @@ let with_test_server ?(port = 0) f =
   get "/health" (fun _req ->
     let statuses = Service.health () in
     `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
+  if console then begin
+    Console._register_console_get := (fun path handler ->
+      register_console "GET" path (fun req ->
+        match handler req with
+        | Console.CRHtml s -> `Html s
+        | Console.CRRedirect url -> `Redirect url));
+    Console._register_console_post := (fun path handler ->
+      register_console "POST" path (fun req ->
+        match handler req with
+        | Console.CRHtml s -> `Html s
+        | Console.CRRedirect url -> `Redirect url));
+    Console.init ()
+  end;
   let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, test_port) in
   let socket =
     Eio.Net.listen net ~sw ~backlog:128 ~reuse_addr:true addr
@@ -2094,6 +2182,7 @@ let () = Liveview._resolve_route := (fun req url ->
 (* ── Re-export submodules ─────────────────────────────────────────── *)
 
 module Acme = Acme
+module Console = Console
 module Db = Db
 module Form = Form
 module Websocket = Websocket
