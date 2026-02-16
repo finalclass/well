@@ -2095,6 +2095,7 @@ let () = Liveview._resolve_route := (fun req url ->
 
 module Acme = Acme
 module Db = Db
+module Form = Form
 module Websocket = Websocket
 module LiveView = Liveview
 module Service = Service

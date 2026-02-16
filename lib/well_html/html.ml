@@ -140,6 +140,13 @@ let csrf_input token : node =
   `Html (Printf.sprintf {|<input type="hidden" name="_csrf_token" value="%s" />|}
            (escape_html token))
 
+let field_error errors field_name : node =
+  match List.assoc_opt field_name errors with
+  | Some msg ->
+      `Html (Printf.sprintf {|<span class="field-error">%s</span>|}
+               (escape_html msg))
+  | None -> `Html ""
+
 (* ── LiveView support ─────────────────────────────────────────────── *)
 
 let element_to_string (`Html s : node) : string = s
