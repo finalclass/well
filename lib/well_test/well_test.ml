@@ -26,11 +26,27 @@ type test_suite = {
 type test_state = {
   mutable suites : test_suite list;
   mutable current_suite : test_suite option;
+  mutable current_test : test_case option;
+  mutable snapshot_source_file : string option;
+  mutable update_snapshots : bool;
+  mutable snapshots : (string * string) list;
+  mutable snapshots_used : (string * string) list;
+  mutable snapshot_counter : int;
 }
 
 (* === Global state === *)
 
-let state = { suites = []; current_suite = None }
+let state =
+  {
+    suites = [];
+    current_suite = None;
+    current_test = None;
+    snapshot_source_file = None;
+    update_snapshots = false;
+    snapshots = [];
+    snapshots_used = [];
+    snapshot_counter = 0;
+  }
 
 (* === Terminal colors === *)
 
@@ -184,7 +200,143 @@ let to_raise_with expected_msg exp =
            expected_msg)
   | _ -> ()
 
-(* === Describe / It API === *)
+(* === Snapshot testing === *)
+
+let snapshot_path_of source_file =
+  let dir = Filename.dirname source_file in
+  let snap_dir = Filename.concat dir "__snapshots__" in
+  let base = Filename.basename source_file in
+  let snap_name =
+    (try Filename.chop_extension base with Invalid_argument _ -> base)
+    ^ ".snap"
+  in
+  Filename.concat snap_dir snap_name
+
+let parse_snap_file path =
+  if not (Sys.file_exists path) then []
+  else
+    let ic = open_in path in
+    let buf = Buffer.create 4096 in
+    let len = in_channel_length ic in
+    Buffer.add_channel buf ic len;
+    close_in ic;
+    let content = Buffer.contents buf in
+    let lines = String.split_on_char '\n' content in
+    let rec parse acc current_key current_lines = function
+      | [] ->
+          let acc =
+            match current_key with
+            | Some key ->
+                let body =
+                  String.concat "\n" (List.rev current_lines)
+                in
+                (key, body) :: acc
+            | None -> acc
+          in
+          List.rev acc
+      | line :: rest -> (
+          if String.length line > 2 && line.[0] = '[' then
+            let key =
+              String.sub line 1 (String.length line - 2)
+            in
+            let acc =
+              match current_key with
+              | Some prev_key ->
+                  let body =
+                    String.concat "\n" (List.rev current_lines)
+                  in
+                  (prev_key, body) :: acc
+              | None -> acc
+            in
+            (* Expect <<< on next line *)
+            match rest with
+            | "<<<" :: rest2 -> parse acc (Some key) [] rest2
+            | _ -> parse acc (Some key) [] rest
+          else if line = ">>>" then
+            let acc =
+              match current_key with
+              | Some key ->
+                  let body =
+                    String.concat "\n" (List.rev current_lines)
+                  in
+                  (key, body) :: acc
+              | None -> acc
+            in
+            parse acc None [] rest
+          else
+            match current_key with
+            | Some _ -> parse acc current_key (line :: current_lines) rest
+            | None -> parse acc None current_lines rest)
+    in
+    parse [] None [] lines
+
+let write_snap_file path entries =
+  let dir = Filename.dirname path in
+  if not (Sys.file_exists dir) then Unix.mkdir dir 0o755;
+  let oc = open_out path in
+  List.iter
+    (fun (key, body) ->
+      Printf.fprintf oc "[%s]\n<<<\n%s\n>>>\n\n" key body)
+    entries;
+  close_out oc
+
+(* === Diff utility for failed assertions === *)
+
+let show_diff expected actual =
+  let expected_lines = String.split_on_char '\n' expected in
+  let actual_lines = String.split_on_char '\n' actual in
+  print_endline (Color.dim "Expected:");
+  List.iter
+    (fun line -> Printf.printf "  %s\n" (Color.green ("+ " ^ line)))
+    expected_lines;
+  print_endline (Color.dim "Actual:");
+  List.iter
+    (fun line -> Printf.printf "  %s\n" (Color.red ("- " ^ line)))
+    actual_lines
+
+let to_match_snapshot exp =
+  let actual = exp.value in
+  let suite_name =
+    match state.current_suite with
+    | Some s -> s.name
+    | None -> "unknown"
+  in
+  let test_name =
+    match state.current_test with
+    | Some t -> t.name
+    | None -> "unknown"
+  in
+  state.snapshot_counter <- state.snapshot_counter + 1;
+  let key =
+    if state.snapshot_counter = 1 then
+      Printf.sprintf "%s > %s" suite_name test_name
+    else
+      Printf.sprintf "%s > %s #%d" suite_name test_name
+        state.snapshot_counter
+  in
+  let existing =
+    List.assoc_opt key state.snapshots
+  in
+  match existing with
+  | None ->
+      (* New snapshot — record it *)
+      state.snapshots_used <- (key, actual) :: state.snapshots_used;
+      Printf.printf "    %s\n"
+        (Color.yellow (Printf.sprintf "New snapshot: %s" key))
+  | Some expected ->
+      if actual = expected then
+        state.snapshots_used <- (key, actual) :: state.snapshots_used
+      else if state.update_snapshots then begin
+        state.snapshots_used <- (key, actual) :: state.snapshots_used;
+        Printf.printf "    %s\n"
+          (Color.yellow (Printf.sprintf "Updated snapshot: %s" key))
+      end else begin
+        state.snapshots_used <- (key, expected) :: state.snapshots_used;
+        show_diff expected actual;
+        raise
+          (Assertion_failed
+             (Printf.sprintf "Snapshot mismatch for \"%s\"" key))
+      end
 
 let describe name fn =
   let suite =
@@ -251,6 +403,8 @@ let skip name _fn =
 let get_time_ms () = Unix.gettimeofday () *. 1000.0
 
 let run_test suite test =
+  state.current_test <- Some test;
+  state.snapshot_counter <- 0;
   (match suite.before_each with Some fn -> fn () | None -> ());
   let start_time = get_time_ms () in
   (try
@@ -265,6 +419,7 @@ let run_test suite test =
              (Printf.sprintf "Unexpected exception: %s"
                 (Printexc.to_string exn))));
   test.duration_ms <- get_time_ms () -. start_time;
+  state.current_test <- None;
   (match suite.after_each with Some fn -> fn () | None -> ())
 
 let run_suite ~(filter : string option) ~ci_mode (suite : test_suite) =
@@ -326,7 +481,7 @@ type run_result = {
   duration_ms : float;
 }
 
-let run ?(filter = None) ?ci_mode () =
+let run ?(filter = None) ?ci_mode ?source_file () =
   let ci_mode =
     match ci_mode with
     | Some v -> v
@@ -335,6 +490,18 @@ let run ?(filter = None) ?ci_mode () =
         | Some _ -> true
         | None -> false)
   in
+  (* Snapshot setup *)
+  state.update_snapshots <-
+    (match Sys.getenv_opt "WELL_UPDATE_SNAPSHOTS" with
+    | Some "1" -> true
+    | _ -> false);
+  state.snapshot_source_file <- source_file;
+  (match source_file with
+  | Some f ->
+      let snap_path = snapshot_path_of f in
+      state.snapshots <- parse_snap_file snap_path
+  | None -> state.snapshots <- []);
+  state.snapshots_used <- [];
   let start_time = get_time_ms () in
   let suites = List.rev state.suites in
   List.iter (fun s -> run_suite ~filter ~ci_mode s) suites;
@@ -355,6 +522,12 @@ let run ?(filter = None) ?ci_mode () =
         suite.tests)
     suites;
   let duration_ms = get_time_ms () -. start_time in
+  (* Write snapshots if any were collected *)
+  (match source_file with
+  | Some f when state.snapshots_used <> [] ->
+      let snap_path = snapshot_path_of f in
+      write_snap_file snap_path (List.rev state.snapshots_used)
+  | _ -> ());
   if ci_mode then
     Printf.printf "\n%d passed, %d failed, %d skipped (%.2fms)\n" !passed
       !failed !skipped duration_ms
@@ -381,22 +554,14 @@ let run ?(filter = None) ?ci_mode () =
 let exit_with_result result =
   if result.failed > 0 then exit 1 else exit 0
 
-(* === Diff utility for failed assertions === *)
-
-let show_diff expected actual =
-  let expected_lines = String.split_on_char '\n' expected in
-  let actual_lines = String.split_on_char '\n' actual in
-  print_endline (Color.dim "Expected:");
-  List.iter
-    (fun line -> Printf.printf "  %s\n" (Color.green ("+ " ^ line)))
-    expected_lines;
-  print_endline (Color.dim "Actual:");
-  List.iter
-    (fun line -> Printf.printf "  %s\n" (Color.red ("- " ^ line)))
-    actual_lines
-
 (* === Reset state (for testing the test framework) === *)
 
 let reset () =
   state.suites <- [];
-  state.current_suite <- None
+  state.current_suite <- None;
+  state.current_test <- None;
+  state.snapshot_source_file <- None;
+  state.update_snapshots <- false;
+  state.snapshots <- [];
+  state.snapshots_used <- [];
+  state.snapshot_counter <- 0

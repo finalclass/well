@@ -22,7 +22,7 @@
 
 (depends
  (all_platforms
-  (ocaml ocamlfind ocamlbuild topkg fmt base-threads)))
+  (ocaml ocamlfind ocamlbuild topkg cmdliner fmt base-threads)))
 
 (source
  (fetch

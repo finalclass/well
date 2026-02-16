@@ -2,4 +2,5 @@
  (name well_test)
  (public_name well.test)
  (wrapped false)
- (libraries str unix))
+ (libraries str unix)
+ (instrumentation (backend bisect_ppx)))

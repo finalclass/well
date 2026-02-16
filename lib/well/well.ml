@@ -403,8 +403,9 @@ let match_ws_route path =
   in
   find candidates
 
-(* Wire up LiveView WS route registration *)
+(* Wire up LiveView + Channel WS route registration *)
 let () = Liveview._register_ws_route := ws
+let () = Channel._register_ws_route := ws
 
 
 (* ── Session cookie ───────────────────────────────────────────────── *)
@@ -1771,6 +1772,9 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key () =
     (* Unix socket for local IPC *)
     (try Unix.mkdir "data" 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
     Service.start_socket ~sw ~net "data/well.sock";
+    (* MessageBus + Channel *)
+    Message_bus.init ();
+    Channel.ensure_ws_route ();
     (* Health endpoint *)
     get "/health" (fun _req ->
       let statuses = Service.health () in
@@ -1892,6 +1896,8 @@ let with_test_server ?(port = 0) f =
     (fun req -> rpc_ctx_to_wire (build_rpc_ctx req));
   Service._cast_sw := Some sw;
   Service.start_all ~sw;
+  Message_bus.init ();
+  Channel.ensure_ws_route ();
   get "/health" (fun _req ->
     let statuses = Service.health () in
     `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
@@ -1949,3 +1955,5 @@ module Db = Db
 module Websocket = Websocket
 module LiveView = Liveview
 module Service = Service
+module MessageBus = Message_bus
+module Channel = Channel

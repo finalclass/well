@@ -1,4 +1,5 @@
 (library
  (name well_cli)
  (public_name well.cli)
- (libraries well unix otoml str))
+ (libraries well unix otoml str)
+ (instrumentation (backend bisect_ppx)))

@@ -1,5 +1,7 @@
 _build/
 _release/
+_coverage/
+*.coverage
 vendor/
 *.install
 .merlin

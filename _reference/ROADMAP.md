@@ -166,13 +166,12 @@ my-app/
 
 ### 2.3 Ekstrakcja CLI (`dg` → `blossom`)
 - Osobne narzędzie CLI dla frameworka
-- Generatory: `blossom gen component MyComponent`
-- Generatory CRUD: `blossom gen crud User name:string email:string`
-  - Generuje: model, LiveView list/form/show, routes, migracje
-  - Wzorowany na `rails generate scaffold`
 - Dev server: `blossom dev --port 4000`
 - REPL: `well repl` (patrz sekcja 10)
 - Migracje: `blossom db migrate`
+- Skille Claude: gotowe instrukcje/prompty/kontekst w CLAUDE.md ułatwiające Claude Code pracę z well
+  - Zastępują klasyczne generatory CLI (`gen route`, `gen model`, `gen crud`)
+  - Claude Code generuje lepszy, kontekstowy kod niż template'y
 
 ### 2.4 System kontraktów i usług (aktorów)
 
@@ -257,10 +256,9 @@ Szczegóły → sekcja 9.
 - Direct-to-S3 upload z pre-signed URLs
 
 ### 4.6 Form handling
-- CRUD generator (`blossom gen crud`) generuje gotowe formularze
 - Walidacja w real-time (data-lv-change z debounce)
 - Inline error messages
-- Generator tworzy: list view, form view, show view, delete confirmation
+- CRUD views (list, form, show, delete confirmation) — generowane przez Claude z kontekstem z CLAUDE.md
 
 ### 4.7 Debounce / throttle
 - `lvChange` z debounce (np. search input)
@@ -1054,15 +1052,14 @@ let update ctx model = function
 - [x] Temporary assigns (dane widoczne tylko w jednym renderze)
 - [x] LiveView uploads (file upload z progress bar przez LiveView)
 
-**Faza 3 — CLI i generatory:**
-- [ ] CLI generatory: `well gen route`, `well gen model`, `well gen component`
-- [ ] CRUD generator: `well gen crud User name:string email:string`
+**Faza 3 — Skille Claude:**
+- [ ] Przygotowanie skilli dla Claude (CLAUDE.md snippets, przykłady, kontekst do generowania kodu)
 
 **Faza 4 — Dojrzałość:**
 - [x] Test runner: `well test` CLI, autodiscovery `*_test.ml`, parallel via fork, watch mode (`-w`)
 - [x] Test helpers: `Well.with_test_server` (starts server on random port, runs test fn, stops)
-- [ ] Snapshot testing (`to_match_snapshot`)
-- [ ] Coverage z bisect_ppx
+- [x] Snapshot testing (`to_match_snapshot`, `.snap` files, `--update-snapshots`/`-u`)
+- [x] Coverage z bisect_ppx (`--coverage`, `make coverage`, `(instrumentation (backend bisect_ppx))`)
 - [ ] Dokumentacja w kodzie + generator (`well docs`)
 
 **Faza 5 — Produkcja:**
@@ -1081,14 +1078,13 @@ let update ctx model = function
 ### Faza 2 — Type-safe SQL PPX + Runtime ✅ DONE
 ### Faza 2.5 — Kontrakty i usługi ✅ DONE
 ### Faza 3 — LiveView gaps ✅ ~90% DONE (missing: nested stateful components)
-### Faza 4 — Dojrzałość 🔨 ~40% DONE (test runner + helpers done)
+### Faza 4 — Dojrzałość 🔨 ~80% DONE (test runner + helpers + snapshots + coverage done)
 
 ### Następne kroki (w kolejności priorytetów):
 1. Nested components (stateful z własnym stanem)
-2. CLI generatory + CRUD generator
-3. Snapshot testing + coverage
-4. Dokumentacja + generator
-5. Telemetria, graceful shutdown, HTTP/2
+2. Skille Claude (CLAUDE.md snippets, przykłady, kontekst)
+3. Dokumentacja + generator
+4. Telemetria, graceful shutdown, HTTP/2
 
 ---
 

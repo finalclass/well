@@ -741,7 +741,7 @@ let live_view ~endpoint ?(topic = "") ?(props = [])
        children_html)
 
 let live_view_script () : Html.node =
-  `Html {|<script src="/static/well-live.js"></script>|}
+  `Html {|<script src="/static/well.js"></script>|}
 
 (* MLX component: <LiveView name="counter" /> *)
 let createElement ~name ?(props : (string * string) list = [])

@@ -26,6 +26,7 @@ let dune_project name =
   eio_main
   yojson
   sqlite3
+  bisect_ppx
   ppx_deriving_yojson))
 |}
     name
@@ -34,7 +35,7 @@ let root_dune = {|(dirs :standard \ _build)
 |}
 
 let makefile =
-  {|.PHONY: build check test clean lock dev
+  {|.PHONY: build check test clean lock dev coverage
 
 build:
 	dune build
@@ -53,6 +54,13 @@ lock:
 
 dev:
 	dune exec -w bin/main.exe
+
+coverage:
+	dune test --instrument-with bisect_ppx --force
+	dune exec -- bisect-ppx-report html -o _coverage/
+	dune exec -- bisect-ppx-report summary
+	@echo "Coverage report: _coverage/index.html"
+	@rm -f *.coverage
 |}
 
 let readme name =
@@ -106,6 +114,8 @@ data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
 node_modules/
+_coverage/
+*.coverage
 |}
 
 let bin_dune name =
@@ -142,7 +152,8 @@ let lib_dune name =
   Printf.sprintf
     {|(library
  (name %s)
- (libraries well.core eio yojson))
+ (libraries well.core eio yojson)
+ (instrumentation (backend bisect_ppx)))
 |}
     name
 
@@ -158,7 +169,8 @@ let lib_web_dune name =
  (name %s_web)
  (wrapped false)
  (libraries %s contract well.core well.html eio yojson sqlite3)
- (preprocess (pps ppx_deriving_yojson well.ppx)))
+ (preprocess (pps ppx_deriving_yojson well.ppx))
+ (instrumentation (backend bisect_ppx)))
 |}
     name name
 
@@ -210,7 +222,7 @@ let layout name =
       <footer>
         <p>(txt "Powered by %s & well")</p>
       </footer>
-      <script src="/static/well-live.js" />
+      <script src="/static/well.js" />
     </body>
   </html>
 |}
@@ -220,7 +232,8 @@ let test_dune name =
   Printf.sprintf
     {|(test
  (name %s_test)
- (libraries %s well.test))
+ (libraries %s well.test)
+ (instrumentation (backend bisect_ppx)))
 |}
     name name
 
@@ -238,7 +251,7 @@ let () =
       expect (String.length %s.version > 0) |> to_be_true
     );
   );
-  run () |> exit_with_result
+  run ~source_file:__FILE__ () |> exit_with_result
 |}
     cap cap name cap
 
@@ -469,430 +482,634 @@ let open Html in
 </Layout>
 |}
 
-let static_well_live_js =
-  {|// well-live.js — LiveView client
-// Handles WebSocket connection, DOM patching, event delegation,
-// debounce/throttle, JS hooks, server push, and live navigation
+let static_well_ts =
+  {|// well.ts — Unified client for LiveView + Channels
+// Replaces well-live.js with full TypeScript types
 
-(function () {
-  "use strict";
+// ── Types ──────────────────────────────────────────────────────────
 
-  var ws = null;
-  var reconnectDelay = 500;
-  var maxReconnectDelay = 10000;
-  var liveViews = new Map();
+export interface HookDef {
+  mounted?: (this: HookInstance) => void;
+  updated?: (this: HookInstance) => void;
+  destroyed?: (this: HookInstance) => void;
+}
 
-  // ── Debounce / Throttle ──────────────────────────────────────────
+export interface HookInstance {
+  el: Element;
+  _topic: string | null;
+  _handlers: Record<string, ((payload: unknown) => void)[]>;
+  pushEvent(event: string, payload?: unknown): void;
+  handleEvent(event: string, cb: (payload: unknown) => void): void;
+}
 
-  var debounceTimers = new Map();
-  var throttleTimers = new Map();
+export interface WellChannel {
+  on(event: string, cb: (payload: unknown) => void): WellChannel;
+  push(event: string, payload?: unknown): void;
+  leave(): void;
+}
 
-  function debouncedSend(key, ms, fn) {
-    clearTimeout(debounceTimers.get(key));
-    debounceTimers.set(key, setTimeout(fn, ms));
+// ── Well client ────────────────────────────────────────────────────
+
+export class Well {
+  // ── LiveView state ──
+  private liveWs: WebSocket | null = null;
+  private liveReconnectDelay = 500;
+  private readonly maxReconnectDelay = 10000;
+  private readonly liveViews = new Map<string, { el: Element; endpoint: string; props: Record<string, unknown> }>();
+
+  // ── Channel state ──
+  private channelWs: WebSocket | null = null;
+  private channelReconnectDelay = 500;
+  private readonly channels = new Map<string, ChannelInstance>();
+  private channelConnected = false;
+
+  // ── Hooks ──
+  static hooks: Record<string, HookDef> = {};
+  private hookInstances = new Map<Element, HookInstance>();
+
+  // ── Debounce / Throttle ──
+  private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private throttleTimers = new Map<string, number>();
+
+  // ── Options ──
+  private livePath: string;
+  private wsPath: string;
+
+  constructor(opts?: { livePath?: string; wsPath?: string }) {
+    this.livePath = opts?.livePath ?? "/live";
+    this.wsPath = opts?.wsPath ?? "/ws";
   }
-  function throttledSend(key, ms, fn) {
-    var now = Date.now();
-    if (now - (throttleTimers.get(key) || 0) >= ms) {
-      throttleTimers.set(key, now);
+
+  // ── Debounce / Throttle helpers ──────────────────────────────────
+
+  private debouncedSend(key: string, ms: number, fn: () => void) {
+    const prev = this.debounceTimers.get(key);
+    if (prev !== undefined) clearTimeout(prev);
+    this.debounceTimers.set(key, setTimeout(fn, ms));
+  }
+
+  private throttledSend(key: string, ms: number, fn: () => void) {
+    const now = Date.now();
+    if (now - (this.throttleTimers.get(key) ?? 0) >= ms) {
+      this.throttleTimers.set(key, now);
       fn();
     }
   }
-  function maybeSend(el, fn) {
-    var debounce = el.closest("[data-lv-debounce]");
-    var throttle = el.closest("[data-lv-throttle]");
+
+  private maybeSend(el: Element, fn: () => void) {
+    const debounce = el.closest("[data-lv-debounce]");
+    const throttle = el.closest("[data-lv-throttle]");
     if (debounce) {
-      var ms = parseInt(debounce.getAttribute("data-lv-debounce"), 10) || 300;
-      var key = debounce.getAttribute("id") || debounce.getAttribute("data-lv-change") || "d";
-      debouncedSend(key, ms, fn);
+      const ms = parseInt(debounce.getAttribute("data-lv-debounce") ?? "300", 10) || 300;
+      const key = debounce.getAttribute("id") ?? debounce.getAttribute("data-lv-change") ?? "d";
+      this.debouncedSend(key, ms, fn);
     } else if (throttle) {
-      var ms2 = parseInt(throttle.getAttribute("data-lv-throttle"), 10) || 300;
-      var key2 = throttle.getAttribute("id") || throttle.getAttribute("data-lv-click") || "t";
-      throttledSend(key2, ms2, fn);
+      const ms = parseInt(throttle.getAttribute("data-lv-throttle") ?? "300", 10) || 300;
+      const key = throttle.getAttribute("id") ?? throttle.getAttribute("data-lv-click") ?? "t";
+      this.throttledSend(key, ms, fn);
     } else {
       fn();
     }
   }
 
-  // ── JS Hooks ─────────────────────────────────────────────────────
+  // ── Hooks ────────────────────────────────────────────────────────
 
-  var hooks = {};
-  var hookInstances = new Map();
-  window.WellLive = { hooks: hooks };
-
-  function mountHooks(container) {
-    var els = container.querySelectorAll("[data-lv-hook]");
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (hookInstances.has(el)) continue;
-      var name = el.getAttribute("data-lv-hook");
-      var hookDef = hooks[name];
+  private mountHooks(container: Element) {
+    const els = container.querySelectorAll("[data-lv-hook]");
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      if (this.hookInstances.has(el)) continue;
+      const name = el.getAttribute("data-lv-hook");
+      if (!name) continue;
+      const hookDef = Well.hooks[name];
       if (!hookDef) continue;
-      var topic = findLiveView(el);
-      var instance = {
-        el: el, _topic: topic, _handlers: {},
-        pushEvent: function (event, payload) {
-          if (this._topic) sendMsg(this._topic, ["HookEvent", { event: event, payload: payload }]);
+      const topic = this.findLiveView(el);
+      const self = this;
+      const instance: HookInstance = {
+        el,
+        _topic: topic,
+        _handlers: {},
+        pushEvent(event: string, payload?: unknown) {
+          if (this._topic) {
+            self.sendLiveMsg(this._topic, ["HookEvent", { event, payload }]);
+          }
         },
-        handleEvent: function (event, cb) {
+        handleEvent(event: string, cb: (payload: unknown) => void) {
           if (!this._handlers[event]) this._handlers[event] = [];
           this._handlers[event].push(cb);
-        }
+        },
       };
-      hookInstances.set(el, instance);
+      this.hookInstances.set(el, instance);
       if (hookDef.mounted) hookDef.mounted.call(instance);
     }
   }
-  function updateHooks(container) {
-    hookInstances.forEach(function (instance, el) {
+
+  private updateHooks(container: Element) {
+    this.hookInstances.forEach((instance, el) => {
       if (!container.contains(el)) {
-        var name = el.getAttribute("data-lv-hook");
-        var hookDef = hooks[name];
-        if (hookDef && hookDef.destroyed) hookDef.destroyed.call(instance);
-        hookInstances.delete(el);
+        const name = el.getAttribute("data-lv-hook");
+        if (name) {
+          const hookDef = Well.hooks[name];
+          if (hookDef?.destroyed) hookDef.destroyed.call(instance);
+        }
+        this.hookInstances.delete(el);
       }
     });
-    hookInstances.forEach(function (instance, el) {
+    this.hookInstances.forEach((instance, el) => {
       if (container.contains(el)) {
-        var name = el.getAttribute("data-lv-hook");
-        var hookDef = hooks[name];
-        if (hookDef && hookDef.updated) hookDef.updated.call(instance);
+        const name = el.getAttribute("data-lv-hook");
+        if (name) {
+          const hookDef = Well.hooks[name];
+          if (hookDef?.updated) hookDef.updated.call(instance);
+        }
       }
     });
-    mountHooks(container);
+    this.mountHooks(container);
   }
-  function dispatchHookEvent(topic, event, payload) {
-    hookInstances.forEach(function (instance) {
+
+  private dispatchHookEvent(topic: string, event: string, payload: unknown) {
+    this.hookInstances.forEach((instance) => {
       if (instance._topic === topic && instance._handlers[event]) {
-        instance._handlers[event].forEach(function (cb) { cb(payload); });
+        instance._handlers[event].forEach((cb) => cb(payload));
       }
     });
   }
 
-  // ── Connection ───────────────────────────────────────────────────
+  // ── LiveView helpers ─────────────────────────────────────────────
 
-  function connect() {
-    var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    var url = proto + "//" + location.host + "/live";
-    ws = new WebSocket(url);
-
-    ws.onopen = function () {
-      reconnectDelay = 500;
-      var queryParams = parseQueryParams(location.search);
-      liveViews.forEach(function (lv, topic) {
-        lv.el.classList.add("lv-loading");
-        var joinProps = Object.assign({}, lv.props, { _query: queryParams });
-        ws.send(JSON.stringify({
-          type: "join", topic: topic,
-          endpoint: lv.endpoint, props: joinProps,
-        }));
-      });
-    };
-
-    ws.onmessage = function (event) {
-      var msg;
-      try { msg = JSON.parse(event.data); } catch (e) { return; }
-      var topic = msg.topic;
-      var lv = liveViews.get(topic);
-
-      switch (msg.type) {
-        case "full":
-        case "restored":
-          if (lv) {
-            lv.el.innerHTML = msg.html;
-            lv.el.classList.remove("lv-loading");
-            mountHooks(lv.el);
-          }
-          break;
-        case "patch":
-          if (!lv) break;
-          if (msg.changes) {
-            var keys = Object.keys(msg.changes);
-            for (var i = 0; i < keys.length; i++) {
-              var id = keys[i];
-              var el = lv.el.querySelector('[data-lv="' + id + '"]');
-              if (el) el.textContent = msg.changes[id];
-            }
-          }
-          if (msg.list_ops) {
-            var listIds = Object.keys(msg.list_ops);
-            for (var li = 0; li < listIds.length; li++) {
-              var listId = listIds[li];
-              var ops = msg.list_ops[listId];
-              var container = lv.el.querySelector('[data-lv-each="' + listId + '"]');
-              if (!container) continue;
-              var existing = new Map();
-              for (var j = 0; j < container.children.length; j++) {
-                var key = container.children[j].getAttribute("data-lv-key");
-                if (key) existing.set(key, container.children[j]);
-              }
-              if (ops.inserts) {
-                var insertKeys = Object.keys(ops.inserts);
-                for (var ij = 0; ij < insertKeys.length; ij++) {
-                  var ikey = insertKeys[ij];
-                  var tmp = document.createElement("div");
-                  tmp.innerHTML = ops.inserts[ikey];
-                  var newEl = tmp.firstElementChild;
-                  if (newEl) existing.set(ikey, newEl);
-                }
-              }
-              if (ops.order) {
-                while (container.firstChild) container.removeChild(container.firstChild);
-                for (var oi = 0; oi < ops.order.length; oi++) {
-                  var oel = existing.get(ops.order[oi]);
-                  if (oel) container.appendChild(oel);
-                }
-              }
-            }
-          }
-          updateHooks(lv.el);
-          break;
-        case "event":
-          if (msg.event) dispatchHookEvent(topic, msg.event, msg.payload || null);
-          break;
-        case "navigate":
-          if (msg.url && msg.html) {
-            history.pushState({ wellNav: true }, "", msg.url);
-            applyNavigationHtml(msg.html);
-          }
-          break;
-      }
-    };
-
-    ws.onclose = function () {
-      liveViews.forEach(function (lv) { lv.el.classList.add("lv-loading"); });
-      setTimeout(function () {
-        reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
-        connect();
-      }, reconnectDelay);
-    };
-
-    ws.onerror = function () { ws.close(); };
-  }
-
-  function sendMsg(topic, msg) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "msg", topic: topic, msg: msg }));
-    }
-  }
-
-  function findLiveView(el) {
-    var node = el;
+  private findLiveView(el: Element): string | null {
+    let node: Element | null = el;
     while (node) {
       if (node.tagName === "LIVE-VIEW") {
-        return node.getAttribute("data-topic") || node.getAttribute("data-liveview");
+        return node.getAttribute("data-topic") ?? node.getAttribute("data-liveview");
       }
       node = node.parentElement;
     }
     return null;
   }
 
-  // ── Event delegation ─────────────────────────────────────────────
-
-  document.addEventListener("click", function (e) {
-    var navTarget = e.target.closest("[data-lv-navigate]");
-    if (navTarget) {
-      e.preventDefault();
-      var url = navTarget.getAttribute("href") || navTarget.getAttribute("data-lv-navigate");
-      if (url) navigateTo(url);
-      return;
+  private sendLiveMsg(topic: string, msg: unknown) {
+    if (this.liveWs?.readyState === WebSocket.OPEN) {
+      this.liveWs.send(JSON.stringify({ type: "msg", topic, msg }));
     }
-    var patchTarget = e.target.closest("[data-lv-patch]");
-    if (patchTarget) {
-      e.preventDefault();
-      var patchUrl = patchTarget.getAttribute("href") || patchTarget.getAttribute("data-lv-patch");
-      if (patchUrl) patchParams(patchUrl);
-      return;
-    }
-    var target = e.target.closest("[data-lv-click]");
-    if (!target) return;
-    var action = target.getAttribute("data-lv-click");
-    var topic = findLiveView(target);
-    if (topic && action) {
-      maybeSend(target, function () { sendMsg(topic, [action]); });
-    }
-  });
+  }
 
-  document.addEventListener("submit", function (e) {
-    var target = e.target.closest("[data-lv-submit]");
-    if (!target) return;
-    e.preventDefault();
-    var action = target.getAttribute("data-lv-submit");
-    var topic = findLiveView(target);
-    if (!topic || !action) return;
-    var formData = new FormData(target);
-    var data = {};
-    formData.forEach(function (value, key) { data[key] = value; });
-    maybeSend(target, function () { sendMsg(topic, [action, data]); });
-    target.querySelectorAll('input:not([type="hidden"]):not([type="submit"])').forEach(function (input) { input.value = ""; });
-  });
-
-  document.addEventListener("input", function (e) {
-    var target = e.target.closest("[data-lv-change]");
-    if (!target) return;
-    var action = target.getAttribute("data-lv-change");
-    var topic = findLiveView(target);
-    if (topic && action) {
-      maybeSend(e.target, function () { sendMsg(topic, [action, e.target.value]); });
-    }
-  });
-
-  // ── Live Navigation ──────────────────────────────────────────────
-
-  function parseQueryParams(search) {
-    var params = {};
+  private parseQueryParams(search: string): Record<string, string> {
+    const params: Record<string, string> = {};
     if (!search || search.length <= 1) return params;
-    var qs = search.charAt(0) === "?" ? search.substring(1) : search;
-    var pairs = qs.split("&");
-    for (var i = 0; i < pairs.length; i++) {
-      var pair = pairs[i].split("=");
-      if (pair[0]) {
-        params[decodeURIComponent(pair[0])] = pair.length > 1 ? decodeURIComponent(pair[1]) : "";
-      }
+    const qs = search.charAt(0) === "?" ? search.substring(1) : search;
+    const pairs = qs.split("&");
+    for (const pair of pairs) {
+      const [k, v] = pair.split("=");
+      if (k) params[decodeURIComponent(k)] = v ? decodeURIComponent(v) : "";
     }
     return params;
   }
 
-  function patchParams(url) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+  // ── LiveView connection ──────────────────────────────────────────
+
+  private connectLive() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const url = proto + "//" + location.host + this.livePath;
+    this.liveWs = new WebSocket(url);
+
+    this.liveWs.onopen = () => {
+      this.liveReconnectDelay = 500;
+      const queryParams = this.parseQueryParams(location.search);
+      this.liveViews.forEach((lv, topic) => {
+        lv.el.classList.add("lv-loading");
+        const joinProps = { ...lv.props, _query: queryParams };
+        this.liveWs!.send(JSON.stringify({
+          type: "join", topic, endpoint: lv.endpoint, props: joinProps,
+        }));
+      });
+    };
+
+    this.liveWs.onmessage = (event: MessageEvent) => {
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(event.data as string); } catch { return; }
+
+      const topic = msg.topic as string;
+      const lv = this.liveViews.get(topic);
+
+      switch (msg.type) {
+        case "full":
+        case "restored":
+          if (lv) {
+            lv.el.innerHTML = msg.html as string;
+            lv.el.classList.remove("lv-loading");
+            this.mountHooks(lv.el);
+          }
+          break;
+
+        case "patch":
+          if (!lv) break;
+          if (msg.changes) {
+            const changes = msg.changes as Record<string, string>;
+            for (const id of Object.keys(changes)) {
+              const el = lv.el.querySelector('[data-lv="' + id + '"]');
+              if (el) el.textContent = changes[id];
+            }
+          }
+          if (msg.list_ops) {
+            const listOps = msg.list_ops as Record<string, { order?: string[]; inserts?: Record<string, string> }>;
+            for (const listId of Object.keys(listOps)) {
+              const ops = listOps[listId];
+              const container = lv.el.querySelector('[data-lv-each="' + listId + '"]');
+              if (!container) continue;
+              const existing = new Map<string, Element>();
+              for (let j = 0; j < container.children.length; j++) {
+                const key = container.children[j].getAttribute("data-lv-key");
+                if (key) existing.set(key, container.children[j]);
+              }
+              if (ops.inserts) {
+                for (const [ikey, html] of Object.entries(ops.inserts)) {
+                  const tmp = document.createElement("div");
+                  tmp.innerHTML = html;
+                  const newEl = tmp.firstElementChild;
+                  if (newEl) existing.set(ikey, newEl);
+                }
+              }
+              if (ops.order) {
+                while (container.firstChild) container.removeChild(container.firstChild);
+                for (const okey of ops.order) {
+                  const oel = existing.get(okey);
+                  if (oel) container.appendChild(oel);
+                }
+              }
+            }
+          }
+          this.updateHooks(lv.el);
+          break;
+
+        case "event":
+          if (msg.event) {
+            this.dispatchHookEvent(topic, msg.event as string, msg.payload ?? null);
+          }
+          break;
+
+        case "navigate":
+          if (msg.url && msg.html) {
+            history.pushState({ wellNav: true }, "", msg.url as string);
+            this.applyNavigationHtml(msg.html as string);
+          }
+          break;
+      }
+    };
+
+    this.liveWs.onclose = () => {
+      this.liveViews.forEach((lv) => lv.el.classList.add("lv-loading"));
+      setTimeout(() => {
+        this.liveReconnectDelay = Math.min(this.liveReconnectDelay * 2, this.maxReconnectDelay);
+        this.connectLive();
+      }, this.liveReconnectDelay);
+    };
+
+    this.liveWs.onerror = () => this.liveWs?.close();
+  }
+
+  // ── LiveView navigation ──────────────────────────────────────────
+
+  private patchParams(url: string) {
+    if (!this.liveWs || this.liveWs.readyState !== WebSocket.OPEN) {
       window.location.href = url;
       return;
     }
     history.replaceState({ wellNav: true }, "", url);
-    var qmark = url.indexOf("?");
-    var params = qmark >= 0 ? parseQueryParams(url.substring(qmark)) : {};
-    liveViews.forEach(function (_lv, topic) {
-      ws.send(JSON.stringify({ type: "params", topic: topic, params: params }));
+    const qmark = url.indexOf("?");
+    const params = qmark >= 0 ? this.parseQueryParams(url.substring(qmark)) : {};
+    this.liveViews.forEach((_lv, topic) => {
+      this.liveWs!.send(JSON.stringify({ type: "params", topic, params }));
     });
   }
 
-  function navigateTo(url, replace) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+  private navigateTo(url: string) {
+    if (!this.liveWs || this.liveWs.readyState !== WebSocket.OPEN) {
       window.location.href = url;
       return;
     }
-    liveViews.forEach(function (lv, topic) {
-      ws.send(JSON.stringify({ type: "leave", topic: topic }));
+    this.liveViews.forEach((_lv, topic) => {
+      this.liveWs!.send(JSON.stringify({ type: "leave", topic }));
     });
-    ws.send(JSON.stringify({ type: "navigate", url: url, replace: !!replace }));
+    this.liveWs.send(JSON.stringify({ type: "navigate", url }));
   }
 
-  function applyNavigationHtml(html) {
-    hookInstances.forEach(function (instance, el) {
-      var name = el.getAttribute("data-lv-hook");
-      var hookDef = hooks[name];
-      if (hookDef && hookDef.destroyed) hookDef.destroyed.call(instance);
+  private applyNavigationHtml(html: string) {
+    this.hookInstances.forEach((instance, el) => {
+      const name = el.getAttribute("data-lv-hook");
+      if (name) {
+        const hookDef = Well.hooks[name];
+        if (hookDef?.destroyed) hookDef.destroyed.call(instance);
+      }
     });
-    hookInstances.clear();
-    liveViews.clear();
-    var tmp = document.createElement("html");
+    this.hookInstances.clear();
+    this.liveViews.clear();
+
+    const tmp = document.createElement("html");
     tmp.innerHTML = html;
-    var newMain = tmp.querySelector("main");
-    var oldMain = document.querySelector("main");
+    const newMain = tmp.querySelector("main");
+    const oldMain = document.querySelector("main");
     if (newMain && oldMain) {
       oldMain.innerHTML = newMain.innerHTML;
-      var newTitle = tmp.querySelector("title");
-      if (newTitle) document.title = newTitle.textContent;
+      const newTitle = tmp.querySelector("title");
+      if (newTitle) document.title = newTitle.textContent ?? "";
     } else {
-      var newBody = tmp.querySelector("body");
+      const newBody = tmp.querySelector("body");
       if (newBody) document.body.innerHTML = newBody.innerHTML;
     }
-    discoverAndJoin();
+    this.discoverAndJoin();
   }
 
-  function discoverAndJoin() {
-    var elements = document.querySelectorAll("live-view");
+  private discoverAndJoin() {
+    const elements = document.querySelectorAll("live-view");
     if (elements.length === 0) return;
-    elements.forEach(function (el) {
-      var endpoint = el.getAttribute("data-liveview");
-      var topic = el.getAttribute("data-topic") || endpoint;
-      var props = {};
-      try { props = JSON.parse(el.getAttribute("data-props") || "{}"); } catch (e) {}
-      liveViews.set(topic, { el: el, endpoint: endpoint, props: props });
+
+    elements.forEach((el) => {
+      const endpoint = el.getAttribute("data-liveview") ?? "";
+      const topic = el.getAttribute("data-topic") ?? endpoint;
+      let props: Record<string, unknown> = {};
+      try { props = JSON.parse(el.getAttribute("data-props") ?? "{}"); } catch { /* ignore */ }
+      this.liveViews.set(topic, { el, endpoint, props });
     });
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      liveViews.forEach(function (lv, topic) {
+
+    if (this.liveWs?.readyState === WebSocket.OPEN) {
+      const queryParams = this.parseQueryParams(location.search);
+      this.liveViews.forEach((lv, topic) => {
         lv.el.classList.add("lv-loading");
-        ws.send(JSON.stringify({
-          type: "join", topic: topic,
-          endpoint: lv.endpoint, props: lv.props,
+        const joinProps = { ...lv.props, _query: queryParams };
+        this.liveWs!.send(JSON.stringify({
+          type: "join", topic, endpoint: lv.endpoint, props: joinProps,
         }));
       });
     }
   }
 
-  window.addEventListener("popstate", function () {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      liveViews.forEach(function (lv, topic) {
-        ws.send(JSON.stringify({ type: "leave", topic: topic }));
-      });
-      ws.send(JSON.stringify({ type: "navigate", url: location.pathname + location.search }));
-    } else {
-      window.location.reload();
-    }
-  });
-
   // ── File Upload ──────────────────────────────────────────────────
 
-  var CHUNK_SIZE = 64 * 1024;
+  private uploadFile(topic: string, file: File) {
+    const CHUNK_SIZE = 64 * 1024;
+    const uploadId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const chunkCount = Math.ceil(file.size / CHUNK_SIZE);
+    let chunkIndex = 0;
 
-  function uploadFile(topic, file) {
-    var uploadId = Math.random().toString(36).substring(2) + Date.now().toString(36);
-    var chunkCount = Math.ceil(file.size / CHUNK_SIZE);
-    var chunkIndex = 0;
-    function sendChunk() {
+    const sendChunk = () => {
       if (chunkIndex >= chunkCount) return;
-      var start = chunkIndex * CHUNK_SIZE;
-      var end = Math.min(start + CHUNK_SIZE, file.size);
-      var slice = file.slice(start, end);
-      var reader = new FileReader();
-      reader.onload = function () {
-        var base64 = reader.result.split(",")[1] || "";
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: "upload", topic: topic, upload_id: uploadId,
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const slice = file.slice(start, end);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1] ?? "";
+        if (this.liveWs?.readyState === WebSocket.OPEN) {
+          this.liveWs.send(JSON.stringify({
+            type: "upload", topic, upload_id: uploadId,
             filename: file.name, content_type: file.type || "application/octet-stream",
             size: file.size, chunk_index: chunkIndex, chunk_count: chunkCount,
-            chunk_data: base64
+            chunk_data: base64,
           }));
         }
         chunkIndex++;
         sendChunk();
       };
       reader.readAsDataURL(slice);
-    }
+    };
     sendChunk();
   }
 
-  hooks.FileUpload = {
-    mounted: function () {
-      var self = this;
-      var input = self.el.querySelector('input[type="file"]') || self.el;
-      if (input.tagName !== "INPUT") return;
-      input.addEventListener("change", function (e) {
-        var files = e.target.files;
-        for (var i = 0; i < files.length; i++) {
-          uploadFile(self._topic, files[i]);
-        }
-      });
-    }
-  };
+  // ── Event delegation ─────────────────────────────────────────────
 
-  // ── Initialize ───────────────────────────────────────────────────
+  private setupEventDelegation() {
+    document.addEventListener("click", (e: MouseEvent) => {
+      const target = e.target as Element;
 
-  document.addEventListener("DOMContentLoaded", function () {
-    var elements = document.querySelectorAll("live-view");
-    if (elements.length === 0) return;
-    elements.forEach(function (el) {
-      var endpoint = el.getAttribute("data-liveview");
-      var topic = el.getAttribute("data-topic") || endpoint;
-      var props = {};
-      try { props = JSON.parse(el.getAttribute("data-props") || "{}"); } catch (e) {}
-      liveViews.set(topic, { el: el, endpoint: endpoint, props: props });
+      // Live navigation
+      const navTarget = target.closest("[data-lv-navigate]");
+      if (navTarget) {
+        e.preventDefault();
+        const url = navTarget.getAttribute("href") ?? navTarget.getAttribute("data-lv-navigate") ?? "";
+        if (url) this.navigateTo(url);
+        return;
+      }
+
+      // Patch navigation
+      const patchTarget = target.closest("[data-lv-patch]");
+      if (patchTarget) {
+        e.preventDefault();
+        const patchUrl = patchTarget.getAttribute("href") ?? patchTarget.getAttribute("data-lv-patch") ?? "";
+        if (patchUrl) this.patchParams(patchUrl);
+        return;
+      }
+
+      // Click action
+      const clickTarget = target.closest("[data-lv-click]");
+      if (!clickTarget) return;
+      const action = clickTarget.getAttribute("data-lv-click");
+      const topic = this.findLiveView(clickTarget);
+      if (topic && action) {
+        this.maybeSend(clickTarget, () => this.sendLiveMsg(topic, [action]));
+      }
     });
-    connect();
-  });
-})();
+
+    document.addEventListener("submit", (e: SubmitEvent) => {
+      const form = (e.target as Element).closest("[data-lv-submit]") as HTMLFormElement | null;
+      if (!form) return;
+      e.preventDefault();
+      const action = form.getAttribute("data-lv-submit");
+      const topic = this.findLiveView(form);
+      if (!topic || !action) return;
+
+      const formData = new FormData(form);
+      const data: Record<string, unknown> = {};
+      formData.forEach((value, key) => { data[key] = value; });
+
+      this.maybeSend(form, () => this.sendLiveMsg(topic, [action, data]));
+
+      form.querySelectorAll('input:not([type="hidden"]):not([type="submit"])').forEach((input) => {
+        (input as HTMLInputElement).value = "";
+      });
+    });
+
+    document.addEventListener("input", (e: Event) => {
+      const target = (e.target as Element).closest("[data-lv-change]");
+      if (!target) return;
+      const action = target.getAttribute("data-lv-change");
+      const topic = this.findLiveView(target);
+      if (topic && action) {
+        this.maybeSend(e.target as Element, () => {
+          this.sendLiveMsg(topic, [action, (e.target as HTMLInputElement).value]);
+        });
+      }
+    });
+
+    // Browser back/forward
+    window.addEventListener("popstate", () => {
+      if (this.liveWs?.readyState === WebSocket.OPEN) {
+        this.liveViews.forEach((_lv, topic) => {
+          this.liveWs!.send(JSON.stringify({ type: "leave", topic }));
+        });
+        this.liveWs.send(JSON.stringify({ type: "navigate", url: location.pathname + location.search }));
+      } else {
+        window.location.reload();
+      }
+    });
+  }
+
+  // ── Channel API ──────────────────────────────────────────────────
+
+  channel(topic: string): WellChannel {
+    if (!this.channelWs || this.channelWs.readyState !== WebSocket.OPEN) {
+      this.connectChannel();
+    }
+    const ch = new ChannelInstance(topic, this);
+    this.channels.set(topic, ch);
+    if (this.channelConnected) ch._join();
+    return ch;
+  }
+
+  /** @internal */
+  _sendChannel(data: unknown) {
+    if (this.channelWs?.readyState === WebSocket.OPEN) {
+      this.channelWs.send(JSON.stringify(data));
+    }
+  }
+
+  /** @internal */
+  _removeChannel(topic: string) {
+    this.channels.delete(topic);
+  }
+
+  private connectChannel() {
+    if (this.channelWs && this.channelWs.readyState <= WebSocket.OPEN) return;
+
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const url = proto + "//" + location.host + this.wsPath;
+    this.channelWs = new WebSocket(url);
+
+    this.channelWs.onopen = () => {
+      this.channelReconnectDelay = 500;
+      this.channelConnected = true;
+      this.channels.forEach((ch) => ch._join());
+    };
+
+    this.channelWs.onmessage = (event: MessageEvent) => {
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(event.data as string); } catch { return; }
+
+      const ch = msg.channel as string;
+      const type = msg.type as string;
+      const channel = this.channels.get(ch);
+
+      if (type === "event" && channel) {
+        const eventName = (msg.event as string) ?? "message";
+        channel._dispatch(eventName, msg.payload);
+      }
+    };
+
+    this.channelWs.onclose = () => {
+      this.channelConnected = false;
+      if (this.channels.size > 0) {
+        setTimeout(() => {
+          this.channelReconnectDelay = Math.min(this.channelReconnectDelay * 2, this.maxReconnectDelay);
+          this.connectChannel();
+        }, this.channelReconnectDelay);
+      }
+    };
+
+    this.channelWs.onerror = () => this.channelWs?.close();
+  }
+
+  // ── Connect (entry point) ────────────────────────────────────────
+
+  connect() {
+    this.setupEventDelegation();
+
+    // Built-in FileUpload hook
+    const self = this;
+    Well.hooks.FileUpload = {
+      mounted(this: HookInstance) {
+        const input = this.el.querySelector('input[type="file"]') ?? this.el;
+        if ((input as HTMLElement).tagName !== "INPUT") return;
+        const hookTopic = this._topic;
+        input.addEventListener("change", (e: Event) => {
+          const files = (e.target as HTMLInputElement).files;
+          if (!files || !hookTopic) return;
+          for (let i = 0; i < files.length; i++) {
+            self.uploadFile(hookTopic, files[i]);
+          }
+        });
+      },
+    };
+
+    // Discover LiveViews and connect
+    document.addEventListener("DOMContentLoaded", () => {
+      const elements = document.querySelectorAll("live-view");
+      if (elements.length === 0) return;
+      elements.forEach((el) => {
+        const endpoint = el.getAttribute("data-liveview") ?? "";
+        const topic = el.getAttribute("data-topic") ?? endpoint;
+        let props: Record<string, unknown> = {};
+        try { props = JSON.parse(el.getAttribute("data-props") ?? "{}"); } catch { /* ignore */ }
+        this.liveViews.set(topic, { el, endpoint, props });
+      });
+      this.connectLive();
+    });
+  }
+}
+
+// ── Channel instance ─────────────────────────────────────────────
+
+class ChannelInstance implements WellChannel {
+  private listeners = new Map<string, ((payload: unknown) => void)[]>();
+  private joined = false;
+
+  constructor(
+    private topic: string,
+    private well: Well,
+  ) {}
+
+  on(event: string, cb: (payload: unknown) => void): WellChannel {
+    const cbs = this.listeners.get(event) ?? [];
+    cbs.push(cb);
+    this.listeners.set(event, cbs);
+    return this;
+  }
+
+  push(event: string, payload?: unknown) {
+    this.well._sendChannel({ type: "push", channel: this.topic, event, payload: payload ?? null });
+  }
+
+  leave() {
+    this.well._sendChannel({ type: "leave", channel: this.topic });
+    this.well._removeChannel(this.topic);
+    this.joined = false;
+  }
+
+  /** @internal */
+  _join() {
+    if (this.joined) return;
+    this.joined = true;
+    this.well._sendChannel({ type: "join", channel: this.topic });
+  }
+
+  /** @internal */
+  _dispatch(event: string, payload: unknown) {
+    const cbs = this.listeners.get(event);
+    if (cbs) cbs.forEach((cb) => cb(payload));
+    // Also dispatch to "*" wildcard listeners
+    const wildcardCbs = this.listeners.get("*");
+    if (wildcardCbs) wildcardCbs.forEach((cb) => cb(payload));
+  }
+}
+
+// ── Auto-initialize ────────────────────────────────────────────────
+// For script tag usage: automatically connect LiveViews
+
+const well = new Well();
+well.connect();
+
+// Expose globally for hooks and channels
+(window as unknown as Record<string, unknown>).Well = Well;
+(window as unknown as Record<string, unknown>).well = well;
 |}
 
 let notes_css =
@@ -1472,8 +1689,14 @@ let contract_dune_file =
 |}
 
 let static_dune =
-  {|; To rebuild after editing TypeScript: rm tasks.js && dune build
+  {|; To rebuild after editing TypeScript: rm *.js && dune build
 ; Requires bun — install from https://bun.sh
+(rule
+ (targets well.js)
+ (deps (file well.ts))
+ (mode fallback)
+ (action (run bun build well.ts --outdir . --minify)))
+
 (rule
  (targets tasks.js)
  (deps
@@ -2131,7 +2354,7 @@ let project_files name =
     { path = "static/ts/tasks.ts"; content = tasks_ts };
     { path = "static/tasks.js"; content = tasks_js };
     { path = "static/app.css"; content = static_app_css ^ notes_css ^ counter_css ^ auth_css ^ tasks_css ^ upload_css };
-    { path = "static/well-live.js"; content = static_well_live_js };
+    { path = "static/well.ts"; content = static_well_ts };
     { path = "tsconfig.json"; content = tsconfig_json };
     { path = "data/.gitkeep"; content = "" };
     { path = "data/uploads/.gitkeep"; content = "" };

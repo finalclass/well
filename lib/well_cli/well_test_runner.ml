@@ -25,22 +25,27 @@ let get_test_executable test_file =
   let without_ext = Filename.chop_extension test_file in
   "_build/default/" ^ without_ext ^ ".exe"
 
-let run_test_file ~ci test_file =
+let run_test_file ~ci ~update_snapshots ~coverage:_ test_file =
   let exe = get_test_executable test_file in
   if not (Sys.file_exists exe) then begin
     Printf.eprintf "\027[33m  ○ %s (no executable — add (test ...) to dune)\027[0m\n" test_file;
     (test_file, 0)
   end else begin
-    let cmd = if ci then exe ^ " --ci" else exe in
+    let env_prefix =
+      if update_snapshots then "WELL_UPDATE_SNAPSHOTS=1 "
+      else ""
+    in
+    let ci_flag = if ci then " --ci" else "" in
+    let cmd = Printf.sprintf "%s%s%s" env_prefix exe ci_flag in
     let code = Sys.command cmd in
     (test_file, code)
   end
 
-let run_parallel ~ci test_files =
+let run_parallel ~ci ~update_snapshots ~coverage test_files =
   let n = List.length test_files in
   if n = 0 then 0
   else if n = 1 then begin
-    let (_file, code) = run_test_file ~ci (List.hd test_files) in
+    let (_file, code) = run_test_file ~ci ~update_snapshots ~coverage (List.hd test_files) in
     if code <> 0 then 1 else 0
   end else begin
     let pipes = Array.init n (fun _ -> Unix.pipe ()) in
@@ -48,7 +53,7 @@ let run_parallel ~ci test_files =
       match Unix.fork () with
       | 0 ->
           Unix.close (fst pipes.(i));
-          let code = snd (run_test_file ~ci test_file) in
+          let code = snd (run_test_file ~ci ~update_snapshots ~coverage test_file) in
           let oc = Unix.out_channel_of_descr (snd pipes.(i)) in
           Printf.fprintf oc "%s\n%d\n" test_file code;
           close_out oc;

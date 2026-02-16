@@ -23,4 +23,5 @@
   base64
   ppxlib
   otoml
+  bisect_ppx
   camlzip))

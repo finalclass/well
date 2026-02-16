@@ -4,7 +4,7 @@ RELEASE_DIR := _release
 
 INSTALL_DIR := $(HOME)/.local/bin
 
-.PHONY: build check test clean lock dev release install
+.PHONY: build check test clean lock dev release install coverage
 
 build:
 	$(DUNE) build
@@ -53,3 +53,11 @@ release: build
 		$(RELEASE_DIR)/bin/well
 	@echo "==> Release ready: $(RELEASE_DIR)/"
 	@echo "    Run with: cd $(RELEASE_DIR) && ./bin/well"
+
+coverage:
+	$(DUNE) build --instrument-with bisect_ppx
+	$(DUNE) exec --instrument-with bisect_ppx test/ppx_test/ppx_test.exe
+	$(DUNE) exec -- bisect-ppx-report html -o _coverage/
+	$(DUNE) exec -- bisect-ppx-report summary
+	@echo "Coverage report: _coverage/index.html"
+	@rm -f *.coverage
