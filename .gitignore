@@ -6,3 +6,6 @@ _docs/
 vendor/
 *.install
 .merlin
+lib/well_cap/cap_css.ml
+lib/well_cap/cap_js.ml
+lib/well_cap/well_embed.js

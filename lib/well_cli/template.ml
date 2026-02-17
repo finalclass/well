@@ -83,19 +83,22 @@ The dev server runs at **http://localhost:4000**.
 ## Project structure
 
 ```
-bin/main.ml                  # entry point
-lib/%s/                      # app module (name, version)
-lib/%s_web/                  # routes, pages, LiveViews
-  home_page.mlx              # welcome page
-  counter_live.mlx           # LiveView example (counter)
-  activity_log_live.mlx      # LiveView communication example
-  dashboard_page.mlx         # Multi-LiveView dashboard
-  notes.ml + notes_page.mlx  # CRUD example with type-safe SQL
-  layout.mlx                 # HTML layout
-lib/contract/                # service contracts (TOML → generated code)
-static/                      # CSS, JS, assets
-test/                        # tests
-data/                        # SQLite databases (gitignored)
+bin/main.ml                        # entry point → App.run ()
+lib/
+  app.ml                           # middleware, services, routes, Well.run ()
+  events.ml                        # typed pub/sub topics
+  note_access/note_access_impl.ml  # NoteAccess service implementation
+  task_access/task_access_impl.ml  # TaskAccess service implementation
+  task_manager/task_manager_impl.ml # TaskManager service implementation
+  client/
+    widgets/layout.mlx             # HTML layout
+    pages/                         # route pages (home, counter, notes, ...)
+    live/                          # LiveView modules (counter, activity log)
+    request_id.ml                  # request ID middleware
+  contract/                        # service contracts (TOML → generated code)
+static/                            # CSS, JS, assets
+test/                              # tests
+data/                              # SQLite databases (gitignored)
 ```
 
 ## File types
@@ -103,7 +106,7 @@ data/                        # SQLite databases (gitignored)
 - `.ml` — OCaml (logic, models, queries)
 - `.mlx` — OCaml + JSX (views, components)
 - `.ts` — TypeScript (compiled to JS via bun, wired through dune)
-|} name name name
+|} name
 
 let gitignore =
   {|_build/
@@ -120,17 +123,30 @@ _coverage/
 _docs/
 |}
 
-let bin_dune name =
-  Printf.sprintf
-    {|(executable
+let bin_dune _name =
+  {|(executable
  (name main)
  (link_flags -linkall)
- (libraries %s_web contract well.core eio_main))
+ (libraries app contract well.core well.cap eio_main))
 |}
-    name
 
 let bin_main _name =
-  {|let () =
+  {|let () = App.run ()
+|}
+
+let lib_app_dune _name =
+  {|(include_subdirs unqualified)
+
+(library
+ (name app)
+ (wrapped false)
+ (libraries contract well.core well.html eio yojson sqlite3)
+ (preprocess (pps ppx_deriving_yojson well.ppx))
+ (instrumentation (backend bisect_ppx)))
+|}
+
+let app_ml _name =
+  {|let run () =
   (* Middleware — executed top-to-bottom on every request *)
   Well.use Well.error_handler;
   Well.use Well.logger;
@@ -141,6 +157,7 @@ let bin_main _name =
   (* Per-route middleware: see notes_page.mlx for require_auth example *)
 
   (* Services — IDesign: Manager → Access → DB *)
+  Well.Service.register Note_access_impl.spec;
   Well.Service.register Task_access_impl.spec;
   Well.Service.register Task_manager_impl.spec;
   Well.Service.expose "TaskManager";
@@ -150,32 +167,6 @@ let bin_main _name =
   Well.static "/static" "static";
   Well.run ()
 |}
-
-let lib_dune name =
-  Printf.sprintf
-    {|(library
- (name %s)
- (libraries well.core eio yojson)
- (instrumentation (backend bisect_ppx)))
-|}
-    name
-
-let lib_main name =
-  Printf.sprintf {|let name = "%s"
-let version = "0.1.0"
-|}
-    name
-
-let lib_web_dune name =
-  Printf.sprintf
-    {|(library
- (name %s_web)
- (wrapped false)
- (libraries %s contract well.core well.html eio yojson sqlite3)
- (preprocess (pps ppx_deriving_yojson well.ppx))
- (instrumentation (backend bisect_ppx)))
-|}
-    name name
 
 let home_page name =
   Printf.sprintf
@@ -197,7 +188,7 @@ in
 <Layout title="%s">
 <div>
     <h1>(txt "Welcome to %s")</h1>
-    <p>(txt "Edit lib/%s_web/home_page.mlx to get started.")</p>
+    <p>(txt "Edit lib/client/pages/home_page.mlx to get started.")</p>
     auth_section
     <p><a href="/counter">(txt "Counter — LiveView demo")</a></p>
     <p><a href="/dashboard">(txt "Dashboard — LiveView communication demo")</a></p>
@@ -208,7 +199,7 @@ in
 </div>
 </Layout>
 |}
-    name name name
+    name name
 
 let layout name =
   Printf.sprintf
@@ -236,28 +227,24 @@ let test_dune name =
   Printf.sprintf
     {|(test
  (name %s_test)
- (libraries %s well.test)
+ (libraries app well.test)
  (instrumentation (backend bisect_ppx)))
 |}
-    name name
+    name
 
 let test_main name =
-  let cap = String.capitalize_ascii name in
   Printf.sprintf
     {|open Well_test
 
 let () =
   describe "%s" (fun () ->
-    it "has a name" (fun () ->
-      expect %s.name |> to_equal_string "%s"
-    );
-    it "has a version" (fun () ->
-      expect (String.length %s.version > 0) |> to_be_true
+    it "app module loads" (fun () ->
+      expect true |> to_be_true
     );
   );
   run ~source_file:__FILE__ () |> exit_with_result
 |}
-    cap cap name cap
+    name
 
 let ocamlformat =
   {|profile = ocamlformat
@@ -328,22 +315,59 @@ let middleware : Well.middleware = fun next req ->
   next (Ctx.set id req)
 |}
 
-let notes _name =
-  {|(* Notes — type-safe SQLite example *)
-(* Queries below are validated at compile time by well.ppx *)
+let note_access_impl _name =
+  {|(* NoteAccess implementation — SQLite backend *)
+(* IDesign: Access service — talks to database *)
 
-type note = {
+type note_row = {
   id : int;
   title : string;
   body : string;
 } [@@deriving table ~name:"notes"]
 
 let%query all_notes = "SELECT id, title, body FROM notes ORDER BY id DESC"
+let%query find_note = "SELECT id, title, body FROM notes WHERE id = :id"
 let%query insert_note = "INSERT INTO notes (title, body) VALUES (:title, :body)"
 let%query delete_note = "DELETE FROM notes WHERE id = :id"
 
 let db = lazy (Well.Db.open_db ())
 let get_db () = Lazy.force db
+
+let note_of_row (r : All_notes.row) : Note_access.Note.t =
+  { id = r.id; title = r.title; body = r.body }
+
+let note_of_find (r : Find_note.row) : Note_access.Note.t =
+  { id = r.id; title = r.title; body = r.body }
+
+module Impl : Note_access.IMPL with type state = unit = struct
+  type state = unit
+  let init () = ()
+
+  let list () _ctx (_req : Note_access.ListReq.t) =
+    let db = get_db () in
+    let rows = All_notes.query db in
+    let notes = List.map note_of_row rows in
+    Note_access.NoteList.make ~notes ()
+
+  let get () _ctx (req : Note_access.IdReq.t) =
+    let db = get_db () in
+    match Find_note.query db ~id:req.id with
+    | r :: _ -> note_of_find r
+    | [] -> failwith "Note not found"
+
+  let create () _ctx (req : Note_access.CreateReq.t) =
+    let db = get_db () in
+    Insert_note.exec db ~title:req.title ~body:req.body;
+    let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
+    Note_access.Note.make ~id ~title:req.title ~body:req.body ()
+
+  let delete () _ctx (req : Note_access.IdReq.t) =
+    let db = get_db () in
+    Delete_note.exec db ~id:req.id;
+    Note_access.Ok.make ~ok:true ()
+end
+
+let spec = Note_access.make_spec (module Impl)
 |}
 
 let notes_page _name =
@@ -353,8 +377,8 @@ let auth = [Well.require_auth ()]
 
 Well.get ~middleware:auth "/notes" @@ fun req ->
 let open Html in
-let db = Notes.get_db () in
-let notes = Notes.All_notes.query db in
+let ctx = Well.rpc_ctx req in
+let result = Note_access.list ~ctx ~limit:0 in
 <Layout title="Notes">
 <div>
   <h1>(txt "Notes")</h1>
@@ -366,7 +390,7 @@ let notes = Notes.All_notes.query db in
     <button type_="submit">(txt "Add note")</button>
   </form>
   <ul class_="notes-list">
-    (notes |> List.map (fun (n : Notes.All_notes.row) ->
+    (result.notes |> List.map (fun (n : Note_access.Note.t) ->
       <li>
         <strong>(txt n.title)</strong>
         (txt (" — " ^ n.body))
@@ -379,11 +403,11 @@ let notes = Notes.All_notes.query db in
 ;;
 
 Well.post ~middleware:auth "/notes" @@ fun req ->
-let db = Notes.get_db () in
+let ctx = Well.rpc_ctx req in
 let title = Well.form req "title" in
 let body = Well.form req "body" in
 if title <> "" then
-  Notes.Insert_note.exec db ~title ~body;
+  ignore (Note_access.create ~ctx ~title ~body);
 Well.redirect "/notes"
 |}
 
@@ -1294,6 +1318,35 @@ let auth_css =
 .login-form button:hover { background: #1d4ed8; }
 |}
 
+let contract_note_access_toml =
+  {|[service.rpc]
+list = "ListReq -> NoteList"
+get = "IdReq -> Note"
+create = "CreateReq -> Note"
+delete = "IdReq -> Ok"
+
+[msg.Note.struct]
+id = "int"
+title = "string"
+body = "string"
+
+[msg.ListReq.struct]
+limit = "int"
+
+[msg.IdReq.struct]
+id = "int"
+
+[msg.CreateReq.struct]
+title = "string"
+body = "string"
+
+[msg.NoteList.struct]
+notes = { type = "list", of = "Note" }
+
+[msg.Ok.struct]
+ok = "bool"
+|}
+
 let contract_task_access_toml =
   {|[service.rpc]
 list = "ListReq -> TaskList"
@@ -1352,6 +1405,213 @@ task = "TaskAccess.Task"
 
 [msg.StatusRes.struct]
 ok = "bool"
+|}
+
+let contract_note_access_ml =
+  {|[@@@warning "-32"]
+
+module Note = struct
+  type t = {
+    id : int;
+    title : string;
+    body : string;
+  }
+
+  let make ~id ~title ~body () =
+    { id; title; body }
+
+  let to_wire (v : t) : Yojson.Safe.t =
+    `List [
+      `Int v.id;
+      `String v.title;
+      `String v.body;
+    ]
+
+  let of_wire (wire : Yojson.Safe.t) : t =
+    match wire with
+    | `List arr ->
+      let a = Array.of_list arr in
+      let id = (match a.(0) with `Int i -> i | _ -> 0) in
+      let title = (match a.(1) with `String s -> s | _ -> "") in
+      let body = (match a.(2) with `String s -> s | _ -> "") in
+      { id; title; body }
+    | _ -> failwith "Note.of_wire: expected JSON array"
+end
+
+module ListReq = struct
+  type t = {
+    limit : int;
+  }
+
+  let make ~limit () =
+    { limit }
+
+  let to_wire (v : t) : Yojson.Safe.t =
+    `List [
+      `Int v.limit;
+    ]
+
+  let of_wire (wire : Yojson.Safe.t) : t =
+    match wire with
+    | `List arr ->
+      let a = Array.of_list arr in
+      let limit = (match a.(0) with `Int i -> i | _ -> 0) in
+      { limit }
+    | _ -> failwith "ListReq.of_wire: expected JSON array"
+end
+
+module IdReq = struct
+  type t = {
+    id : int;
+  }
+
+  let make ~id () =
+    { id }
+
+  let to_wire (v : t) : Yojson.Safe.t =
+    `List [
+      `Int v.id;
+    ]
+
+  let of_wire (wire : Yojson.Safe.t) : t =
+    match wire with
+    | `List arr ->
+      let a = Array.of_list arr in
+      let id = (match a.(0) with `Int i -> i | _ -> 0) in
+      { id }
+    | _ -> failwith "IdReq.of_wire: expected JSON array"
+end
+
+module CreateReq = struct
+  type t = {
+    title : string;
+    body : string;
+  }
+
+  let make ~title ~body () =
+    { title; body }
+
+  let to_wire (v : t) : Yojson.Safe.t =
+    `List [
+      `String v.title;
+      `String v.body;
+    ]
+
+  let of_wire (wire : Yojson.Safe.t) : t =
+    match wire with
+    | `List arr ->
+      let a = Array.of_list arr in
+      let title = (match a.(0) with `String s -> s | _ -> "") in
+      let body = (match a.(1) with `String s -> s | _ -> "") in
+      { title; body }
+    | _ -> failwith "CreateReq.of_wire: expected JSON array"
+end
+
+module Ok = struct
+  type t = {
+    ok : bool;
+  }
+
+  let make ~ok () =
+    { ok }
+
+  let to_wire (v : t) : Yojson.Safe.t =
+    `List [
+      `Bool v.ok;
+    ]
+
+  let of_wire (wire : Yojson.Safe.t) : t =
+    match wire with
+    | `List arr ->
+      let a = Array.of_list arr in
+      let ok = (match a.(0) with `Bool b -> b | _ -> false) in
+      { ok }
+    | _ -> failwith "Ok.of_wire: expected JSON array"
+end
+
+module NoteList = struct
+  type t = {
+    notes : Note.t list;
+  }
+
+  let make ~notes () =
+    { notes }
+
+  let to_wire (v : t) : Yojson.Safe.t =
+    `List [
+      `List (List.map (fun item -> Note.to_wire item) v.notes);
+    ]
+
+  let of_wire (wire : Yojson.Safe.t) : t =
+    match wire with
+    | `List arr ->
+      let a = Array.of_list arr in
+      let notes = (match a.(0) with `List items -> List.map (fun item -> Note.of_wire item) items | _ -> []) in
+      { notes }
+    | _ -> failwith "NoteList.of_wire: expected JSON array"
+end
+
+let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None
+
+module type IMPL = sig
+  type state
+  val init : unit -> state
+  val list : state -> Well.rpc_ctx -> ListReq.t -> NoteList.t
+  val get : state -> Well.rpc_ctx -> IdReq.t -> Note.t
+  val create : state -> Well.rpc_ctx -> CreateReq.t -> Note.t
+  val delete : state -> Well.rpc_ctx -> IdReq.t -> Ok.t
+end
+
+let make_spec (type s) (module I : IMPL with type state = s) : Well.Service.spec =
+  let state = ref (I.init ()) in
+  { name = "NoteAccess"
+  ; rpcs = []
+  ; handler = (fun rpc_name ctx_json payload ->
+      let ctx = Well.rpc_ctx_of_wire ctx_json in
+      match rpc_name with
+      | "list" ->
+          NoteList.to_wire (I.list !state ctx (ListReq.of_wire payload))
+      | "get" ->
+          Note.to_wire (I.get !state ctx (IdReq.of_wire payload))
+      | "create" ->
+          Note.to_wire (I.create !state ctx (CreateReq.of_wire payload))
+      | "delete" ->
+          Ok.to_wire (I.delete !state ctx (IdReq.of_wire payload))
+      | _ -> failwith ("Unknown RPC: " ^ rpc_name))
+  ; set_ref = (fun f -> _service_ref := Some f)
+  }
+
+let list ~ctx ~limit =
+  let ctx_wire = Well.rpc_ctx_to_wire ctx in
+  let wire = ListReq.to_wire (ListReq.make ~limit ()) in
+  NoteList.of_wire
+    ((match !_service_ref with
+      | Some f -> f "list" ctx_wire wire
+      | None -> failwith "NoteAccess: service not registered"))
+
+let get ~ctx ~id =
+  let ctx_wire = Well.rpc_ctx_to_wire ctx in
+  let wire = IdReq.to_wire (IdReq.make ~id ()) in
+  Note.of_wire
+    ((match !_service_ref with
+      | Some f -> f "get" ctx_wire wire
+      | None -> failwith "NoteAccess: service not registered"))
+
+let create ~ctx ~title ~body =
+  let ctx_wire = Well.rpc_ctx_to_wire ctx in
+  let wire = CreateReq.to_wire (CreateReq.make ~title ~body ()) in
+  Note.of_wire
+    ((match !_service_ref with
+      | Some f -> f "create" ctx_wire wire
+      | None -> failwith "NoteAccess: service not registered"))
+
+let delete ~ctx ~id =
+  let ctx_wire = Well.rpc_ctx_to_wire ctx in
+  let wire = IdReq.to_wire (IdReq.make ~id ()) in
+  Ok.of_wire
+    ((match !_service_ref with
+      | Some f -> f "delete" ctx_wire wire
+      | None -> failwith "NoteAccess: service not registered"))
 |}
 
 let contract_task_access_ml =
@@ -1795,6 +2055,11 @@ let delete ~ctx ~id =
       | None -> failwith "TaskManager: service not registered"))
 |}
 
+let contract_boundary_dune =
+  {|(include_subdirs no)
+; Contract library lives in build/ocaml/
+|}
+
 let contract_dune_file =
   {|(library
  (name contract)
@@ -1802,8 +2067,9 @@ let contract_dune_file =
  (libraries well.core yojson))
 
 (rule
- (targets task_access.ml task_manager.ml)
+ (targets note_access.ml task_access.ml task_manager.ml)
  (deps
+  (file ../../NoteAccess.toml)
   (file ../../TaskAccess.toml)
   (file ../../TaskManager.toml))
  (mode promote)
@@ -2151,6 +2417,95 @@ let contract_ts_rpc =
 }
 |}
 
+let contract_ts_note_access =
+  {|import { rpc } from './rpc';
+
+export interface Note {
+  id: number;
+  title: string;
+  body: string;
+}
+
+export function encodeNote(v: Note): unknown[] {
+  return [v.id, v.title, v.body];
+}
+
+export function decodeNote(wire: unknown[]): Note {
+  return {
+    id: wire[0] as number,
+    title: wire[1] as string,
+    body: wire[2] as string,
+  };
+}
+
+export interface ListReq {
+  limit: number;
+}
+
+export function encodeListReq(v: ListReq): unknown[] {
+  return [v.limit];
+}
+
+export interface IdReq {
+  id: number;
+}
+
+export function encodeIdReq(v: IdReq): unknown[] {
+  return [v.id];
+}
+
+export interface CreateReq {
+  title: string;
+  body: string;
+}
+
+export function encodeCreateReq(v: CreateReq): unknown[] {
+  return [v.title, v.body];
+}
+
+export interface NoteList {
+  notes: Note[];
+}
+
+export function decodeNoteList(wire: unknown[]): NoteList {
+  return {
+    notes: (wire[0] as unknown[]).map(v => decodeNote(v as unknown[])),
+  };
+}
+
+export interface Ok {
+  ok: boolean;
+}
+
+export function decodeOk(wire: unknown[]): Ok {
+  return {
+    ok: wire[0] as boolean,
+  };
+}
+
+export interface Impl {
+  list(req: ListReq): Promise<NoteList>;
+  get(req: IdReq): Promise<Note>;
+  create(req: CreateReq): Promise<Note>;
+  delete(req: IdReq): Promise<Ok>;
+}
+
+export const Proxy: Impl = {
+  async list(req) {
+    return decodeNoteList(await rpc("NoteAccess", "list", encodeListReq(req)) as unknown[]);
+  },
+  async get(req) {
+    return decodeNote(await rpc("NoteAccess", "get", encodeIdReq(req)) as unknown[]);
+  },
+  async create(req) {
+    return decodeNote(await rpc("NoteAccess", "create", encodeCreateReq(req)) as unknown[]);
+  },
+  async delete(req) {
+    return decodeOk(await rpc("NoteAccess", "delete", encodeIdReq(req)) as unknown[]);
+  },
+};
+|}
+
 let contract_ts_task_access =
   {|import { rpc } from './rpc';
 
@@ -2444,19 +2799,24 @@ Rules:
 
 ```
 myapp/
-├── bin/main.ml              # Entry point: middleware + Well.run ()
-├── lib/myapp/myapp.ml       # App name + version
-├── lib/myapp_web/           # (wrapped false) — all modules top-level
-│   ├── layout.mlx           # Layout component
-│   ├── home_page.mlx        # Routes: Well.get "/" ...
-│   ├── counter_live.mlx     # LiveView module
-│   └── notes.ml             # Models + queries
-├── lib/contract/            # Service contracts (TOML)
-├── static/                  # CSS, JS, assets
-└── test/myapp_test.ml       # Tests
+├── bin/main.ml                         # Entry point → App.run ()
+├── lib/
+│   ├── app.ml                          # Middleware, services, routes, Well.run ()
+│   ├── events.ml                       # Typed pub/sub topics
+│   ├── note_access/note_access_impl.ml # NoteAccess service implementation
+│   ├── task_access/task_access_impl.ml # TaskAccess service implementation
+│   ├── task_manager/task_manager_impl.ml
+│   ├── client/
+│   │   ├── widgets/layout.mlx          # Layout component
+│   │   ├── pages/home_page.mlx         # Routes: Well.get "/" ...
+│   │   ├── live/counter_live.mlx       # LiveView module
+│   │   └── request_id.ml              # Request ID middleware
+│   └── contract/                       # Service contracts (TOML)
+├── static/                             # CSS, JS, assets
+└── test/myapp_test.ml                  # Tests
 ```
 
-The web library is `(wrapped false)` — every file is a top-level module (e.g. `Layout`, `Counter_live`).
+The app library uses `(include_subdirs unqualified)` and `(wrapped false)` — every file is a top-level module (e.g. `Layout`, `Counter_live`).
 
 ## Routes
 
@@ -2547,7 +2907,7 @@ let view model =
   </div>
 ```
 
-Register in `bin/main.ml`:
+Register in `lib/app.ml`:
 ```ocaml
 Well.live "/counter" (module Counter_live);
 ```
@@ -2674,7 +3034,7 @@ end
 let spec = Task_access.make_spec (module Impl)
 ```
 
-Register in `bin/main.ml`:
+Register in `lib/app.ml`:
 ```ocaml
 Well.Service.register Task_access_impl.spec;
 Well.Service.expose "TaskAccess";  (* creates HTTP routes *)
@@ -2683,7 +3043,7 @@ Well.Service.expose "TaskAccess";  (* creates HTTP routes *)
 ## Middleware
 
 ```ocaml
-(* bin/main.ml *)
+(* lib/app.ml *)
 Well.use Well.error_handler;
 Well.use Well.logger;
 Well.use Well.csrf;
@@ -2817,10 +3177,10 @@ well repl               # Interactive service shell
 
 When adding a new feature, you typically need:
 
-1. **Static page**: Create `feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
-2. **With data**: Create `feature.ml` with model type + `[@@deriving table]` + `let%query` + `let db = lazy (Well.Db.open_db ())`
-3. **LiveView**: Create `feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + `init`/`update`/`view`, register with `Well.live "/path" (module Feature_live)` in `bin/main.ml`
-4. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module, register with `Well.Service.register` + `Well.Service.expose`
+1. **Static page**: Create `lib/client/pages/feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
+2. **With data**: Create `lib/feature_access/feature_access.ml` with model type + `[@@deriving table]` + `let%query` + `let db = lazy (Well.Db.open_db ())`
+3. **LiveView**: Create `lib/client/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + `init`/`update`/`view`, register with `Well.live "/path" (module Feature_live)` in `lib/app.ml`
+4. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module in `lib/feature_access/`, register in `lib/app.ml`
 5. **Tests**: Add to `test/` with `Well.Db.with_test_db` or `Well.with_test_server`
 |well_skill}
 
@@ -2837,80 +3197,51 @@ let project_files name =
     { path = "Makefile"; content = makefile };
     { path = ".gitignore"; content = gitignore };
     { path = ".ocamlformat"; content = ocamlformat };
+    (* bin/ *)
     { path = "bin/dune"; content = bin_dune name };
     { path = "bin/main.ml"; content = bin_main name };
-    { path = Printf.sprintf "lib/%s/dune" name; content = lib_dune name };
-    { path = Printf.sprintf "lib/%s/%s.ml" name name; content = lib_main name };
-    { path = Printf.sprintf "lib/%s_web/dune" name; content = lib_web_dune name };
-    {
-      path = Printf.sprintf "lib/%s_web/home_page.mlx" name;
-      content = home_page name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/layout.mlx" name;
-      content = layout name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/request_id.ml" name;
-      content = request_id name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/notes.ml" name;
-      content = notes name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/notes_page.mlx" name;
-      content = notes_page name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/login_page.mlx" name;
-      content = login_page name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/events.ml" name;
-      content = events name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/counter_live.mlx" name;
-      content = counter_live name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/counter_page.mlx" name;
-      content = counter_page name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/activity_log_live.mlx" name;
-      content = activity_log_live name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/dashboard_page.mlx" name;
-      content = dashboard_page name;
-    };
-    { path = "test/dune"; content = test_dune name };
-    {
-      path = Printf.sprintf "test/%s_test.ml" name;
-      content = test_main name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/task_access_impl.ml" name;
-      content = task_access_impl name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/task_manager_impl.ml" name;
-      content = task_manager_impl name;
-    };
-    {
-      path = Printf.sprintf "lib/%s_web/tasks_page.mlx" name;
-      content = tasks_page name;
-    };
+    (* lib/ — app library with include_subdirs *)
+    { path = "lib/dune"; content = lib_app_dune name };
+    { path = "lib/app.ml"; content = app_ml name };
+    { path = "lib/events.ml"; content = events name };
+    (* lib/note_access/ *)
+    { path = "lib/note_access/note_access_impl.ml"; content = note_access_impl name };
+    (* lib/task_access/ *)
+    { path = "lib/task_access/task_access_impl.ml"; content = task_access_impl name };
+    (* lib/task_manager/ *)
+    { path = "lib/task_manager/task_manager_impl.ml"; content = task_manager_impl name };
+    (* lib/client/widgets/ *)
+    { path = "lib/client/widgets/layout.mlx"; content = layout name };
+    (* lib/client/pages/ *)
+    { path = "lib/client/pages/home_page.mlx"; content = home_page name };
+    { path = "lib/client/pages/counter_page.mlx"; content = counter_page name };
+    { path = "lib/client/pages/dashboard_page.mlx"; content = dashboard_page name };
+    { path = "lib/client/pages/notes_page.mlx"; content = notes_page name };
+    { path = "lib/client/pages/tasks_page.mlx"; content = tasks_page name };
+    { path = "lib/client/pages/upload_page.mlx"; content = upload_page name };
+    { path = "lib/client/pages/login_page.mlx"; content = login_page name };
+    (* lib/client/live/ *)
+    { path = "lib/client/live/counter_live.mlx"; content = counter_live name };
+    { path = "lib/client/live/activity_log_live.mlx"; content = activity_log_live name };
+    (* lib/client/ *)
+    { path = "lib/client/request_id.ml"; content = request_id name };
+    (* lib/contract/ — separate dune library *)
+    { path = "lib/contract/dune"; content = contract_boundary_dune };
+    { path = "lib/contract/build/ocaml/dune"; content = contract_dune_file };
+    { path = "lib/contract/NoteAccess.toml"; content = contract_note_access_toml };
     { path = "lib/contract/TaskAccess.toml"; content = contract_task_access_toml };
     { path = "lib/contract/TaskManager.toml"; content = contract_task_manager_toml };
+    { path = "lib/contract/build/ocaml/note_access.ml"; content = contract_note_access_ml };
     { path = "lib/contract/build/ocaml/task_access.ml"; content = contract_task_access_ml };
     { path = "lib/contract/build/ocaml/task_manager.ml"; content = contract_task_manager_ml };
-    { path = "lib/contract/build/ocaml/dune"; content = contract_dune_file };
     { path = "lib/contract/build/ts/rpc.ts"; content = contract_ts_rpc };
+    { path = "lib/contract/build/ts/NoteAccess.ts"; content = contract_ts_note_access };
     { path = "lib/contract/build/ts/TaskAccess.ts"; content = contract_ts_task_access };
     { path = "lib/contract/build/ts/TaskManager.ts"; content = contract_ts_task_manager };
+    (* test/ *)
+    { path = "test/dune"; content = test_dune name };
+    { path = Printf.sprintf "test/%s_test.ml" name; content = test_main name };
+    (* static/ *)
     { path = "static/dune"; content = static_dune };
     { path = "static/ts/tasks.ts"; content = tasks_ts };
     { path = "static/tasks.js"; content = tasks_js };
@@ -2919,9 +3250,5 @@ let project_files name =
     { path = "tsconfig.json"; content = tsconfig_json };
     { path = "data/.gitkeep"; content = "" };
     { path = "data/uploads/.gitkeep"; content = "" };
-    {
-      path = Printf.sprintf "lib/%s_web/upload_page.mlx" name;
-      content = upload_page name;
-    };
     { path = ".claude/skills/well/SKILL.md"; content = well_skill };
   ]

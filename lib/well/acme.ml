@@ -117,7 +117,7 @@ let load_or_create_account_key () =
     let priv = Mirage_crypto_pk.Rsa.generate ~bits:2048 () in
     let x509_key : X509.Private_key.t = `RSA priv in
     write_pem account_key_file (X509.Private_key.encode_pem x509_key);
-    Printf.printf "[well] ACME: generated new account key\n%!";
+    Log.log "ACME: generated new account key";
     priv
   end
 
@@ -270,7 +270,7 @@ let respond_to_challenge ~priv ~kid ~pub challenge =
   let resp = acme_post ~priv ~key_id:(Some kid)
     ~url:challenge.challenge_url (Json (`Assoc [])) in
   if resp.http_status <> 200 then
-    Printf.eprintf "[well] ACME: challenge response status %d\n%!"
+    Log.log ~level:"warn" "ACME: challenge response status %d"
       resp.http_status
 
 (* ── Polling ────────────────────────────────────────────────────── *)
@@ -353,7 +353,7 @@ let cert_days_remaining pem_data =
 (* ── Full provision flow ────────────────────────────────────────── *)
 
 let provision ~staging domain =
-  Printf.printf "[well] ACME: provisioning certificate for %s%s\n%!"
+  Log.log "ACME: provisioning certificate for %s%s"
     domain (if staging then " (staging)" else "");
   let priv = load_or_create_account_key () in
   let pub = Mirage_crypto_pk.Rsa.pub_of_priv priv in
@@ -362,22 +362,22 @@ let provision ~staging domain =
   ignore (fetch_nonce dir);
   (* Register/find account *)
   let kid = create_account ~priv dir in
-  Printf.printf "[well] ACME: account ready\n%!";
+  Log.log "ACME: account ready";
   (* Create order *)
   let order = create_order ~priv ~kid dir domain in
-  Printf.printf "[well] ACME: order created\n%!";
+  Log.log "ACME: order created";
   (* Process each authorization *)
   List.iter (fun authz_url ->
     let challenge = get_http01_challenge ~priv ~kid authz_url in
-    Printf.printf "[well] ACME: challenge token: %s...\n%!"
+    Log.log "ACME: challenge token: %s..."
       (String.sub challenge.token 0 (min 16 (String.length challenge.token)));
     respond_to_challenge ~priv ~kid ~pub challenge
   ) order.authorizations;
   (* Poll until ready *)
-  Printf.printf "[well] ACME: waiting for validation...\n%!";
+  Log.log "ACME: waiting for validation...";
   ignore (poll_until_ready ~priv ~kid order.order_url);
   (* Finalize with CSR *)
-  Printf.printf "[well] ACME: finalizing order...\n%!";
+  Log.log "ACME: finalizing order...";
   let order_json, domain_key = finalize_order ~priv ~kid
     ~finalize_url:order.finalize_url domain in
   (* Get certificate URL — may need polling *)
@@ -394,7 +394,7 @@ let provision ~staging domain =
   (* Save to disk *)
   write_pem (cert_file domain) cert_pem;
   write_pem (key_file domain) (X509.Private_key.encode_pem domain_key);
-  Printf.printf "[well] ACME: certificate saved to %s\n%!" (cert_file domain);
+  Log.log "ACME: certificate saved to %s" (cert_file domain);
   Hashtbl.clear _challenges;
   (cert_pem, domain_key)
 
@@ -406,16 +406,16 @@ let ensure_certificate ~staging domain =
   if Sys.file_exists cp && Sys.file_exists kp then begin
     let cert_pem = read_pem cp in
     let days = cert_days_remaining cert_pem in
-    Printf.printf "[well] ACME: existing cert — %d days remaining\n%!" days;
+    Log.log "ACME: existing cert — %d days remaining" days;
     if days > 30 then begin
       let key_pem = read_pem kp in
       match X509.Private_key.decode_pem key_pem with
       | Ok domain_key -> (cert_pem, domain_key)
       | Error (`Msg m) ->
-          Printf.eprintf "[well] ACME: bad domain key (%s), re-provisioning\n%!" m;
+          Log.log ~level:"warn" "ACME: bad domain key (%s), re-provisioning" m;
           provision ~staging domain
     end else begin
-      Printf.printf "[well] ACME: cert expiring soon, renewing\n%!";
+      Log.log "ACME: cert expiring soon, renewing";
       provision ~staging domain
     end
   end else
@@ -443,17 +443,17 @@ let renewal_fiber ~staging domain =
         if Sys.file_exists cp then begin
           let cert_pem = read_pem cp in
           let days = cert_days_remaining cert_pem in
-          Printf.printf "[well] ACME: renewal check — %d days remaining\n%!" days;
+          Log.log "ACME: renewal check — %d days remaining" days;
           if days <= 30 then begin
-            Printf.printf "[well] ACME: renewing certificate\n%!";
+            Log.log "ACME: renewing certificate";
             let cert_pem, domain_key = provision ~staging domain in
             let cfg = build_tls_config cert_pem domain_key in
             _tls_config := Some cfg;
-            Printf.printf "[well] ACME: TLS config hot-reloaded\n%!"
+            Log.log "ACME: TLS config hot-reloaded"
           end
         end
       with exn ->
-        Printf.eprintf "[well] ACME: renewal error: %s\n%!"
+        Log.log ~level:"error" "ACME: renewal error: %s"
           (Printexc.to_string exn))
     done
   with _ -> ()

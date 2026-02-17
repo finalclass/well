@@ -323,15 +323,15 @@ let parse_segments parts =
       else Static part)
     parts
 
-(* ── Console routes (bypass global middleware) ────────────────────── *)
+(* ── Cap routes (bypass global middleware) ─────────────────────────── *)
 
-let console_routes : route list ref = ref []
+let cap_routes : route list ref = ref []
 
-let register_console meth path handler =
+let register_cap meth path handler =
   let segments = parse_segments (split_path path) in
-  console_routes := { meth; segments; handler } :: !console_routes
+  cap_routes := { meth; segments; handler } :: !cap_routes
 
-let match_console_route meth path =
+let match_cap_route meth path =
   let parts = split_path path in
   let try_route r =
     if r.meth <> meth then None
@@ -347,7 +347,7 @@ let match_console_route meth path =
       in
       go parts r.segments []
   in
-  let candidates = List.rev !console_routes in
+  let candidates = List.rev !cap_routes in
   let rec find = function
     | [] -> None
     | r :: rest -> (
@@ -545,7 +545,7 @@ let rpc_ctx_of_wire (wire : Yojson.Safe.t) : rpc_ctx =
 
 let _request_id_counter = ref 0
 
-let build_rpc_ctx (req : request) : rpc_ctx =
+let rpc_ctx (req : request) : rpc_ctx =
   incr _request_id_counter;
   let request_id =
     Printf.sprintf "%s-%d-%f" req.session_id !_request_id_counter
@@ -1207,12 +1207,11 @@ let logger : middleware = fun next req ->
   let resp = next req in
   let dt = (Unix.gettimeofday () -. t0) *. 1000.0 in
   let st = response_status resp in
-  Printf.printf "[well] %s %s -> %d (%.1fms)\n%!"
-    req.meth req.path st dt;
-  (* Console log hook — push to ring buffer + broadcast *)
-  (match !(Console._console_log_hook) with
+  Log.log "%s %s -> %d (%.1fms)" req.meth req.path st dt;
+  (* Cap log hook — push to ring buffer + broadcast *)
+  (match !(Cap_hook._cap_log_hook) with
    | Some hook ->
-       Console.Log_buffer.push ~meth:req.meth ~path:req.path
+       Cap_hook.Log_buffer.push ~meth:req.meth ~path:req.path
          ~status:st ~duration_ms:dt;
        (try hook req.meth req.path st dt with _ -> ())
    | None -> ());
@@ -1293,7 +1292,7 @@ let error_handler : middleware = fun next req ->
   try next req
   with exn ->
     let bt = Printexc.get_raw_backtrace () in
-    Printf.eprintf "[well] %s %s ERROR: %s\n%s\n%!" req.meth req.path
+    Log.log ~level:"error" "%s %s ERROR: %s\n%s" req.meth req.path
       (Printexc.to_string exn) (Printexc.raw_backtrace_to_string bt);
     match !_custom_error_handler with
     | Some h ->
@@ -1666,11 +1665,11 @@ let handle_connection flow _addr =
                  with
                  | Eio.Cancel.Cancelled _ -> ()
                  | exn ->
-                   Printf.eprintf "[well] ws handler error: %s\n%!"
+                   Log.log ~level:"error" "ws handler error: %s"
                      (Printexc.to_string exn));
                 Websocket.close ws
             | Error msg ->
-                Printf.eprintf "[well] ws handshake error: %s\n%!" msg;
+                Log.log ~level:"error" "ws handshake error: %s" msg;
                 let r = resolve (`Text "Bad Request" |> status 400) in
                 write_response flow r;
                 close_flow ())
@@ -1680,20 +1679,20 @@ let handle_connection flow _addr =
            close_flow ()
      end else begin
        let body = read_body reader hdrs in
-       let is_console_path =
+       let is_cap_path =
          let p = path in
          String.length p >= 7 && String.sub p 0 7 = "/_well/"
          || p = "/_well"
        in
        let base_handler (req : request) =
-         (* Check console routes first (bypass global middleware) *)
-         match (if is_console_path then match_console_route req.meth req.path
+         (* Check cap routes first (bypass global middleware) *)
+         match (if is_cap_path then match_cap_route req.meth req.path
                 else None) with
          | Some (route, params) ->
              (try route.handler { req with params }
               with exn ->
                 let msg = Printexc.to_string exn in
-                Printf.eprintf "[well] console handler error: %s\n%!" msg;
+                Log.log ~level:"error" "cap handler error: %s" msg;
                 `Text ("Internal Server Error: " ^ msg) |> status 500)
          | None ->
          match match_route req.meth req.path with
@@ -1701,7 +1700,7 @@ let handle_connection flow _addr =
              (try route.handler { req with params }
               with exn ->
                 let msg = Printexc.to_string exn in
-                Printf.eprintf "[well] handler error: %s\n%!" msg;
+                Log.log ~level:"error" "handler error: %s" msg;
                 `Text ("Internal Server Error: " ^ msg) |> status 500)
          | None ->
              (match try_serve_static req.meth req.path req.headers with
@@ -1711,8 +1710,8 @@ let handle_connection flow _addr =
               | None -> `Text "Not Found" |> status 404)
        in
        let pipeline =
-         if is_console_path then
-           (* Console routes: session middleware only, skip global middleware *)
+         if is_cap_path then
+           (* Cap routes: session middleware only, skip global middleware *)
            session_middleware base_handler
          else
            session_middleware
@@ -1743,7 +1742,7 @@ let handle_connection flow _addr =
   | End_of_file -> (try close_flow () with _ -> ())
   | Eio.Cancel.Cancelled _ -> (try close_flow () with _ -> ())
   | exn ->
-      Printf.eprintf "[well] connection error: %s\n%!"
+      Log.log ~level:"error" "connection error: %s"
         (Printexc.to_string exn);
       (try close_flow () with _ -> ()))
 
@@ -1754,11 +1753,11 @@ let handle_tls_connection tls_cfg flow addr =
     try Some (Tls_eio.server_of_flow tls_cfg flow)
     with
     | Tls_eio.Tls_alert a ->
-        Printf.eprintf "[well] TLS alert: %s\n%!"
+        Log.log ~level:"warn" "TLS alert: %s"
           (Tls.Packet.alert_type_to_string a);
         None
     | Tls_eio.Tls_failure f ->
-        Printf.eprintf "[well] TLS failure: %s\n%!"
+        Log.log ~level:"error" "TLS failure: %s"
           (Tls.Engine.string_of_failure f);
         None
   in
@@ -1829,7 +1828,7 @@ let handle_http80 ~domain flow _addr =
   | _ -> (try close_flow () with _ -> ()))
 
 let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
-    ?(acme_staging = false) ?(console = false) () =
+    ?(acme_staging = false) ?(disable_cap = false) () =
   Printexc.record_backtrace true;
   let acme_mode = domain <> None in
   (* Validate: ~domain and ~cert/~key are mutually exclusive *)
@@ -1847,7 +1846,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
   let port = if acme_mode && port = 4000 then 443 else port in
   (* Warn if ~domain with non-443 port *)
   if acme_mode && port <> 443 then
-    Printf.eprintf "[well] WARNING: ~domain given but port is %d (not 443) — ACME validation may fail\n%!" port;
+    Log.log ~level:"warn" "~domain given but port is %d (not 443) — ACME validation may fail" port;
   Eio_main.run @@ fun env ->
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
@@ -1906,6 +1905,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     (fun path ->
       try Eio.Path.read_dir Eio.Path.(cwd / path) |> List.sort String.compare
       with Eio.Io _ -> []);
+  Log.init ();
   let start_server () =
     Eio.Switch.run @@ fun sw ->
     let shutdown_p, shutdown_r = Eio.Promise.create () in
@@ -1924,7 +1924,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
                     headers = [("Content-Type", "application/json")];
                     body = `Text result_json }));
     Service._build_rpc_ctx :=
-      (fun req -> rpc_ctx_to_wire (build_rpc_ctx req));
+      (fun req -> rpc_ctx_to_wire (rpc_ctx req));
     Service._cast_sw := Some sw;
     (* Start all registered service actors *)
     Service.start_all ~sw;
@@ -1938,19 +1938,22 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     get "/health" (fun _req ->
       let statuses = Service.health () in
       `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
-    (* Console *)
-    if console then begin
-      Console._register_console_get := (fun path handler ->
-        register_console "GET" path (fun req ->
+    (* Cap *)
+    if not disable_cap then begin
+      Cap_hook._register_cap_get := (fun path handler ->
+        register_cap "GET" path (fun req ->
           match handler req with
-          | Console.CRHtml s -> `Html s
-          | Console.CRRedirect url -> `Redirect url));
-      Console._register_console_post := (fun path handler ->
-        register_console "POST" path (fun req ->
+          | Cap_hook.CRHtml s -> `Html s
+          | Cap_hook.CRRedirect url -> `Redirect url
+          | Cap_hook.CRJs s ->
+              `Text s |> header "content-type" "application/javascript"));
+      Cap_hook._register_cap_post := (fun path handler ->
+        register_cap "POST" path (fun req ->
           match handler req with
-          | Console.CRHtml s -> `Html s
-          | Console.CRRedirect url -> `Redirect url));
-      Console.init ()
+          | Cap_hook.CRHtml s -> `Html s
+          | Cap_hook.CRRedirect url -> `Redirect url
+          | Cap_hook.CRJs _ -> `Text "Method Not Allowed" |> status 405));
+      !Cap_hook._cap_init ()
     end;
     (* ── TLS config: ACME auto-TLS / manual TLS / plain ────────── *)
     let tls_cfg =
@@ -1970,7 +1973,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
               accept_loop ()
             in
             accept_loop ());
-          Printf.printf "[well] HTTP on :80 (ACME challenges + redirect)\n%!";
+          Log.log "HTTP on :80 (ACME challenges + redirect)";
           (* Provision or load certificate *)
           let cert_pem, domain_key =
             Acme.ensure_certificate ~staging:acme_staging dom
@@ -2001,7 +2004,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     in
     let scheme = if tls_cfg <> None then "https" else "http" in
     let host = if acme_mode then "0.0.0.0" else "localhost" in
-    Printf.printf "[well] listening on %s://%s:%d%s\n%!" scheme host port
+    Log.log "listening on %s://%s:%d%s" scheme host port
       (if workers > 0 then Printf.sprintf " (%d workers)" workers else "");
     let handler =
       match domain with
@@ -2029,7 +2032,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
             (fun () ->
               try handler flow addr
               with exn ->
-                Printf.eprintf "[well] worker error: %s\n%!"
+                Log.log ~level:"error" "worker error: %s"
                   (Printexc.to_string exn)));
           accept_loop ()
         in
@@ -2038,7 +2041,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
         let rec accept_loop () =
           Eio.Net.accept_fork socket ~sw
             ~on_error:(fun exn ->
-              Printf.eprintf "[well] accept error: %s\n%!"
+              Log.log ~level:"error" "accept error: %s"
                 (Printexc.to_string exn))
             handler;
           accept_loop ()
@@ -2047,22 +2050,29 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
       end);
     (* Main fiber: await shutdown signal *)
     Eio.Promise.await shutdown_p;
-    Printf.printf "\n[well] shutting down...\n%!";
+    Log.log "shutting down...";
     Eio.Time.sleep clock 0.5;
     Session_store.close ();
     Liveview_store.close ();
     Message_bus.close ();
-    (try Unix.unlink "data/well.sock" with Unix.Unix_error _ -> ());
-    Printf.printf "[well] stopped.\n%!";
+    Log.log "stopped.";
+    Log.close ();
     (* Raise to exit switch — cancels accept loop + all connection fibers *)
     raise Shutdown
   in
   Mirage_crypto_rng_unix.use_default ();
-  (try start_server () with Shutdown -> ())
+  (try start_server () with
+   | Shutdown -> ()
+   | Eio.Exn.Multiple exns ->
+       (* Shutdown + cleanup exceptions from cancelled fibers — ignore *)
+       let dominated_by_shutdown =
+         List.exists (fun (exn, _bt) -> exn = Shutdown) exns in
+       if not dominated_by_shutdown then
+         raise (Eio.Exn.Multiple exns))
 
 (* ── Test server ──────────────────────────────────────────────────── *)
 
-let with_test_server ?(port = 0) ?(console = false) f =
+let with_test_server ?(port = 0) ?(disable_cap = false) f =
   Random.self_init ();
   let test_port = if port > 0 then port else 40000 + Random.int 20000 in
   Eio_main.run @@ fun env ->
@@ -2125,7 +2135,7 @@ let with_test_server ?(port = 0) ?(console = false) f =
                   headers = [("Content-Type", "application/json")];
                   body = `Text result_json }));
   Service._build_rpc_ctx :=
-    (fun req -> rpc_ctx_to_wire (build_rpc_ctx req));
+    (fun req -> rpc_ctx_to_wire (rpc_ctx req));
   Service._cast_sw := Some sw;
   Service.start_all ~sw;
   Message_bus.init ();
@@ -2133,18 +2143,21 @@ let with_test_server ?(port = 0) ?(console = false) f =
   get "/health" (fun _req ->
     let statuses = Service.health () in
     `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
-  if console then begin
-    Console._register_console_get := (fun path handler ->
-      register_console "GET" path (fun req ->
+  if not disable_cap then begin
+    Cap_hook._register_cap_get := (fun path handler ->
+      register_cap "GET" path (fun req ->
         match handler req with
-        | Console.CRHtml s -> `Html s
-        | Console.CRRedirect url -> `Redirect url));
-    Console._register_console_post := (fun path handler ->
-      register_console "POST" path (fun req ->
+        | Cap_hook.CRHtml s -> `Html s
+        | Cap_hook.CRRedirect url -> `Redirect url
+        | Cap_hook.CRJs s ->
+            `Text s |> header "content-type" "application/javascript"));
+    Cap_hook._register_cap_post := (fun path handler ->
+      register_cap "POST" path (fun req ->
         match handler req with
-        | Console.CRHtml s -> `Html s
-        | Console.CRRedirect url -> `Redirect url));
-    Console.init ()
+        | Cap_hook.CRHtml s -> `Html s
+        | Cap_hook.CRRedirect url -> `Redirect url
+        | Cap_hook.CRJs _ -> `Text "Method Not Allowed" |> status 405));
+    !Cap_hook._cap_init ()
   end;
   let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, test_port) in
   let socket =
@@ -2196,8 +2209,9 @@ let () = Liveview._resolve_route := (fun req url ->
 
 (* ── Re-export submodules ─────────────────────────────────────────── *)
 
+module Log = Log
 module Acme = Acme
-module Console = Console
+module Cap_hook = Cap_hook
 module Db = Db
 module Form = Form
 module Websocket = Websocket
@@ -2211,6 +2225,8 @@ module Channel = Channel
 type 'a topic = 'a Message_bus.topic
 
 let topic = Message_bus.make_topic
+let log = Log.log
+
 let topic_name (t : _ topic) = t.Message_bus.t_channel
 let publish ?ephemeral t v = ignore (Message_bus.publish_typed ?ephemeral t v)
 let subscribe t f = Message_bus.subscribe_typed t f

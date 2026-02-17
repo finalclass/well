@@ -223,7 +223,7 @@ export class Well {
             const changes = msg.changes as Record<string, string>;
             for (const id of Object.keys(changes)) {
               const el = lv.el.querySelector(`[data-lv="${id}"]`);
-              if (el) el.textContent = changes[id];
+              if (el) el.innerHTML = changes[id];
             }
           }
           if (msg.list_ops) {
@@ -421,7 +421,14 @@ export class Well {
       const action = clickTarget.getAttribute("data-lv-click");
       const topic = this.findLiveView(clickTarget);
       if (topic && action) {
-        this.maybeSend(clickTarget, () => this.sendLiveMsg(topic, [action]));
+        let msg: unknown;
+        try {
+          const parsed = JSON.parse(action);
+          msg = Array.isArray(parsed) ? parsed : [action];
+        } catch {
+          msg = [action];
+        }
+        this.maybeSend(clickTarget, () => this.sendLiveMsg(topic, msg));
       }
     });
 

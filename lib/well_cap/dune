@@ -1,0 +1,22 @@
+(library
+ (name well_cap)
+ (public_name well.cap)
+ (libraries well well_html)
+ (instrumentation (backend bisect_ppx)))
+
+(rule
+ (targets cap_css.ml)
+ (deps cap.css)
+ (action (with-stdout-to %{targets}
+  (progn (echo "let css = {cap_css|") (cat %{deps}) (echo "|cap_css}")))))
+
+(rule
+ (targets well_embed.js)
+ (deps ../../static/well.ts)
+ (action (run bun build --minify --target=browser --outfile %{targets} %{deps})))
+
+(rule
+ (targets cap_js.ml)
+ (deps well_embed.js)
+ (action (with-stdout-to %{targets}
+  (progn (echo "let js = {well_js|") (cat %{deps}) (echo "|well_js}")))))

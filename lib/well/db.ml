@@ -141,7 +141,7 @@ let auto_migrate db =
     if not (table_exists db tbl.name) then begin
       let sql = create_table_sql tbl in
       ignore (Sqlite3.exec db sql);
-      Printf.printf "[well] created table %s\n%!" tbl.name
+      Log.log "created table %s" tbl.name
     end else begin
       let db_cols = get_db_columns db tbl.name in
       (* ADD COLUMN for new fields *)
@@ -154,14 +154,14 @@ let auto_migrate db =
           let sql = Printf.sprintf "ALTER TABLE %s ADD COLUMN %s %s%s DEFAULT %s"
             tbl.name col.cname col.sqlite_type nn default in
           ignore (Sqlite3.exec db sql);
-          Printf.printf "[well] %s: added column %s\n%!" tbl.name col.cname
+          Log.log "%s: added column %s" tbl.name col.cname
         end
       ) tbl.columns;
       (* WARN about columns in DB but not in code *)
       List.iter (fun dc ->
         if dc.cname <> "id" &&
            not (List.exists (fun c -> c.cname = dc.cname) tbl.columns) then
-          Printf.eprintf "[well] schema drift: %s.%s in db but not in code\n%!"
+          Log.log ~level:"warn" "schema drift: %s.%s in db but not in code"
             tbl.name dc.cname
       ) db_cols;
       (* WARN about type mismatches *)
@@ -169,7 +169,7 @@ let auto_migrate db =
         match List.find_opt (fun dc -> dc.cname = col.cname) db_cols with
         | Some dc when String.uppercase_ascii dc.sqlite_type <>
                         String.uppercase_ascii col.sqlite_type ->
-            Printf.eprintf "[well] schema drift: %s.%s is %s in db but %s in code\n%!"
+            Log.log ~level:"warn" "schema drift: %s.%s is %s in db but %s in code"
               tbl.name col.cname dc.sqlite_type col.sqlite_type
         | _ -> ()
       ) tbl.columns
@@ -242,7 +242,7 @@ let backup path =
   let oc = open_out_bin bak in
   output_bytes oc data;
   close_out oc;
-  Printf.printf "[well] backup created: %s\n%!" bak
+  Log.log "backup created: %s" bak
 
 (* ── Test sandbox ────────────────────────────────────────────────── *)
 
@@ -262,6 +262,6 @@ let rollback path =
     Unix.rename path (path ^ ".tmp");
     Unix.rename bak path;
     Unix.rename (path ^ ".tmp") bak;
-    Printf.printf "[well] rolled back %s from backup\n%!" path
+    Log.log "rolled back %s from backup" path
   end else
-    Printf.eprintf "[well] no backup found: %s\n%!" bak
+    Log.log ~level:"error" "no backup found: %s" bak

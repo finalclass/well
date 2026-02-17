@@ -78,7 +78,7 @@ let actor_loop actor =
       let result =
         try actor.spec.handler rpc ctx payload
         with exn ->
-          Printf.eprintf "[well] service %s rpc %s error: %s\n%!"
+          Log.log ~level:"error" "service %s rpc %s error: %s"
             actor.spec.name rpc (Printexc.to_string exn);
           `Assoc [("error", `String (Printexc.to_string exn))]
       in
@@ -103,7 +103,7 @@ let expose_http_routes () =
   List.iter (fun name ->
     match Hashtbl.find_opt actors name with
     | None ->
-      Printf.eprintf "[well] warning: cannot expose service '%s' — not registered\n%!" name
+      Log.log ~level:"warn" "cannot expose service '%s' — not registered" name
     | Some actor ->
       List.iter (fun (rpc : rpc_info) ->
         let path = Printf.sprintf "/rpc/%s/%s" name rpc.rname in
@@ -147,10 +147,10 @@ let supervised_run ~sw spec restart =
         if List.length state.crashes > max_crashes then begin
           state.status <- Down (Printf.sprintf "circuit breaker: %d crashes in %.0fs"
             (List.length state.crashes) crash_window);
-          Printf.eprintf "[well] service %s circuit breaker tripped\n%!" spec.name
+          Log.log ~level:"error" "service %s circuit breaker tripped" spec.name
         end else begin
           state.status <- Restarting { attempts = List.length state.crashes };
-          Printf.eprintf "[well] service %s restarting in %.1fs: %s\n%!"
+          Log.log ~level:"warn" "service %s restarting in %.1fs: %s"
             spec.name backoff msg;
           !_sleep backoff;
           run (min 30.0 (backoff *. 2.0))
@@ -287,17 +287,24 @@ let start_socket ~sw ~net path =
   let socket = Eio.Net.listen net ~sw ~backlog:16 ~reuse_addr:true
     (`Unix path) in
   Unix.chmod path 0o770;
-  Printf.printf "[well] socket on %s\n%!" path;
+  Log.log "socket on %s" path;
   Eio.Fiber.fork ~sw (fun () ->
-    let rec accept_loop () =
-      Eio.Net.accept_fork socket ~sw
-        ~on_error:(fun exn ->
-          Printf.eprintf "[well] socket error: %s\n%!"
-            (Printexc.to_string exn))
-        handle_socket_client;
-      accept_loop ()
-    in
-    accept_loop ())
+    Fun.protect ~finally:(fun () ->
+      try Unix.unlink path with Unix.Unix_error _ -> ())
+    (fun () ->
+      let rec accept_loop () =
+        Eio.Net.accept_fork socket ~sw
+          ~on_error:(fun exn ->
+            match exn with
+            | Eio.Cancel.Cancelled _ -> ()
+            | _ ->
+              Log.log ~level:"error" "socket error: %s"
+                (Printexc.to_string exn))
+          handle_socket_client;
+        accept_loop ()
+      in
+      try accept_loop ()
+      with Eio.Cancel.Cancelled _ -> ()))
 
 (* ── Cast (fire-and-forget) ──────────────────────────────────────── *)
 
@@ -307,7 +314,7 @@ let cast f =
     Eio.Fiber.fork ~sw (fun () ->
       try f ()
       with exn ->
-        Printf.eprintf "[well] cast error: %s\n%!" (Printexc.to_string exn))
+        Log.log ~level:"error" "cast error: %s" (Printexc.to_string exn))
   | None ->
-    Printf.eprintf "[well] warning: cast called outside Well.run\n%!";
+    Log.log ~level:"warn" "cast called outside Well.run";
     f ()

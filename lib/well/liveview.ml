@@ -108,13 +108,54 @@ let cleanup_sessions () =
 (* ── Dynamics extraction and diffing ──────────────────────────────── *)
 
 let collect_dynamics html =
-  let pattern = Str.regexp {|data-lv="\([^"]*\)">\([^<]*\)<|} in
+  (* Find data-lv="id"> then extract everything until matching close tag.
+     Supports both plain text and nested HTML content. *)
+  let attr_pat = Str.regexp {|data-lv="\([^"]*\)"|} in
+  let len = String.length html in
   let rec find_all pos acc =
     try
-      let _ = Str.search_forward pattern html pos in
+      let _ = Str.search_forward attr_pat html pos in
       let id = Str.matched_group 1 html in
-      let value = Str.matched_group 2 html in
-      find_all (Str.match_end ()) ((id, value) :: acc)
+      let after_attr = Str.match_end () in
+      (* Find the > that closes this tag *)
+      match String.index_from_opt html after_attr '>' with
+      | None -> find_all after_attr acc
+      | Some gt_pos ->
+          let content_start = gt_pos + 1 in
+          (* Determine the tag name by scanning backwards from data-lv for < *)
+          let tag_name =
+            let rec scan i =
+              if i < 0 then "div"
+              else if html.[i] = '<' then begin
+                let j = i + 1 in
+                let k = ref j in
+                while !k < len && html.[!k] <> ' ' && html.[!k] <> '>'
+                      && html.[!k] <> '/' do incr k done;
+                String.sub html j (!k - j)
+              end else scan (i - 1)
+            in
+            scan (Str.match_beginning () - 1)
+          in
+          let close_tag = "</" ^ tag_name ^ ">" in
+          let close_len = String.length close_tag in
+          (* Find matching close tag at depth 0 *)
+          let open_tag = "<" ^ tag_name in
+          let open_len = String.length open_tag in
+          let rec find_close i depth =
+            if i + close_len > len then len
+            else if String.sub html i close_len = close_tag then begin
+              if depth = 0 then i
+              else find_close (i + 1) (depth - 1)
+            end else if i + open_len < len
+                     && String.sub html i open_len = open_tag
+                     && (html.[i + open_len] = ' ' || html.[i + open_len] = '>'
+                         || html.[i + open_len] = '/') then
+              find_close (i + 1) (depth + 1)
+            else find_close (i + 1) depth
+          in
+          let close_pos = find_close content_start 0 in
+          let value = String.sub html content_start (close_pos - content_start) in
+          find_all (close_pos + close_len) ((id, value) :: acc)
     with Not_found -> List.rev acc
   in
   find_all 0 []
