@@ -158,3 +158,23 @@ let replay ?(since_id = 0) pattern cb =
         ()
   in
   loop ()
+
+(* ── Typed topic descriptor ────────────────────────────────────────── *)
+
+type 'a topic = {
+  t_channel : string;
+  to_yojson : 'a -> Yojson.Safe.t;
+  of_yojson : Yojson.Safe.t -> ('a, string) result;
+}
+
+let make_topic channel to_yojson of_yojson =
+  { t_channel = channel; to_yojson; of_yojson }
+
+let publish_typed ?(ephemeral = false) t value =
+  publish ~ephemeral t.t_channel (t.to_yojson value)
+
+let subscribe_typed t f =
+  subscribe t.t_channel (fun event ->
+    match t.of_yojson event.payload with
+    | Ok v -> f v
+    | Error _ -> ())

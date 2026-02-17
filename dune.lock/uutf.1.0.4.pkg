@@ -14,7 +14,7 @@
 
 (depends
  (all_platforms
-  (ocaml ocamlfind ocamlbuild topkg cmdliner)))
+  (ocaml ocamlfind ocamlbuild topkg)))
 
 (source
  (fetch

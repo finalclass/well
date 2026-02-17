@@ -21,6 +21,7 @@ module type VIEW = sig
   type msg
 
   val persistence : persistence
+  val subscriptions : string list
   val init : Types.request -> Yojson.Safe.t -> model
   val update : Types.request -> model -> msg -> model
   val handle_params : Types.request -> model -> model
@@ -205,47 +206,7 @@ let encode_event topic event payload =
 let encode_navigate url html =
   `Assoc [("type", `String "navigate"); ("url", `String url); ("html", `String html)]
 
-(* ── PubSub ───────────────────────────────────────────────────────── *)
-
-let _pubsub_mu = Mutex.create ()
-
-(* channel -> list of (id, callback) *)
-let pubsub : (string, (int * (Yojson.Safe.t -> unit)) list) Hashtbl.t =
-  Hashtbl.create 16
-
-let _next_sub_id = ref 0
-
-let subscribe channel cb =
-  Mutex.lock _pubsub_mu;
-  let id = incr _next_sub_id; !_next_sub_id in
-  let subs =
-    match Hashtbl.find_opt pubsub channel with
-    | Some s -> s
-    | None -> []
-  in
-  Hashtbl.replace pubsub channel ((id, cb) :: subs);
-  Mutex.unlock _pubsub_mu;
-  id
-
-let unsubscribe channel sub_id =
-  Mutex.lock _pubsub_mu;
-  (match Hashtbl.find_opt pubsub channel with
-   | Some subs ->
-       let filtered = List.filter (fun (id, _) -> id <> sub_id) subs in
-       if filtered = [] then Hashtbl.remove pubsub channel
-       else Hashtbl.replace pubsub channel filtered
-   | None -> ());
-  Mutex.unlock _pubsub_mu
-
-let broadcast channel msg_json =
-  Mutex.lock _pubsub_mu;
-  let subs =
-    match Hashtbl.find_opt pubsub channel with
-    | Some s -> s
-    | None -> []
-  in
-  Mutex.unlock _pubsub_mu;
-  List.iter (fun (_, cb) -> (try cb msg_json with _ -> ())) subs
+(* PubSub — delegated to Message_bus *)
 
 (* ── Uploads ──────────────────────────────────────────────────────── *)
 
@@ -274,7 +235,7 @@ let consume_upload upload_id =
 type handler_msg =
   | WsMsg of Yojson.Safe.t
   | WsClosed
-  | InfoMsg of Yojson.Safe.t  (* server-pushed msg *)
+  | InfoMsg of Message_bus.event  (* from MessageBus *)
 
 (* ── View instance ─────────────────────────────────────────────────── *)
 
@@ -296,6 +257,7 @@ type view_instance = {
 type view_entry = {
   factory : Types.request -> Yojson.Safe.t -> view_instance;
   view_persistence : persistence;
+  view_subscriptions : string list;
 }
 
 let view_registry : (string, view_entry) Hashtbl.t = Hashtbl.create 16
@@ -365,7 +327,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
   );
   let handle_join topic endpoint init_args =
     match Hashtbl.find_opt view_registry endpoint with
-    | Some { factory; view_persistence } ->
+    | Some { factory; view_persistence; view_subscriptions } ->
         let saved_state =
           load_state view_persistence session_id topic endpoint
         in
@@ -381,11 +343,14 @@ let handler (req : Types.request) (ws : Websocket.t) =
             ts_persistence = view_persistence;
             ts_instance = instance };
         Hashtbl.replace conn_topics topic ();
-        (* Subscribe to pubsub for this topic *)
-        let sub_id = subscribe topic (fun msg_json ->
-          Eio.Stream.add unified (InfoMsg msg_json)
-        ) in
-        sub_ids := (topic, sub_id) :: !sub_ids;
+        (* Subscribe to MessageBus: own topic + VIEW subscriptions *)
+        let channels = topic :: view_subscriptions in
+        List.iter (fun ch ->
+          let sub_id = Message_bus.subscribe ch (fun event ->
+            Eio.Stream.add unified (InfoMsg event)
+          ) in
+          sub_ids := (ch, sub_id) :: !sub_ids
+        ) channels;
         let msg =
           if msg_type = "restored" then encode_restored topic html
           else encode_full topic html
@@ -400,12 +365,16 @@ let handler (req : Types.request) (ws : Websocket.t) =
            ts.ts_endpoint (ts.ts_instance.get_model_json ());
          Hashtbl.remove topics topic;
          Hashtbl.remove conn_topics topic;
-         (* Unsubscribe from pubsub *)
-         (match List.assoc_opt topic !sub_ids with
-          | Some sub_id ->
-              unsubscribe topic sub_id;
-              sub_ids := List.filter (fun (t, _) -> t <> topic) !sub_ids
-          | None -> ())
+         (* Unsubscribe from MessageBus *)
+         let to_remove, remaining =
+           List.partition (fun (ch, _) ->
+             ch = topic || List.mem ch
+               (match Hashtbl.find_opt view_registry ts.ts_endpoint with
+                | Some ve -> ve.view_subscriptions | None -> []))
+             !sub_ids
+         in
+         List.iter (fun (_, id) -> Message_bus.unsubscribe id) to_remove;
+         sub_ids := remaining
      | None -> ())
   in
   let handle_msg topic msg_json =
@@ -464,7 +433,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
     match Eio.Stream.take unified with
     | WsClosed ->
         (* Clean up subscriptions *)
-        List.iter (fun (ch, id) -> unsubscribe ch id) !sub_ids;
+        List.iter (fun (_, id) -> Message_bus.unsubscribe id) !sub_ids;
         sub_ids := [];
         save_all_topics topics session_id;
         unregister_connection session_id ws
@@ -581,7 +550,8 @@ let handler (req : Types.request) (ws : Websocket.t) =
              end;
              loop ()
          | _ -> loop ())
-    | InfoMsg msg_json ->
+    | InfoMsg bus_event ->
+        let msg_json = bus_event.Message_bus.payload in
         let open Yojson.Safe.Util in
         (* Check if this is a hook event or a regular broadcast *)
         let is_hook_event =
@@ -685,7 +655,8 @@ let register
     { get_html; handle_msg; handle_params; get_model_json; load_model }
   in
   Hashtbl.replace view_registry endpoint
-    { factory; view_persistence = View.persistence };
+    { factory; view_persistence = View.persistence;
+      view_subscriptions = View.subscriptions };
   if not !_ws_registered then begin
     _ws_registered := true;
     !_register_ws_route "/live" handler
@@ -694,9 +665,9 @@ let register
 (* ── Server push helpers ───────────────────────────────────────────── *)
 
 let send_event topic event payload =
-  broadcast topic
+  ignore (Message_bus.publish ~ephemeral:true topic
     (`Assoc [("__well_event", `String event);
-             ("__well_payload", payload)])
+             ("__well_payload", payload)]))
 
 (* ── SSR: render initial HTML ──────────────────────────────────────── *)
 
@@ -741,7 +712,7 @@ let live_view ~endpoint ?(topic = "") ?(props = [])
        children_html)
 
 let live_view_script () : Html.node =
-  `Html {|<script src="/static/well.js"></script>|}
+  `Html {|<script type="module" src="/static/well.js"></script>|}
 
 (* MLX component: <LiveView name="counter" /> *)
 let createElement ~name ?(props : (string * string) list = [])

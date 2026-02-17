@@ -19,14 +19,13 @@ let dune_project name =
  (allow_empty)
  (synopsis "A well web application")
  (depends
-  (ocaml (>= 5.2))
+  (ocaml (>= 5.4))
   mlx
   well
   eio
   eio_main
   yojson
   sqlite3
-  bisect_ppx
   ppx_deriving_yojson))
 |}
     name
@@ -227,7 +226,7 @@ let layout name =
       <footer>
         <p>(txt "Powered by %s & well")</p>
       </footer>
-      <script src="/static/well.js" />
+      <script type_="module" src="/static/well.js" />
     </body>
   </html>
 |}
@@ -419,6 +418,17 @@ Well.session_delete req "user_id";
 Well.redirect "/"
 |}
 
+let events _name =
+  {|(* Events — typed pub/sub topics for the application *)
+(* Each type defines a message shape; [@@deriving topic] generates a Well.topic value *)
+
+type counter_event =
+  [ `Incremented of string * int
+  | `Decremented of string * int
+  | `Reset ]
+[@@deriving yojson, topic]
+|}
+
 let counter_live _name =
   {|type model =
   { count: int
@@ -432,6 +442,7 @@ type msg =
 [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral
+let subscriptions = []
 
 let init _req props =
   let open Yojson.Safe.Util in
@@ -446,17 +457,14 @@ let init _req props =
 let update _req model = function
   | Increment ->
     let m = {model with count= model.count + model.step} in
-    Well.LiveView.broadcast "/live/activity_log"
-      (`List [`String "CounterEvent"; `String "increment"; `Int m.count]);
+    Well.publish Events.counter_event (`Incremented ("increment", m.count));
     m
   | Decrement ->
     let m = {model with count= model.count - model.step} in
-    Well.LiveView.broadcast "/live/activity_log"
-      (`List [`String "CounterEvent"; `String "decrement"; `Int m.count]);
+    Well.publish Events.counter_event (`Decremented ("decrement", m.count));
     m
   | Reset ->
-    Well.LiveView.broadcast "/live/activity_log"
-      (`List [`String "CounterEvent"; `String "reset"; `Int 0]);
+    Well.publish Events.counter_event (`Reset);
     {model with count= 0}
 
 let handle_params _req model = model
@@ -510,17 +518,18 @@ type model =
   ; next_id: int }
 [@@deriving yojson]
 
-type msg =
-  | CounterEvent of string * int
+type msg = Events.counter_event
 [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral
+let subscriptions = [Well.topic_name Events.counter_event]
 
 let init _req _props =
   {entries= []; next_id= 1}
 
 let update _req model = function
-  | CounterEvent (action, value) ->
+  | `Incremented (action, value)
+  | `Decremented (action, value) ->
     let entry = {id= model.next_id; action; value} in
     let entries = entry :: model.entries in
     let entries =
@@ -529,6 +538,9 @@ let update _req model = function
       else entries
     in
     {entries; next_id= model.next_id + 1}
+  | `Reset ->
+    let entry = {id= model.next_id; action= "reset"; value= 0} in
+    {entries= entry :: model.entries; next_id= model.next_id + 1}
 
 let handle_params _req model = model
 let temporary_assigns model = model
@@ -558,7 +570,7 @@ let open Html in
 <Layout title="Dashboard">
 <div>
   <h1>(txt "Dashboard — LiveView Communication")</h1>
-  <p>(txt "Two LiveViews on one page. Counter broadcasts to Activity Log via Well.LiveView.broadcast.")</p>
+  <p>(txt "Two LiveViews on one page. Counter publishes events, Activity Log subscribes via Well.MessageBus.")</p>
   <div class_="dashboard-grid">
     <div class_="dashboard-panel">
       <h2>(txt "Counter")</h2>
@@ -1799,12 +1811,12 @@ let contract_dune_file =
 |}
 
 let static_dune =
-  {|; To rebuild after editing TypeScript: rm *.js && dune build
+  {|; TypeScript → JavaScript (auto-promoted to source tree on build)
 ; Requires bun — install from https://bun.sh
 (rule
  (targets well.js)
  (deps (file well.ts))
- (mode fallback)
+ (mode promote)
  (action (run bun build well.ts --outdir . --minify)))
 
 (rule
@@ -1812,7 +1824,7 @@ let static_dune =
  (deps
   (source_tree ts)
   (source_tree ../lib/contract/build/ts))
- (mode fallback)
+ (mode promote)
  (action (run bun build ts/tasks.ts --outdir . --minify)))
 |}
 
@@ -1932,6 +1944,7 @@ let open Html in
     <p class_="loading">(txt "Loading...")</p>
   </div>
   <p><a href="/">(txt "← Back")</a></p>
+  <script src="/static/tasks.js" />
 </div>
 </Layout>
 |}
@@ -2496,7 +2509,7 @@ let createElement ?title:(page_title = "") ?(children = []) () =
     </head>
     <body>
       <main>(children |> cat |> raw)</main>
-      <script src="/static/well.js" />
+      <script type_="module" src="/static/well.js" />
     </body>
   </html>
 ```
@@ -2513,6 +2526,7 @@ type model = { count: int } [@@deriving yojson]
 type msg = Increment | Decrement | Reset [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral  (* or Session, User *)
+let subscriptions = []  (* MessageBus channels to listen to *)
 
 let init _req _props = { count = 0 }
 
@@ -2560,21 +2574,27 @@ Variant encoding (ppx_deriving_yojson):
 - `SetValue of int` -> `["SetValue", 42]`
 - Click handler sends array format: `data_lv_click="Increment"` sends `["Increment"]`
 
-## Cross-LiveView Communication
+## Typed Pub/Sub (Well.MessageBus)
 
-Use `Well.LiveView.broadcast` to send messages between LiveViews:
+Define events in `events.ml` with typed topics:
 
 ```ocaml
-(* In sender's update *)
-let update _req model = function
-  | Increment ->
-    let m = { count = model.count + 1 } in
-    Well.LiveView.broadcast "/live/activity_log"
-      (`List [`String "CounterEvent"; `String "increment"; `Int m.count]);
-    m
+(* events.ml *)
+type counter_event = [`Incremented of string * int | `Decremented of string * int | `Reset]
+[@@deriving yojson, topic]
+```
 
-(* Receiver's msg type must match the broadcast format *)
-type msg = CounterEvent of string * int [@@deriving yojson]
+Publish from any LiveView or handler:
+
+```ocaml
+Well.publish Events.counter_event (`Incremented ("increment", m.count))
+```
+
+Subscribe in a LiveView via `subscriptions`:
+
+```ocaml
+let subscriptions = [Well.topic_name Events.counter_event]
+type msg = Events.counter_event [@@deriving yojson]
 ```
 
 ## Type-Safe SQL (well.ppx)
@@ -2845,6 +2865,10 @@ let project_files name =
     {
       path = Printf.sprintf "lib/%s_web/login_page.mlx" name;
       content = login_page name;
+    };
+    {
+      path = Printf.sprintf "lib/%s_web/events.ml" name;
+      content = events name;
     };
     {
       path = Printf.sprintf "lib/%s_web/counter_live.mlx" name;

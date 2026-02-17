@@ -16,7 +16,7 @@
 
 (depends
  (all_platforms
-  (ocaml ocamlfind ocamlbuild topkg base-unix cmdliner)))
+  (ocaml ocamlfind ocamlbuild topkg base-unix)))
 
 (source
  (fetch

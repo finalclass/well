@@ -946,8 +946,18 @@ let rec resolve (resp : response) : resolved =
       let final_status =
         match c.status with Some s -> s | None -> inner.r_status
       in
+      (* Outer headers override inner headers with the same key *)
+      let outer_keys =
+        List.map (fun (k, _) -> String.lowercase_ascii k) c.headers
+      in
+      let filtered_inner =
+        List.filter
+          (fun (k, _) ->
+            not (List.mem (String.lowercase_ascii k) outer_keys))
+          inner.r_headers
+      in
       { r_status = final_status;
-        r_headers = c.headers @ inner.r_headers;
+        r_headers = c.headers @ filtered_inner;
         r_body = inner.r_body }
   | `Stream cfg ->
       { r_status = cfg.stream_status;
@@ -1607,6 +1617,7 @@ let stream_file ?(content_type = "application/octet-stream") ?(headers = []) pat
 
 (* ── Shutdown state ────────────────────────────────────────────────── *)
 
+exception Shutdown
 let _shutting_down = Atomic.make false
 
 (* ── Server ────────────────────────────────────────────────────────── *)
@@ -1652,7 +1663,9 @@ let handle_connection flow _addr =
                     query = query_params; session_id; _context = [] }
                 in
                 (try route.ws_handler req ws
-                 with exn ->
+                 with
+                 | Eio.Cancel.Cancelled _ -> ()
+                 | exn ->
                    Printf.eprintf "[well] ws handler error: %s\n%!"
                      (Printexc.to_string exn));
                 Websocket.close ws
@@ -1728,6 +1741,7 @@ let handle_connection flow _addr =
        with _ -> (try close_flow () with _ -> ()))
   | Eio.Io _ -> (try close_flow () with _ -> ())
   | End_of_file -> (try close_flow () with _ -> ())
+  | Eio.Cancel.Cancelled _ -> (try close_flow () with _ -> ())
   | exn ->
       Printf.eprintf "[well] connection error: %s\n%!"
         (Printexc.to_string exn);
@@ -2002,7 +2016,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
            | Some cfg -> handle_tls_connection cfg
            | None -> handle_connection)
     in
-    (* Fork accept loop — runs until switch is cancelled *)
+    (* Fork accept loop *)
     Eio.Fiber.fork ~sw (fun () ->
       if workers > 0 then begin
         let pool =
@@ -2039,11 +2053,12 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     Liveview_store.close ();
     Message_bus.close ();
     (try Unix.unlink "data/well.sock" with Unix.Unix_error _ -> ());
-    Printf.printf "[well] stopped.\n%!"
-    (* Switch exits here → cancels accept loop + all connection fibers *)
+    Printf.printf "[well] stopped.\n%!";
+    (* Raise to exit switch — cancels accept loop + all connection fibers *)
+    raise Shutdown
   in
   Mirage_crypto_rng_unix.use_default ();
-  start_server ()
+  (try start_server () with Shutdown -> ())
 
 (* ── Test server ──────────────────────────────────────────────────── *)
 
@@ -2190,3 +2205,12 @@ module LiveView = Liveview
 module Service = Service
 module MessageBus = Message_bus
 module Channel = Channel
+
+(* ── Typed pub/sub ────────────────────────────────────────────────── *)
+
+type 'a topic = 'a Message_bus.topic
+
+let topic = Message_bus.make_topic
+let topic_name (t : _ topic) = t.Message_bus.t_channel
+let publish ?ephemeral t v = ignore (Message_bus.publish_typed ?ephemeral t v)
+let subscribe t f = Message_bus.subscribe_typed t f

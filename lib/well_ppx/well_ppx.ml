@@ -524,6 +524,47 @@ let query_extension =
     Ast_pattern.(pstr __)
     query_expand
 
+(* ═══════════════════════════════════════════════════════════════════ *)
+(*  [@@deriving topic]                                                *)
+(* ═══════════════════════════════════════════════════════════════════ *)
+
+let derive_topic_impl ~ctxt (_rec_flag, type_decls) name_opt =
+  let loc = Expansion_context.Deriver.derived_item_loc ctxt in
+  List.concat_map
+    (fun (td : type_declaration) ->
+      let type_name = td.ptype_name.txt in
+      let channel_name =
+        match name_opt with Some n -> n | None -> type_name
+      in
+      let to_yojson_fn =
+        Ast_builder.Default.evar ~loc (type_name ^ "_to_yojson")
+      in
+      let of_yojson_fn =
+        Ast_builder.Default.evar ~loc (type_name ^ "_of_yojson")
+      in
+      let channel_str = Ast_builder.Default.estring ~loc channel_name in
+      let topic_ctor =
+        Ast_builder.Default.pexp_ident ~loc
+          { txt = Ldot (Lident "Well", "topic"); loc }
+      in
+      let pat = Ast_builder.Default.pvar ~loc type_name in
+      [
+        [%stri
+          let [%p pat] =
+            [%e Ast_builder.Default.pexp_apply ~loc topic_ctor
+              [ (Nolabel, channel_str);
+                (Nolabel, to_yojson_fn);
+                (Nolabel, of_yojson_fn) ]]];
+      ])
+    type_decls
+
+let _ =
+  Deriving.add "topic"
+    ~str_type_decl:
+      (Deriving.Generator.V2.make
+         Deriving.Args.(empty +> arg "name" (estring __))
+         derive_topic_impl)
+
 let () =
   Driver.register_transformation "well_ppx"
     ~rules:[ Ppxlib.Context_free.Rule.extension query_extension ]

@@ -131,7 +131,9 @@ let supervised_run ~sw spec restart =
     state.status <- Running;
     let result =
       try actor_loop actor; `Normal
-      with exn -> `Crashed (Printexc.to_string exn)
+      with
+      | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | exn -> `Crashed (Printexc.to_string exn)
     in
     Hashtbl.remove actors spec.name;
     match result, restart with

@@ -790,7 +790,7 @@ let console_layout ~active_path ~title ~content =
     %s
   </main>
 </div>
-<script src="/static/well.js"></script>
+<script type="module" src="/static/well.js"></script>
 </body>
 </html>|}
     (esc title) console_css
@@ -870,6 +870,7 @@ module Overview_live : Liveview.VIEW = struct
   type msg = Refresh
 
   let persistence = Liveview.Ephemeral
+  let subscriptions = []
 
   let init _req _props =
     let tables = !(Db.registered_tables) in
@@ -989,6 +990,7 @@ module Db_live : Liveview.VIEW = struct
     | RunSQL of string
 
   let persistence = Liveview.Ephemeral
+  let subscriptions = []
 
   let get_table_names () =
     List.map (fun (t : Db.table) -> t.name) !(Db.registered_tables)
@@ -1187,6 +1189,7 @@ module Services_live : Liveview.VIEW = struct
     | CallRPC of string
 
   let persistence = Liveview.Ephemeral
+  let subscriptions = []
 
   let init _req _props =
     { services = Service.describe_services ();
@@ -1319,6 +1322,7 @@ module Messages_live : Liveview.VIEW = struct
     | Clear
 
   let persistence = Liveview.Ephemeral
+  let subscriptions = []
   let max_messages = 200
 
   let init _req _props =
@@ -1396,6 +1400,7 @@ module Logs_live : Liveview.VIEW = struct
     | Clear
 
   let persistence = Liveview.Ephemeral
+  let subscriptions = []
   let max_entries = 500
 
   let init _req _props =
@@ -1556,7 +1561,7 @@ let init () =
         ("duration_ms", `Float duration_ms);
         ("timestamp", `Float (Unix.gettimeofday ()));
       ] in
-      Liveview.broadcast "/live/_well/logs" entry_json);
+      ignore (Message_bus.publish ~ephemeral:true "/live/_well/logs" entry_json));
     (* Set up MessageBus subscriber for Messages LiveView *)
     ignore (Message_bus.subscribe "*" (fun event ->
       let msg_json = `Assoc [
@@ -1564,6 +1569,6 @@ let init () =
         ("payload", `String (Yojson.Safe.to_string event.payload));
         ("timestamp", `Float event.created_at);
       ] in
-      Liveview.broadcast "/live/_well/messages" msg_json));
+      ignore (Message_bus.publish ~ephemeral:true "/live/_well/messages" msg_json)));
     Printf.printf "[well] console at /_well/\n%!"
   end

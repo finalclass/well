@@ -12,7 +12,7 @@
  (name well)
  (synopsis "Full-stack OCaml web framework")
  (depends
-  (ocaml (>= 5.2))
+  (ocaml (>= 5.4))
   mlx
   eio
   eio_main
@@ -25,5 +25,4 @@
   zarith
   ppxlib
   otoml
-  bisect_ppx
   camlzip))
