@@ -54,17 +54,32 @@ let init () =
   !(Well.Cap_hook._register_cap_get) "/_well/logs" (authed (fun _req ->
     Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/logs" ~title:"Logs"
               ~endpoint:"/live/_well/logs")));
-  (* Set up log hook for broadcasting to Logs LiveView *)
-  Well.Cap_hook._cap_log_hook := Some (fun meth path status duration_ms ->
-    let entry_json = `Assoc [
-      ("id", `Int !(Well.Cap_hook.Log_buffer.next_id));
-      ("meth", `String meth);
-      ("path", `String path);
-      ("status", `Int status);
-      ("duration_ms", `Float duration_ms);
-      ("timestamp", `Float (Unix.gettimeofday ()));
-    ] in
-    ignore (Well.MessageBus.publish ~ephemeral:true "/live/_well/logs" entry_json));
+  (* Logs pagination API *)
+  !(Well.Cap_hook._register_cap_get) "/_well/api/logs" (authed (fun req ->
+    let before_id = match Well.query req "before" with
+      | Some s -> (try int_of_string s with _ -> !(Well.Cap_hook.Log_buffer.count))
+      | None -> !(Well.Cap_hook.Log_buffer.count)
+    in
+    let n = match Well.query req "count" with
+      | Some s -> (try min 200 (int_of_string s) with _ -> 100)
+      | None -> 100
+    in
+    let entries = Well.Cap_hook.Log_buffer.before ~before_id ~n in
+    let json = "[" ^ String.concat ","
+      (List.map Well.Cap_hook.Log_buffer.entry_to_json entries) ^ "]" in
+    Well.Cap_hook.CRJson json));
+  (* Load historical logs from well.log file *)
+  Well.Cap_hook.Log_buffer.load_from_file "well.log";
+  (* Set up log hook for real-time new_log events *)
+  Well.Log._hook := Some (fun ts level msg ->
+    let entry = Well.Cap_hook.Log_buffer.push ~level ~message:msg ~timestamp:ts in
+    Well.LiveView.send_event "/live/_well/logs" "new_log"
+      (`Assoc [
+        ("id", `Int entry.id);
+        ("level", `String level);
+        ("message", `String msg);
+        ("timestamp", `Float ts);
+      ]));
   (* Set up MessageBus subscriber for Messages LiveView *)
   (* Filter out /_well/* channels to avoid infinite loop:
      subscribe "*" catches ALL messages including our own publishes *)

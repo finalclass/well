@@ -8,6 +8,14 @@ let method_badge m =
   in
   Printf.sprintf {|<span class="badge %s">%s</span>|} cls (esc m)
 
+let level_badge l =
+  let cls = match String.lowercase_ascii l with
+    | "error" -> "badge-delete"
+    | "warn" -> "badge-put"
+    | _ -> "badge-get"
+  in
+  Printf.sprintf {|<span class="badge %s">%s</span>|} cls (esc l)
+
 let status_class s =
   if s >= 200 && s < 300 then "s2xx"
   else if s >= 300 && s < 400 then "s3xx"
@@ -15,9 +23,8 @@ let status_class s =
   else "s5xx"
 
 let format_time ts =
-  let t = Unix.gmtime ts in
+  let t = Unix.localtime ts in
   Printf.sprintf "%02d:%02d:%02d" t.Unix.tm_hour t.Unix.tm_min t.Unix.tm_sec
 
 let status_dot color =
   Printf.sprintf {|<span class="status-dot %s"></span>|} color
-

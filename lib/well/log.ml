@@ -3,6 +3,9 @@
 let _file : out_channel option ref = ref None
 let _enabled = ref true
 
+(* Hook: called with (timestamp, level, message) on every log line *)
+let _hook : (float -> string -> string -> unit) option ref = ref None
+
 let init () =
   if !_enabled && !_file = None then begin
     let oc = open_out_gen
@@ -15,8 +18,7 @@ let close () =
   | Some oc -> close_out_noerr oc; _file := None
   | None -> ()
 
-let timestamp () =
-  let t = Unix.gettimeofday () in
+let format_ts t =
   let tm = Unix.localtime t in
   let ms = int_of_float ((t -. floor t) *. 1000.0) in
   Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d.%03d"
@@ -24,14 +26,18 @@ let timestamp () =
     tm.tm_hour tm.tm_min tm.tm_sec ms
 
 let write_line level msg =
-  let line = Printf.sprintf "[well] %s [%s] %s" (timestamp ()) level msg in
+  let t = Unix.gettimeofday () in
+  let line = Printf.sprintf "[well] %s [%s] %s" (format_ts t) level msg in
   print_string line; print_char '\n'; flush stdout;
-  match !_file with
-  | Some oc ->
-      output_string oc line;
-      output_char oc '\n';
-      flush oc
-  | None -> ()
+  (match !_file with
+   | Some oc ->
+       output_string oc line;
+       output_char oc '\n';
+       flush oc
+   | None -> ());
+  (match !_hook with
+   | Some f -> (try f t level msg with _ -> ())
+   | None -> ())
 
 let log ?(level = "info") fmt =
   Printf.ksprintf (write_line level) fmt

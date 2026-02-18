@@ -50,7 +50,7 @@ let view model =
         <div class="stat-value" data-lv="ov-services">%d / %d</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Requests logged</div>
+        <div class="stat-label">Log entries</div>
         <div class="stat-value green" data-lv="ov-reqs">%d</div>
       </div>
     </div>|}
@@ -73,14 +73,14 @@ let view model =
   in
   let log_rows =
     if model.recent_logs = [] then
-      {|<div class="empty-state"><div class="icon">&#9776;</div><p>No requests yet</p></div>|}
+      {|<div class="empty-state"><div class="icon">&#9776;</div><p>No log entries yet</p></div>|}
     else
       let entries = String.concat ""
         (List.map (fun (e : Well.Cap_hook.Log_buffer.entry) ->
           Printf.sprintf
-            {|<div class="log-entry"><span class="log-time">%s</span><span class="log-method">%s</span><span class="log-path">%s</span><span class="log-status %s">%d</span><span class="log-duration">%.1fms</span></div>|}
-            (format_time e.timestamp) (method_badge e.meth)
-            (esc e.path) (status_class e.status) e.status e.duration_ms
+            {|<div class="log-entry"><span class="log-time">%s</span>%s<span class="log-path">%s</span></div>|}
+            (format_time e.timestamp) (level_badge e.level)
+            (esc e.message)
         ) model.recent_logs)
       in
       Printf.sprintf {|<div class="log-stream" style="max-height:300px">%s</div>|} entries
@@ -93,7 +93,7 @@ let view model =
           <table class="data-table"><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody data-lv="ov-health">%s</tbody></table>
         </div>
         <div class="card">
-          <div class="card-title">Recent requests</div>
+          <div class="card-title">Recent logs</div>
           <div data-lv="ov-logs">%s</div>
         </div>
       </div>
