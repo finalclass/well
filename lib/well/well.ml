@@ -1208,13 +1208,6 @@ let logger : middleware = fun next req ->
   let dt = (Unix.gettimeofday () -. t0) *. 1000.0 in
   let st = response_status resp in
   Log.log "%s %s -> %d (%.1fms)" req.meth req.path st dt;
-  (* Cap log hook — push to ring buffer + broadcast *)
-  (match !(Cap_hook._cap_log_hook) with
-   | Some hook ->
-       Cap_hook.Log_buffer.push ~meth:req.meth ~path:req.path
-         ~status:st ~duration_ms:dt;
-       (try hook req.meth req.path st dt with _ -> ())
-   | None -> ());
   resp
 
 let cors ?(origins = ["*"])
@@ -1945,6 +1938,8 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
           match handler req with
           | Cap_hook.CRHtml s -> `Html s
           | Cap_hook.CRRedirect url -> `Redirect url
+          | Cap_hook.CRJson s ->
+              `Text s |> header "content-type" "application/json"
           | Cap_hook.CRJs s ->
               `Text s |> header "content-type" "application/javascript"));
       Cap_hook._register_cap_post := (fun path handler ->
@@ -1952,7 +1947,8 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
           match handler req with
           | Cap_hook.CRHtml s -> `Html s
           | Cap_hook.CRRedirect url -> `Redirect url
-          | Cap_hook.CRJs _ -> `Text "Method Not Allowed" |> status 405));
+          | Cap_hook.CRJson _ | Cap_hook.CRJs _ ->
+              `Text "Method Not Allowed" |> status 405));
       !Cap_hook._cap_init ()
     end;
     (* ── TLS config: ACME auto-TLS / manual TLS / plain ────────── *)
@@ -2149,6 +2145,8 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
         match handler req with
         | Cap_hook.CRHtml s -> `Html s
         | Cap_hook.CRRedirect url -> `Redirect url
+        | Cap_hook.CRJson s ->
+            `Text s |> header "content-type" "application/json"
         | Cap_hook.CRJs s ->
             `Text s |> header "content-type" "application/javascript"));
     Cap_hook._register_cap_post := (fun path handler ->
@@ -2156,7 +2154,8 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
         match handler req with
         | Cap_hook.CRHtml s -> `Html s
         | Cap_hook.CRRedirect url -> `Redirect url
-        | Cap_hook.CRJs _ -> `Text "Method Not Allowed" |> status 405));
+        | Cap_hook.CRJson _ | Cap_hook.CRJs _ ->
+            `Text "Method Not Allowed" |> status 405));
     !Cap_hook._cap_init ()
   end;
   let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, test_port) in
@@ -2223,6 +2222,7 @@ module Channel = Channel
 (* ── Typed pub/sub ────────────────────────────────────────────────── *)
 
 type 'a topic = 'a Message_bus.topic
+type 'a event = 'a Message_bus.typed_event = { id : int; value : 'a; created_at : float }
 
 let topic = Message_bus.make_topic
 let log = Log.log
@@ -2230,3 +2230,5 @@ let log = Log.log
 let topic_name (t : _ topic) = t.Message_bus.t_channel
 let publish ?ephemeral t v = ignore (Message_bus.publish_typed ?ephemeral t v)
 let subscribe t f = Message_bus.subscribe_typed t f
+let replay ?since_id t f = Message_bus.replay_typed ?since_id t f
+let prune = Message_bus.prune

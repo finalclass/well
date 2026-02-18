@@ -159,7 +159,24 @@ let replay ?(since_id = 0) pattern cb =
   in
   loop ()
 
+(* ── Prune ────────────────────────────────────────────────────────── *)
+
+let prune ~keep_since_id () =
+  let db = get_db () in
+  let sql = "DELETE FROM _well_events WHERE id <= ?" in
+  let stmt = Sqlite3.prepare db sql in
+  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int keep_since_id)) in
+  let _ = Sqlite3.step stmt in
+  let _ = Sqlite3.finalize stmt in
+  Sqlite3.changes db
+
 (* ── Typed topic descriptor ────────────────────────────────────────── *)
+
+type 'a typed_event = {
+  id : int;
+  value : 'a;
+  created_at : float;
+}
 
 type 'a topic = {
   t_channel : string;
@@ -176,5 +193,11 @@ let publish_typed ?(ephemeral = false) t value =
 let subscribe_typed t f =
   subscribe t.t_channel (fun event ->
     match t.of_yojson event.payload with
-    | Ok v -> f v
+    | Ok v -> f { id = event.id; value = v; created_at = event.created_at }
+    | Error _ -> ())
+
+let replay_typed ?(since_id = 0) t f =
+  replay ~since_id t.t_channel (fun event ->
+    match t.of_yojson event.payload with
+    | Ok v -> f { id = event.id; value = v; created_at = event.created_at }
     | Error _ -> ())
