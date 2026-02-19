@@ -5,6 +5,11 @@ type model = {
   service_health : (string * string) list;
   recent_logs : Well.Cap_hook.Log_buffer.entry list;
   log_count : int;
+  uptime_s : float;
+  gc : Gc.stat;
+  ocaml_version : string;
+  lv_sessions : int;
+  ws_connections : int;
 }
 
 type msg = Refresh
@@ -12,27 +17,39 @@ type msg = Refresh
 let persistence = Well.LiveView.Ephemeral
 let subscriptions = []
 
-let init _req _props =
+let gather () =
   let tables = !(Well.Db.registered_tables) in
   let health = Well.Service.health () in
   let logs = Well.Cap_hook.Log_buffer.recent 10 in
   { table_count = List.length tables;
     service_health = health;
     recent_logs = logs;
-    log_count = !(Well.Cap_hook.Log_buffer.count); }
+    log_count = !(Well.Cap_hook.Log_buffer.count);
+    uptime_s = Unix.gettimeofday () -. !(Well.Cap_hook.start_time);
+    gc = Gc.stat ();
+    ocaml_version = Sys.ocaml_version;
+    lv_sessions = List.length (Well.LiveView.list_sessions ());
+    ws_connections = Well.LiveView.count_connections (); }
 
-let update _req model _msg =
-  ignore model;
-  let tables = !(Well.Db.registered_tables) in
-  let health = Well.Service.health () in
-  let logs = Well.Cap_hook.Log_buffer.recent 10 in
-  { table_count = List.length tables;
-    service_health = health;
-    recent_logs = logs;
-    log_count = !(Well.Cap_hook.Log_buffer.count); }
+let init _req _props = gather ()
+
+let update _req _model _msg = gather ()
 
 let handle_params _req model = model
 let temporary_assigns model = model
+
+let format_uptime s =
+  let s = int_of_float s in
+  let d = s / 86400 in
+  let h = (s mod 86400) / 3600 in
+  let m = (s mod 3600) / 60 in
+  if d > 0 then Printf.sprintf "%dd %dh %dm" d h m
+  else if h > 0 then Printf.sprintf "%dh %dm" h m
+  else Printf.sprintf "%dm" m
+
+let format_memory_mb gc =
+  let bytes = float_of_int gc.Gc.heap_words *. (float_of_int Sys.word_size /. 8.0) in
+  Printf.sprintf "%.1f MB" (bytes /. 1048576.0)
 
 let view model =
   let services_count = List.length model.service_health in
@@ -55,6 +72,30 @@ let view model =
       </div>
     </div>|}
     model.table_count running services_count model.log_count
+  in
+  let sys_html = Printf.sprintf
+    {|<div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value" data-lv="ov-uptime">%s</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Memory</div>
+        <div class="stat-value" data-lv="ov-memory">%s</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">OCaml</div>
+        <div class="stat-value" data-lv="ov-ocaml" style="font-size:16px">%s</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Sessions / WS</div>
+        <div class="stat-value green" data-lv="ov-conn">%d / %d</div>
+      </div>
+    </div>|}
+    (format_uptime model.uptime_s)
+    (format_memory_mb model.gc)
+    (esc model.ocaml_version)
+    model.lv_sessions model.ws_connections
   in
   let health_rows =
     if model.service_health = [] then
@@ -86,7 +127,7 @@ let view model =
       Printf.sprintf {|<div class="log-stream" style="max-height:300px">%s</div>|} entries
   in
   `Html (Printf.sprintf
-    {|<div>%s
+    {|<div>%s%s
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div class="card">
           <div class="card-title">Services</div>
@@ -98,7 +139,7 @@ let view model =
         </div>
       </div>
     </div>|}
-    stats_html health_rows log_rows)
+    stats_html sys_html health_rows log_rows)
 
 let model_to_yojson m =
   `Assoc [("table_count", `Int m.table_count);

@@ -2795,6 +2795,36 @@ Rules:
 - `(expr)` — parenthesized expression for function calls, operators, anything complex
 - `{...}` — record expression ONLY (e.g. `{name; age}`) — NOT for interpolation
 
+### MLX Common Pitfalls
+
+- **No `empty` node** — use `(txt "")` when you need to render nothing (e.g. in else branches)
+- **`textarea` children must be `node`** — use `<textarea>(txt value)</textarea>`, NOT `<textarea>value</textarea>` (bare variable is string, not node) and NOT `<textarea>"default"</textarea>` (literal string is also not node)
+- **All attribute values are strings** — use `value=(string_of_int n)` for numbers
+- **`_` suffix for OCaml keywords** — `class_`, `type_`, `method_`, `name_`, `for_`
+
+## HTML Attributes Reference
+
+All HTML elements support these optional labeled parameters. There is no `empty` — there are no other attributes beyond this list.
+
+### Available on ALL elements:
+```
+?id  ?class_  ?lang
+?data_lv_click  ?data_lv_submit  ?data_lv_change
+?data_lv_debounce  ?data_lv_throttle  ?data_lv_hook
+?data_lv_navigate  ?data_lv_patch
+?action  ?method_  ?href  ?type_  ?name_  ?placeholder
+?value  ?charset  ?content  ?src  ?rel  ?enctype
+?accept  ?for_  ?multiple (bool — only boolean attr)
+```
+
+### NOT supported (do NOT use):
+`required`, `disabled`, `readonly`, `checked`, `selected`, `autofocus`, `autocomplete`, `min`, `max`, `step`, `rows`, `cols`, `width`, `height`, `target`, `alt`, `aria-*`, `role`, custom `data-*` (only `data-lv-*`)
+
+### Available elements:
+- **Tags**: `html`, `head`, `title`, `body`, `div`, `span`, `p`, `h1`–`h4`, `a`, `main`, `footer`, `header`, `nav`, `section`, `form`, `button`, `input`, `label`, `ul`, `ol`, `li`, `strong`, `em`, `b`, `i`, `small`, `pre`, `code`, `blockquote`, `table`, `thead`, `tbody`, `tr`, `th`, `td`, `textarea`, `select`, `option`, `script`
+- **Void tags** (self-closing): `meta`, `link`
+- **Not available**: `img` (use `raw` if needed)
+
 ## Project Structure
 
 ```
@@ -2886,7 +2916,7 @@ type model = { count: int } [@@deriving yojson]
 type msg = Increment | Decrement | Reset [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral  (* or Session, User *)
-let subscriptions = []  (* MessageBus channels to listen to *)
+let subscriptions = []  (* MessageBus channels — required field *)
 
 let init _req _props = { count = 0 }
 
@@ -2924,7 +2954,7 @@ Key LiveView patterns:
 - `each ~id:"list-id" items ~key:fn render_fn` — keyed list rendering
 - `data_lv_click="MsgName"` — click sends msg to server
 - `data_lv_submit="MsgName"` — form submit
-- `data_lv_change="MsgName"` — input change
+- `data_lv_change="MsgName"` — input change (sends `[MsgName, input_value]`)
 - `data_lv_debounce="300"` — debounce input (ms)
 - `data_lv_navigate="/path"` — client-side navigation
 - `data_lv_hook="HookName"` — attach JS hook
@@ -2933,6 +2963,106 @@ Variant encoding (ppx_deriving_yojson):
 - `Increment` -> `["Increment"]` (JSON array)
 - `SetValue of int` -> `["SetValue", 42]`
 - Click handler sends array format: `data_lv_click="Increment"` sends `["Increment"]`
+- Change handler sends: `data_lv_change="Search"` sends `["Search", "<input value>"]`
+
+### LiveView View Constraints (CRITICAL)
+
+The `view` function's DOM structure must be **stable across renders**. The patching mechanism only handles:
+- `dynamic` — updates text content of marked elements
+- `each` list_ops — adds, removes, reorders keyed list items
+
+**It does NOT handle structural DOM changes.** If `if/else` in the view changes which elements exist, the patch silently fails and the UI does not update.
+
+```ocaml
+(* BAD — structural change breaks patching *)
+let view model =
+  let open Html in
+  (if model.items = [] then
+    <div class_="empty">(txt "Nothing here")</div>
+  else
+    <div class_="list">
+      (each ~id:"items" model.items ~key:... (fun item -> ...))
+    </div>)
+
+(* GOOD — stable structure, conditional text via dynamic *)
+let view model =
+  let open Html in
+  <div>
+    <p>(dynamic "status" (if model.items = [] then "Nothing here" else ""))</p>
+    <div class_="list">
+      (each ~id:"items" model.items
+        ~key:(fun item -> string_of_int item.id)
+        (fun item -> ...))
+    </div>
+  </div>
+```
+
+Rules for LiveView views:
+1. **Always render `each` containers** — even if the list is empty, the container stays in the DOM and list_ops clear it
+2. **Use `dynamic` for conditional text** — not `if/else` that swaps elements
+3. **Keep DOM tree shape identical** between renders — same elements, same nesting, same order
+4. **Hide empty states with CSS** — use `:empty` or `display:none` when a `dynamic` value is empty, not structural conditionals
+
+### LiveView Search/Filter Example
+
+A complete example of a search LiveView with `data_lv_change`:
+
+```ocaml
+(* search_live.mlx *)
+type item = { id: int; name: string } [@@deriving yojson]
+
+type model = {
+  query: string;
+  results: item list;
+  empty_msg: string;
+} [@@deriving yojson]
+
+type msg = Search of string [@@deriving yojson]
+
+let persistence = Well.LiveView.Ephemeral
+let subscriptions = []
+
+let search query =
+  let db = MyModel.get_db () in
+  if query = "" then MyModel.All.query db |> List.map to_item
+  else
+    let q = "%" ^ query ^ "%" in
+    MyModel.Search.query db ~q |> List.map to_item
+
+let make_model query =
+  let results = search query in
+  { query; results;
+    empty_msg = if results = [] then "No results" else "" }
+
+let init _req _props = make_model ""
+
+let update _req _model = function
+  | Search q -> make_model q
+
+let handle_params _req model = model
+let temporary_assigns model = model
+
+let view model =
+  let open Html in
+  <div>
+    <input
+      type_="text"
+      placeholder="Search..."
+      value=model.query
+      data_lv_change="Search"
+      data_lv_debounce="300" />
+    <p>(dynamic "empty_msg" model.empty_msg)</p>
+    <div>
+      (each ~id:"results" model.results
+        ~key:(fun r -> string_of_int r.id)
+        (fun r ->
+          <div>
+            <span>(dynamic "name" r.name)</span>
+          </div>
+        ))
+    </div>
+  </div>
+```
 
 ## Typed Pub/Sub (Well.MessageBus)
 
@@ -3102,6 +3232,10 @@ let title = Well.form req "title" in
   <input type_="text" name_="title" />
   <button type_="submit">(txt "Submit")</button>
 </form>
+
+(* Textarea — children must be node, not bare string *)
+<textarea name_="body" placeholder="Write...">(txt "")</textarea>
+(* with value: *) <textarea name_="body">(txt some_variable)</textarea>
 
 (* File upload *)
 Well.post "/upload" @@ fun req ->

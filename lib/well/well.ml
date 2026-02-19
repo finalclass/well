@@ -1202,12 +1202,19 @@ let rec extract_stream (resp : response) =
 
 (* ── Built-in middleware ─────────────────────────────────────────── *)
 
+let req_ctx (req : request) =
+  let ctx = [("sid", String.sub req.session_id 0 (min 8 (String.length req.session_id)));
+             ("meth", req.meth); ("path", req.path)] in
+  let ctx = match Session_store.get ~session_id:req.session_id ~key:"user_id" with
+    | Some uid -> ("uid", uid) :: ctx | None -> ctx in
+  ctx
+
 let logger : middleware = fun next req ->
   let t0 = Unix.gettimeofday () in
   let resp = next req in
   let dt = (Unix.gettimeofday () -. t0) *. 1000.0 in
   let st = response_status resp in
-  Log.log "%s %s -> %d (%.1fms)" req.meth req.path st dt;
+  Log.log ~ctx:(req_ctx req) "%s %s -> %d (%.1fms)" req.meth req.path st dt;
   resp
 
 let cors ?(origins = ["*"])
@@ -1285,7 +1292,7 @@ let error_handler : middleware = fun next req ->
   try next req
   with exn ->
     let bt = Printexc.get_raw_backtrace () in
-    Log.log ~level:"error" "%s %s ERROR: %s\n%s" req.meth req.path
+    Log.log ~level:"error" ~ctx:(req_ctx req) "%s %s ERROR: %s\n%s" req.meth req.path
       (Printexc.to_string exn) (Printexc.raw_backtrace_to_string bt);
     match !_custom_error_handler with
     | Some h ->
@@ -2171,6 +2178,34 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
     in
     accept_loop ());
   f test_port
+
+(* ── Route introspection ───────────────────────────────────────────── *)
+
+let list_routes () =
+  let seg_to_string = function Static s -> s | Param p -> ":" ^ p in
+  let build_path segs = "/" ^ String.concat "/" (List.map seg_to_string segs) in
+  let lv_endpoints =
+    let acc = ref [] in
+    Hashtbl.iter (fun ep _ -> acc := ep :: !acc) Liveview.view_registry;
+    !acc
+  in
+  let app_routes =
+    List.rev_map (fun r ->
+      let path = build_path r.segments in
+      let kind =
+        if List.mem ("/live" ^ path) lv_endpoints then "liveview"
+        else "handler"
+      in
+      (r.meth, path, kind)
+    ) !routes
+  in
+  let cap = List.rev_map (fun r ->
+    (r.meth, build_path r.segments, "cap")
+  ) !cap_routes in
+  let ws = List.rev_map (fun r ->
+    ("WS", build_path r.ws_segments, "websocket")
+  ) !ws_routes in
+  app_routes @ cap @ ws
 
 (* ── LiveView registration ─────────────────────────────────────────── *)
 

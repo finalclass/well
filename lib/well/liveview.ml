@@ -92,6 +92,18 @@ let broadcast_to_user user_id topic exclude_ws msg =
         conns
   | None -> ()
 
+(* ── Session/connection introspection ─────────────────────────────── *)
+
+let list_sessions () =
+  Hashtbl.fold (fun key data acc ->
+    (key, data.endpoint, data.last_active) :: acc
+  ) sessions []
+
+let count_connections () =
+  Hashtbl.fold (fun _ conns acc ->
+    acc + List.length conns
+  ) user_connections 0
+
 (* ── Session cleanup ───────────────────────────────────────────────── *)
 
 let cleanup_sessions () =

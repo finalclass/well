@@ -3,8 +3,8 @@
 let _file : out_channel option ref = ref None
 let _enabled = ref true
 
-(* Hook: called with (timestamp, level, message) on every log line *)
-let _hook : (float -> string -> string -> unit) option ref = ref None
+(* Hook: called with (timestamp, level, message, ctx) on every log line *)
+let _hook : (float -> string -> string -> (string * string) list -> unit) option ref = ref None
 
 let init () =
   if !_enabled && !_file = None then begin
@@ -25,9 +25,13 @@ let format_ts t =
     (tm.tm_year + 1900) (tm.tm_mon + 1) tm.tm_mday
     tm.tm_hour tm.tm_min tm.tm_sec ms
 
-let write_line level msg =
+let write_line ?(ctx=[]) level msg =
   let t = Unix.gettimeofday () in
-  let line = Printf.sprintf "[well] %s [%s] %s" (format_ts t) level msg in
+  let ctx_str =
+    if ctx = [] then ""
+    else " " ^ String.concat " " (List.map (fun (k, v) -> k ^ "=" ^ v) ctx)
+  in
+  let line = Printf.sprintf "[well] %s [%s]%s %s" (format_ts t) level ctx_str msg in
   print_string line; print_char '\n'; flush stdout;
   (match !_file with
    | Some oc ->
@@ -36,8 +40,8 @@ let write_line level msg =
        flush oc
    | None -> ());
   (match !_hook with
-   | Some f -> (try f t level msg with _ -> ())
+   | Some f -> (try f t level msg ctx with _ -> ())
    | None -> ())
 
-let log ?(level = "info") fmt =
-  Printf.ksprintf (write_line level) fmt
+let log ?(level = "info") ?(ctx=[]) fmt =
+  Printf.ksprintf (write_line ~ctx level) fmt

@@ -50,7 +50,7 @@ let view model =
     {|<div class="card">
       <div class="flex items-center justify-between mb-3">
         <div class="card-title" style="margin-bottom:0">MessageBus Events</div>
-        <button class="btn btn-sm" data-lv-click="[\"Clear\"]">Clear</button>
+        <button class="btn btn-sm" data-lv-click="[&quot;Clear&quot;]">Clear</button>
       </div>
       <div data-lv="msg-stream">%s</div>
     </div>|}

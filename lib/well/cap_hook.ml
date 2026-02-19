@@ -26,6 +26,10 @@ let _cap_init : (unit -> unit) ref = ref (fun () -> ())
 
 let cap_password = ref ""
 
+(* ── Start time (set by well_cap init) ──────────────────────────── *)
+
+let start_time = ref 0.0
+
 (* ── Log store (growable array) ──────────────────────────────────── *)
 
 module Log_buffer = struct
@@ -34,9 +38,10 @@ module Log_buffer = struct
     level : string;
     message : string;
     timestamp : float;
+    ctx : (string * string) list;
   }
 
-  let _dummy = { id = 0; level = ""; message = ""; timestamp = 0.0 }
+  let _dummy = { id = 0; level = ""; message = ""; timestamp = 0.0; ctx = [] }
   let _arr = ref (Array.make 4096 _dummy)
   let count = ref 0
   let mu = Mutex.create ()
@@ -49,11 +54,11 @@ module Log_buffer = struct
       _arr := new_arr
     end
 
-  let push ~level ~message ~timestamp =
+  let push ~level ~message ~timestamp ?(ctx=[]) () =
     Mutex.lock mu;
     _ensure_capacity ();
     let id = !count in
-    let entry = { id; level; message; timestamp } in
+    let entry = { id; level; message; timestamp; ctx } in
     (!_arr).(id) <- entry;
     incr count;
     Mutex.unlock mu;
@@ -70,6 +75,66 @@ module Log_buffer = struct
     Mutex.unlock mu;
     !result
 
+  let recent_filtered ~n ?(level="all") ?(search="") ?(since=0.0) ?(until=0.0) () =
+    Mutex.lock mu;
+    let result = ref [] in
+    let found = ref 0 in
+    let i = ref (!count - 1) in
+    while !i >= 0 && !found < n do
+      let e = (!_arr).(!i) in
+      let level_ok = level = "all" || e.level = level in
+      let search_ok = search = "" ||
+        (try let _ = Str.search_forward (Str.regexp_string_case_fold search) e.message 0 in true
+         with Not_found -> false) in
+      let since_ok = since = 0.0 || e.timestamp >= since in
+      let until_ok = until = 0.0 || e.timestamp <= until in
+      if level_ok && search_ok && since_ok && until_ok then begin
+        result := e :: !result;
+        incr found
+      end;
+      (* Stop early if we've gone past the date range *)
+      if since > 0.0 && e.timestamp < since then i := 0
+      else decr i
+    done;
+    Mutex.unlock mu;
+    !result
+
+  (* Find entry nearest to timestamp, return entries around it + target id *)
+  let around ~target_ts ~n =
+    Mutex.lock mu;
+    if !count = 0 then begin
+      Mutex.unlock mu;
+      ([], -1)
+    end else begin
+      (* Binary search for nearest entry *)
+      let lo = ref 0 in
+      let hi = ref (!count - 1) in
+      while !lo < !hi do
+        let mid = !lo + (!hi - !lo) / 2 in
+        if (!_arr).(mid).timestamp < target_ts then lo := mid + 1
+        else hi := mid
+      done;
+      (* lo is the first entry >= target_ts, check if lo-1 is closer *)
+      let nearest =
+        if !lo >= !count then !count - 1
+        else if !lo > 0 then
+          let diff_lo = abs_float ((!_arr).(!lo).timestamp -. target_ts) in
+          let diff_prev = abs_float ((!_arr).(!lo - 1).timestamp -. target_ts) in
+          if diff_prev < diff_lo then !lo - 1 else !lo
+        else !lo
+      in
+      let target_id = (!_arr).(nearest).id in
+      let half = n / 2 in
+      let start_idx = max 0 (nearest - half) in
+      let end_idx = min !count (start_idx + n) in
+      let result = ref [] in
+      for i = end_idx - 1 downto start_idx do
+        result := (!_arr).(i) :: !result
+      done;
+      Mutex.unlock mu;
+      (!result, target_id)
+    end
+
   let before ~before_id ~n =
     Mutex.lock mu;
     let end_idx = min before_id !count in
@@ -82,9 +147,17 @@ module Log_buffer = struct
     !result
 
   let entry_to_json (e : entry) =
+    let ctx_json =
+      if e.ctx = [] then "{}"
+      else
+        "{" ^ String.concat ","
+          (List.map (fun (k, v) ->
+            Printf.sprintf {|"%s":"%s"|} (String.escaped k) (String.escaped v)
+          ) e.ctx) ^ "}"
+    in
     Printf.sprintf
-      {|{"id":%d,"level":"%s","message":"%s","timestamp":%f}|}
-      e.id (String.escaped e.level) (String.escaped e.message) e.timestamp
+      {|{"id":%d,"level":"%s","message":"%s","timestamp":%f,"ctx":%s}|}
+      e.id (String.escaped e.level) (String.escaped e.message) e.timestamp ctx_json
 
   (* Parse a log line: [well] YYYY-MM-DD HH:MM:SS.mmm [LEVEL] MESSAGE *)
   let parse_line line =
@@ -125,7 +198,7 @@ module Log_buffer = struct
         | Some (level, msg, ts) ->
             _ensure_capacity ();
             let id = !count in
-            (!_arr).(id) <- { id; level; message = msg; timestamp = ts };
+            (!_arr).(id) <- { id; level; message = msg; timestamp = ts; ctx = [] };
             incr count
         | None -> ()
       done with End_of_file -> ());
