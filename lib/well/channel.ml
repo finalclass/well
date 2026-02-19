@@ -42,13 +42,25 @@ let handler (req : Types.request) (ws : Websocket.t) =
   (* Per-client subscription tracking: channel -> sub_id list *)
   let client_subs : (string, int list) Hashtbl.t = Hashtbl.create 8 in
   Eio.Switch.run @@ fun sw ->
+  Websocket.start_keepalive ~sw ~sleep:(!Service._sleep) ws;
+  let rate = !(Service._ws_rate_limit) in
+  let limiter = Websocket.create_limiter ~max_tokens:rate ~refill_rate:rate () in
   let unified = Eio.Stream.create 64 in
   (* WS reader fiber *)
   Eio.Fiber.fork ~sw (fun () ->
     let rec read_loop () =
       match Websocket.receive_json ws with
       | None -> Eio.Stream.add unified WsClosed
-      | Some json -> Eio.Stream.add unified (WsMsg json); read_loop ()
+      | Some json ->
+          if Websocket.rate_limit_allow limiter then
+            Eio.Stream.add unified (WsMsg json)
+          else
+            Log.log ~level:"warn" "channel ws rate limit exceeded — dropping message";
+          read_loop ()
+      | exception Websocket.Frame_too_large ->
+          Log.log ~level:"warn" "channel ws frame too large — closing connection";
+          Websocket.close ws;
+          Eio.Stream.add unified WsClosed
     in
     read_loop ()
   );

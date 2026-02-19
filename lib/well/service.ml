@@ -60,6 +60,9 @@ let _cast_sw : Eio.Switch.t option ref = ref None
 (* Forward ref — set by well.ml before start_all, provides Eio sleep *)
 let _sleep : (float -> unit) ref = ref (fun s -> Unix.sleepf s)
 
+(* Forward ref — ws rate limit (messages per second), set by well.ml *)
+let _ws_rate_limit : float ref = ref 100.0
+
 (* ── Registration (at module init time) ──────────────────────────── *)
 
 let register ?(restart = Permanent) spec =
@@ -236,6 +239,18 @@ let handle_socket_line line =
         | `String s -> s
         | _ -> "data/app.sqlite"
       in
+      (* Restrict to paths under data/ to prevent information disclosure *)
+      let safe_path =
+        String.length db_path >= 5
+        && String.sub db_path 0 5 = "data/"
+        && not (String.contains db_path '\000')
+        && (let decoded = db_path in
+            let segs = String.split_on_char '/' decoded in
+            not (List.exists (fun s -> s = ".." || s = ".") segs))
+      in
+      if not safe_path then
+        Yojson.Safe.to_string (`Assoc [("error", `String "invalid db path")])
+      else
       let db = Sqlite3.db_open db_path in
       let entries = Db.diff db in
       ignore (Sqlite3.db_close db);

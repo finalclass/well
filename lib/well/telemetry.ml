@@ -7,12 +7,18 @@ let http_errors_5xx = Atomic.make 0
 let http_latency_sum_us = Atomic.make 0
 let ws_messages_received = Atomic.make 0
 let bus_events_published = Atomic.make 0
+let active_connections = Atomic.make 0
+let active_ws_connections = Atomic.make 0
 
 let incr_requests () = Atomic.incr http_requests
 let incr_errors () = Atomic.incr http_errors_5xx
 let add_latency_us us = ignore (Atomic.fetch_and_add http_latency_sum_us us)
 let incr_ws_messages () = Atomic.incr ws_messages_received
 let incr_bus_events () = Atomic.incr bus_events_published
+let incr_active_connections () = Atomic.incr active_connections
+let decr_active_connections () = ignore (Atomic.fetch_and_add active_connections (-1))
+let incr_active_ws () = Atomic.incr active_ws_connections
+let decr_active_ws () = ignore (Atomic.fetch_and_add active_ws_connections (-1))
 
 type counter_snapshot = {
   total_requests : int;

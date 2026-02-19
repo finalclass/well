@@ -40,12 +40,14 @@ module Frame = struct
   let text payload = { fin = true; opcode = Text; payload }
   let close () = { fin = true; opcode = Close; payload = "" }
   let pong payload = { fin = true; opcode = Pong; payload }
+  let ping payload = { fin = true; opcode = Ping; payload }
 end
 
 type t = {
   flow : Eio.Flow.two_way_ty Eio.Resource.t;
   reader : Eio.Buf_read.t;
   mutable closed : bool;
+  mutable last_pong : float;
 }
 
 (* Private helpers *)
@@ -100,6 +102,10 @@ open struct
     Buffer.contents buf
 end
 
+let _max_frame_size = ref (10 * 1024 * 1024)  (* 10 MB default *)
+
+exception Frame_too_large
+
 let read_frame ws =
   if ws.closed then None
   else
@@ -129,6 +135,10 @@ let read_frame ws =
                  lor Char.code bytes.[7]
                else payload_len
              in
+             if payload_len > !_max_frame_size then begin
+               ws.closed <- true;
+               raise Frame_too_large
+             end;
              let mask_key =
                if masked then Some (read_bytes ws.reader 4) else None
              in
@@ -177,7 +187,9 @@ let receive ws =
          | Opcode.Ping ->
              write_frame ws (Frame.pong frame.payload);
              loop ()
-         | Opcode.Pong -> loop ()
+         | Opcode.Pong ->
+             ws.last_pong <- Unix.gettimeofday ();
+             loop ()
          | Opcode.Close ->
              close ws;
              None
@@ -212,4 +224,49 @@ let handshake headers flow reader =
          Sec-WebSocket-Accept: " ^ accept ^ "\r\n\r\n"
       in
       write_bytes flow response;
-      Ok { flow; reader; closed = false }
+      Ok { flow; reader; closed = false; last_pong = Unix.gettimeofday () }
+
+(* ── Rate limiting ─────────────────────────────────────────────────── *)
+
+type rate_limiter = {
+  mutable tokens : float;
+  mutable last_refill : float;
+  max_tokens : float;
+  refill_rate : float;  (* tokens per second *)
+}
+
+let create_limiter ?(max_tokens = 100.0) ?(refill_rate = 100.0) () =
+  { tokens = max_tokens; last_refill = Unix.gettimeofday ();
+    max_tokens; refill_rate }
+
+let rate_limit_allow limiter =
+  let now = Unix.gettimeofday () in
+  let elapsed = now -. limiter.last_refill in
+  limiter.tokens <- min limiter.max_tokens (limiter.tokens +. elapsed *. limiter.refill_rate);
+  limiter.last_refill <- now;
+  if limiter.tokens >= 1.0 then begin
+    limiter.tokens <- limiter.tokens -. 1.0;
+    true
+  end else
+    false
+
+(* ── Keepalive ────────────────────────────────────────────────────── *)
+
+let start_keepalive ~sw ~sleep ?(interval = 30.0) ?(timeout = 10.0) ws =
+  Eio.Fiber.fork ~sw (fun () ->
+    let rec loop () =
+      sleep interval;
+      if ws.closed then ()
+      else begin
+        (try write_frame ws (Frame.ping "") with _ -> ());
+        sleep timeout;
+        if ws.closed then ()
+        else if Unix.gettimeofday () -. ws.last_pong > interval +. timeout then begin
+          Log.log ~level:"warn" "ws keepalive timeout — closing";
+          close ws
+        end else
+          loop ()
+      end
+    in
+    loop ()
+  )

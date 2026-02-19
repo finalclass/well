@@ -1,5 +1,9 @@
 (* Db — Runtime schema registry and automagic migrations *)
 
+(* SQLite identifier quoting — prevents injection via table/column names *)
+let quote_id name =
+  "\"" ^ String.concat "\"\"" (String.split_on_char '"' name) ^ "\""
+
 (* ── Schema types ─────────────────────────────────────────────────── *)
 
 type column = {
@@ -24,15 +28,15 @@ let register_table tbl =
 (* ── SQLite introspection ─────────────────────────────────────────── *)
 
 let table_exists db table_name =
-  let sql = Printf.sprintf
-    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='%s'" table_name in
+  let sql = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?" in
   let stmt = Sqlite3.prepare db sql in
+  ignore (Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT table_name));
   let found = Sqlite3.step stmt = Sqlite3.Rc.ROW in
   ignore (Sqlite3.finalize stmt);
   found
 
 let get_db_columns db table_name =
-  let sql = Printf.sprintf "PRAGMA table_info(%s)" table_name in
+  let sql = Printf.sprintf "PRAGMA table_info(%s)" (quote_id table_name) in
   let stmt = Sqlite3.prepare db sql in
   let cols = ref [] in
   let rec loop () =
@@ -64,11 +68,11 @@ let create_table_sql tbl =
     List.map (fun c ->
       let pk = if c.primary then " PRIMARY KEY" else "" in
       let nn = if c.nullable || c.primary then "" else " NOT NULL" in
-      Printf.sprintf "%s %s%s%s" c.cname c.sqlite_type pk nn
+      Printf.sprintf "%s %s%s%s" (quote_id c.cname) c.sqlite_type pk nn
     ) tbl.columns
   in
   Printf.sprintf "CREATE TABLE IF NOT EXISTS %s (%s)"
-    tbl.name (String.concat ", " col_strs)
+    (quote_id tbl.name) (String.concat ", " col_strs)
 
 (* ── Diff types ───────────────────────────────────────────────────── *)
 
@@ -152,7 +156,7 @@ let auto_migrate db =
           in
           let nn = if col.nullable then "" else " NOT NULL" in
           let sql = Printf.sprintf "ALTER TABLE %s ADD COLUMN %s %s%s DEFAULT %s"
-            tbl.name col.cname col.sqlite_type nn default in
+            (quote_id tbl.name) (quote_id col.cname) col.sqlite_type nn default in
           ignore (Sqlite3.exec db sql);
           Log.log "%s: added column %s" tbl.name col.cname
         end

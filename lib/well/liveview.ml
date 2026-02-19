@@ -263,6 +263,8 @@ let encode_navigate url html =
 
 (* ── Uploads ──────────────────────────────────────────────────────── *)
 
+let _max_upload_size = ref (50 * 1024 * 1024)  (* 50 MB default *)
+
 type upload_entry = {
   upload_id : string;
   filename : string;
@@ -271,9 +273,12 @@ type upload_entry = {
   chunks : Buffer.t;
   mutable chunks_received : int;
   chunk_count : int;
+  created_at : float;
 }
 
 let active_uploads : (string, upload_entry) Hashtbl.t = Hashtbl.create 16
+
+let _upload_max_age = 300.0  (* 5 minutes — abandon timeout *)
 
 let consume_upload upload_id =
   match Hashtbl.find_opt active_uploads upload_id with
@@ -282,6 +287,13 @@ let consume_upload upload_id =
       Hashtbl.remove active_uploads upload_id;
       Some (entry.filename, entry.content_type, data)
   | None -> None
+
+let cleanup_uploads () =
+  let now = Unix.gettimeofday () in
+  let to_remove = Hashtbl.fold (fun id entry acc ->
+    if now -. entry.created_at > _upload_max_age then id :: acc else acc
+  ) active_uploads [] in
+  List.iter (Hashtbl.remove active_uploads) to_remove
 
 (* ── Unified handler message type ─────────────────────────────────── *)
 
@@ -368,13 +380,26 @@ let handler (req : Types.request) (ws : Websocket.t) =
   register_connection session_id conn;
   cleanup_sessions ();
   Eio.Switch.run @@ fun sw ->
+  Websocket.start_keepalive ~sw ~sleep:(!Service._sleep) ws;
+  let rate = !(Service._ws_rate_limit) in
+  let limiter = Websocket.create_limiter ~max_tokens:rate ~refill_rate:rate () in
   let unified = Eio.Stream.create 64 in
   (* Fork: WS reader fiber *)
   Eio.Fiber.fork ~sw (fun () ->
     let rec read_loop () =
       match Websocket.receive_json ws with
       | None -> Eio.Stream.add unified WsClosed
-      | Some json -> Telemetry.incr_ws_messages (); Eio.Stream.add unified (WsMsg json); read_loop ()
+      | Some json ->
+          if Websocket.rate_limit_allow limiter then begin
+            Telemetry.incr_ws_messages ();
+            Eio.Stream.add unified (WsMsg json)
+          end else
+            Log.log ~level:"warn" "ws rate limit exceeded — dropping message";
+          read_loop ()
+      | exception Websocket.Frame_too_large ->
+          Log.log ~level:"warn" "ws frame too large — closing connection";
+          Websocket.close ws;
+          Eio.Stream.add unified WsClosed
     in
     read_loop ()
   );
@@ -540,6 +565,14 @@ let handler (req : Types.request) (ws : Websocket.t) =
              let _chunk_index = try json |> member "chunk_index" |> to_int with _ -> 0 in
              let chunk_count = try json |> member "chunk_count" |> to_int with _ -> 1 in
              let size = try json |> member "size" |> to_int with _ -> 0 in
+             if size > !_max_upload_size then begin
+               Log.log ~level:"warn" "upload rejected: size %d exceeds limit %d" size !_max_upload_size;
+               Websocket.send_json ws
+                 (encode_event topic "upload_error"
+                    (`Assoc [("upload_id", `String upload_id);
+                             ("error", `String "file too large")]));
+               loop ()
+             end else
              let chunk_data = try json |> member "chunk_data" |> to_string with _ -> "" in
              (* Decode base64 chunk *)
              let decoded =
@@ -576,7 +609,8 @@ let handler (req : Types.request) (ws : Websocket.t) =
                | None ->
                    let e = { upload_id; filename; content_type; size;
                              chunks = Buffer.create (max 1024 size);
-                             chunks_received = 0; chunk_count } in
+                             chunks_received = 0; chunk_count;
+                             created_at = Unix.gettimeofday () } in
                    Hashtbl.replace active_uploads upload_id e;
                    e
              in

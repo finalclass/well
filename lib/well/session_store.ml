@@ -111,6 +111,33 @@ let delete_all_with_prefix ~session_id ~prefix =
   let _ = Sqlite3.finalize stmt in
   ()
 
+let copy_and_delete ~old_session_id ~new_session_id =
+  with_lock @@ fun () ->
+  let db = get_db () in
+  let sql = "INSERT INTO sessions (session_id, key, value, updated_at) \
+             SELECT ?, key, value, ? FROM sessions WHERE session_id = ?" in
+  let stmt = Sqlite3.prepare db sql in
+  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT new_session_id) in
+  let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.FLOAT (Unix.gettimeofday ())) in
+  let _ = Sqlite3.bind stmt 3 (Sqlite3.Data.TEXT old_session_id) in
+  let _ = Sqlite3.step stmt in
+  let _ = Sqlite3.finalize stmt in
+  let del = Sqlite3.prepare db "DELETE FROM sessions WHERE session_id = ?" in
+  let _ = Sqlite3.bind del 1 (Sqlite3.Data.TEXT old_session_id) in
+  let _ = Sqlite3.step del in
+  let _ = Sqlite3.finalize del in
+  ()
+
+let check () =
+  with_lock @@ fun () ->
+  try
+    let db = get_db () in
+    let stmt = Sqlite3.prepare db "SELECT 1" in
+    let ok = Sqlite3.step stmt = Sqlite3.Rc.ROW in
+    let _ = Sqlite3.finalize stmt in
+    ok
+  with _ -> false
+
 let cleanup ?(max_age_days = 30) () =
   with_lock @@ fun () ->
   let db = get_db () in

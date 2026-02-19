@@ -280,8 +280,32 @@ let mime_to_ext mime =
 (* ── Path safety ──────────────────────────────────────────────────── *)
 
 let is_safe_path path =
-  let segments = String.split_on_char '/' path in
+  (* Inline percent-decode to detect %2e%2e traversal *)
+  let hex c =
+    if c >= '0' && c <= '9' then Char.code c - 48
+    else if c >= 'a' && c <= 'f' then Char.code c - 87
+    else if c >= 'A' && c <= 'F' then Char.code c - 55
+    else -1
+  in
+  let len = String.length path in
+  let buf = Buffer.create len in
+  let i = ref 0 in
+  while !i < len do
+    if path.[!i] = '%' && !i + 2 < len then begin
+      let h = hex path.[!i + 1] and l = hex path.[!i + 2] in
+      if h >= 0 && l >= 0 then begin
+        Buffer.add_char buf (Char.chr (h * 16 + l)); i := !i + 3
+      end else begin
+        Buffer.add_char buf path.[!i]; incr i
+      end
+    end else begin
+      Buffer.add_char buf path.[!i]; incr i
+    end
+  done;
+  let decoded = Buffer.contents buf in
+  let segments = String.split_on_char '/' decoded in
   not (List.exists (fun seg -> seg = ".." || seg = ".") segments)
+  && not (String.contains decoded '\000')
 
 let file_ext path =
   match String.rindex_opt path '.' with
@@ -445,8 +469,10 @@ let () = Channel._register_ws_route := ws
 (* ── Session cookie ───────────────────────────────────────────────── *)
 
 let generate_session_id () =
-  let data = Printf.sprintf "%f-%d" (Unix.gettimeofday ()) (Random.bits ()) in
-  Digestif.SHA1.(digest_string data |> to_hex)
+  let bytes = Mirage_crypto_rng.generate 32 in
+  let buf = Buffer.create 64 in
+  String.iter (fun c -> Buffer.add_string buf (Printf.sprintf "%02x" (Char.code c))) bytes;
+  Buffer.contents buf
 
 let parse_session_id headers =
   match List.assoc_opt "cookie" headers with
@@ -473,6 +499,7 @@ end)
 
 (* ── Session middleware ───────────────────────────────────────────── *)
 
+let _tls_active = ref false
 let _flash_prefix = "_flash:"
 
 let session_middleware : middleware = fun next req ->
@@ -491,9 +518,10 @@ let session_middleware : middleware = fun next req ->
   let req = Flash_ctx.set flash_entries { req with session_id } in
   let resp = next req in
   if new_session then
+    let secure = if !_tls_active then "; Secure" else "" in
     header "Set-Cookie"
-      (Printf.sprintf "well_session=%s; HttpOnly; SameSite=Strict; Path=/"
-         session_id)
+      (Printf.sprintf "well_session=%s; HttpOnly; SameSite=Lax; Path=/%s"
+         session_id secure)
       resp
   else resp
 
@@ -510,6 +538,23 @@ let session_delete req key =
 
 let session_clear req =
   Session_store.clear ~session_id:req.session_id
+
+let _session_regenerate_hook : (string -> string -> unit) ref = ref (fun _ _ -> ())
+
+let session_regenerate req =
+  let old_sid = req.session_id in
+  let new_sid = generate_session_id () in
+  Session_store.copy_and_delete ~old_session_id:old_sid ~new_session_id:new_sid;
+  !_session_regenerate_hook old_sid new_sid;
+  let new_req = { req with session_id = new_sid } in
+  let secure = if !_tls_active then "; Secure" else "" in
+  let set_cookie resp =
+    header "Set-Cookie"
+      (Printf.sprintf "well_session=%s; HttpOnly; SameSite=Lax; Path=/%s"
+         new_sid secure)
+      resp
+  in
+  (new_req, set_cookie)
 
 (* ── RPC context ─────────────────────────────────────────────────── *)
 
@@ -861,25 +906,36 @@ let parse_request_line reader =
   | [ meth; path; _version ] -> (meth, path)
   | _ -> ("GET", "/")
 
+exception Headers_too_large
+
+let _max_header_count = 100
+let _max_header_bytes = 64 * 1024  (* 64 KB total *)
+
 let parse_headers reader =
-  let rec go acc =
+  let rec go acc count total_bytes =
     let line = read_line_crlf reader in
     if line = "" then List.rev acc
     else
-      match String.index_opt line ':' with
-      | None -> go acc
-      | Some i ->
-          let name = String.sub line 0 i |> String.lowercase_ascii in
-          let value =
-            String.sub line (i + 1) (String.length line - i - 1)
-            |> String.trim
-          in
-          go ((name, value) :: acc)
+      let total_bytes = total_bytes + String.length line + 2 in
+      let count = count + 1 in
+      if count > _max_header_count || total_bytes > _max_header_bytes then
+        raise Headers_too_large
+      else
+        match String.index_opt line ':' with
+        | None -> go acc count total_bytes
+        | Some i ->
+            let name = String.sub line 0 i |> String.lowercase_ascii in
+            let value =
+              String.sub line (i + 1) (String.length line - i - 1)
+              |> String.trim
+            in
+            go ((name, value) :: acc) count total_bytes
   in
-  go []
+  go [] 0 0
 
 let read_chunked_body reader =
   let buf = Buffer.create 4096 in
+  let total = ref 0 in
   let rec loop () =
     let line = read_line_crlf reader in
     let size_str =
@@ -890,6 +946,8 @@ let read_chunked_body reader =
     match int_of_string_opt ("0x" ^ String.trim size_str) with
     | None | Some 0 -> Buffer.contents buf
     | Some n ->
+        total := !total + n;
+        if !total > !_max_body_size then raise Body_too_large;
         Buffer.add_string buf (Eio.Buf_read.take n reader);
         (try ignore (read_line_crlf reader) with _ -> ());
         loop ()
@@ -974,6 +1032,42 @@ let rec response_status (resp : response) : int =
 
 (* ── Static file serving ──────────────────────────────────────────── *)
 
+let parse_range_header headers total_size =
+  match List.assoc_opt "range" headers with
+  | None -> None
+  | Some v ->
+      let v = String.trim v in
+      if String.length v > 6 && String.sub v 0 6 = "bytes=" then
+        let range_spec = String.sub v 6 (String.length v - 6) in
+        (* Only support single range, no multipart *)
+        if String.contains range_spec ',' then None
+        else
+          match String.index_opt range_spec '-' with
+          | None -> None
+          | Some dash ->
+              let start_s = String.sub range_spec 0 dash in
+              let end_s = String.sub range_spec (dash + 1) (String.length range_spec - dash - 1) in
+              let start_byte =
+                if start_s = "" then None
+                else (try Some (int_of_string start_s) with _ -> None)
+              in
+              let end_byte =
+                if end_s = "" then None
+                else (try Some (int_of_string end_s) with _ -> None)
+              in
+              (match start_byte, end_byte with
+               | Some s, Some e when s >= 0 && e >= s && s < total_size ->
+                   Some (s, min e (total_size - 1))
+               | Some s, None when s >= 0 && s < total_size ->
+                   Some (s, total_size - 1)
+               | None, Some suffix when suffix > 0 ->
+                   let s = max 0 (total_size - suffix) in
+                   Some (s, total_size - 1)
+               | _ -> Some (-1, -1))  (* invalid range sentinel *)
+      else None
+
+let _static_stream_threshold = 1024 * 1024 (* 1 MB — stream files larger than this *)
+
 let try_serve_static meth path headers =
   if meth <> "GET" && meth <> "HEAD" then None
   else
@@ -990,11 +1084,12 @@ let try_serve_static meth path headers =
             in
             if rel = "" || not (is_safe_path rel) then try_mounts rest
             else
-              let file_path = Filename.concat mount.dir rel in
+              let file_path = Filename.concat mount.dir (url_decode rel) in
               (try
                  let stat = Unix.stat file_path in
                  if stat.Unix.st_kind <> Unix.S_REG then try_mounts rest
                  else
+                   let total_size = stat.Unix.st_size in
                    let etag = file_etag stat in
                    let client_etag =
                      List.assoc_opt "if-none-match" headers
@@ -1013,27 +1108,105 @@ let try_serve_static meth path headers =
                        if is_text_mime mime then mime ^ "; charset=utf-8"
                        else mime
                      in
-                     let body =
-                       if meth = "HEAD" then ""
-                       else
-                         let ic = open_in_bin file_path in
-                         let len = in_channel_length ic in
-                         let buf = Bytes.create len in
-                         really_input ic buf 0 len;
-                         close_in ic;
-                         Bytes.unsafe_to_string buf
-                     in
-                     Some
-                       {
-                         r_status = 200;
-                         r_headers =
-                           [
-                             ("Content-Type", content_type);
-                             ("ETag", etag);
-                             ("Cache-Control", "public, max-age=3600");
-                           ];
-                         r_body = body;
-                       }
+                     let range = parse_range_header headers total_size in
+                     (match range with
+                      | Some (-1, -1) ->
+                          (* Invalid range *)
+                          Some {
+                            r_status = 416;
+                            r_headers = [
+                              ("Content-Range", Printf.sprintf "bytes */%d" total_size);
+                              ("Accept-Ranges", "bytes");
+                            ];
+                            r_body = "Range Not Satisfiable";
+                          }
+                      | Some (start_byte, end_byte) when meth <> "HEAD" ->
+                          let len = end_byte - start_byte + 1 in
+                          let ic = open_in_bin file_path in
+                          let buf =
+                            (try
+                               seek_in ic start_byte;
+                               let b = Bytes.create len in
+                               really_input ic b 0 len;
+                               close_in ic;
+                               b
+                             with exn -> close_in_noerr ic; raise exn)
+                          in
+                          Some {
+                            r_status = 206;
+                            r_headers = [
+                              ("Content-Type", content_type);
+                              ("Content-Range", Printf.sprintf "bytes %d-%d/%d" start_byte end_byte total_size);
+                              ("Accept-Ranges", "bytes");
+                              ("ETag", etag);
+                              ("Cache-Control", "public, max-age=3600");
+                            ];
+                            r_body = Bytes.unsafe_to_string buf;
+                          }
+                      | Some _ (* HEAD with range *) ->
+                          Some {
+                            r_status = 206;
+                            r_headers = [
+                              ("Content-Type", content_type);
+                              ("Accept-Ranges", "bytes");
+                              ("ETag", etag);
+                              ("Cache-Control", "public, max-age=3600");
+                            ];
+                            r_body = "";
+                          }
+                      | None ->
+                          (* Normal request — full file *)
+                          if meth = "HEAD" then
+                            Some
+                              {
+                                r_status = 200;
+                                r_headers =
+                                  [
+                                    ("Content-Type", content_type);
+                                    ("Content-Length", string_of_int total_size);
+                                    ("Accept-Ranges", "bytes");
+                                    ("ETag", etag);
+                                    ("Cache-Control", "public, max-age=3600");
+                                  ];
+                                r_body = "";
+                              }
+                          else if total_size > _static_stream_threshold then
+                            (* Large file — mark for streaming by caller *)
+                            Some
+                              {
+                                r_status = -1;  (* sentinel: stream this file *)
+                                r_headers =
+                                  [
+                                    ("Content-Type", content_type);
+                                    ("Accept-Ranges", "bytes");
+                                    ("ETag", etag);
+                                    ("Cache-Control", "public, max-age=3600");
+                                    ("_stream_path", file_path);
+                                  ];
+                                r_body = "";
+                              }
+                          else
+                            let ic = open_in_bin file_path in
+                            let buf =
+                              (try
+                                 let b = Bytes.create total_size in
+                                 really_input ic b 0 total_size;
+                                 close_in ic;
+                                 b
+                               with exn -> close_in_noerr ic; raise exn)
+                            in
+                            Some
+                              {
+                                r_status = 200;
+                                r_headers =
+                                  [
+                                    ("Content-Type", content_type);
+                                    ("Accept-Ranges", "bytes");
+                                    ("ETag", etag);
+                                    ("Cache-Control", "public, max-age=3600");
+                                  ];
+                                r_body = Bytes.unsafe_to_string buf;
+                              })
                with
               | Unix.Unix_error (Unix.ENOENT, _, _) -> try_mounts rest
               | Unix.Unix_error (Unix.EACCES, _, _) ->
@@ -1105,6 +1278,7 @@ let should_compress content_type body_len =
 
 let maybe_compress headers resolved =
   if resolved.r_body = "" then resolved
+  else if resolved.r_status = 206 || resolved.r_status = 304 then resolved
   else if not (accepts_gzip headers) then resolved
   else
     let ct =
@@ -1136,13 +1310,17 @@ let status_text = function
   | 401 -> "Unauthorized"
   | 403 -> "Forbidden"
   | 404 -> "Not Found"
+  | 206 -> "Partial Content"
   | 405 -> "Method Not Allowed"
+  | 408 -> "Request Timeout"
   | 413 -> "Payload Too Large"
+  | 416 -> "Range Not Satisfiable"
   | 429 -> "Too Many Requests"
+  | 431 -> "Request Header Fields Too Large"
   | 500 -> "Internal Server Error"
   | code -> string_of_int code
 
-let write_response flow resolved =
+let write_response ?(keep_alive=false) ?(head=false) flow resolved =
   let buf = Buffer.create 256 in
   Buffer.add_string buf
     (Printf.sprintf "HTTP/1.1 %d %s\r\n" resolved.r_status
@@ -1154,9 +1332,12 @@ let write_response flow resolved =
   Buffer.add_string buf
     (Printf.sprintf "Content-Length: %d\r\n"
        (String.length resolved.r_body));
-  Buffer.add_string buf "Connection: close\r\n";
+  if keep_alive then
+    Buffer.add_string buf "Connection: keep-alive\r\n"
+  else
+    Buffer.add_string buf "Connection: close\r\n";
   Buffer.add_string buf "\r\n";
-  Buffer.add_string buf resolved.r_body;
+  if not head then Buffer.add_string buf resolved.r_body;
   Eio.Flow.copy_string (Buffer.contents buf) flow
 
 let write_stream_response flow cfg extra_headers =
@@ -1171,7 +1352,7 @@ let write_stream_response flow cfg extra_headers =
     (fun (k, v) ->
       Buffer.add_string buf (Printf.sprintf "%s: %s\r\n" k v))
     (cfg.stream_headers @ extra_headers);
-  Buffer.add_string buf "Connection: close\r\n";
+  Buffer.add_string buf "Connection: close\r\n";  (* streams always close *)
   Buffer.add_string buf "\r\n";
   Eio.Flow.copy_string (Buffer.contents buf) flow;
   let write_chunk data =
@@ -1202,9 +1383,14 @@ let rec extract_stream (resp : response) =
 
 (* ── Built-in middleware ─────────────────────────────────────────── *)
 
+let _current_request_id : string option Domain.DLS.key =
+  Domain.DLS.new_key (fun () -> None)
+
 let req_ctx (req : request) =
   let ctx = [("sid", String.sub req.session_id 0 (min 8 (String.length req.session_id)));
              ("meth", req.meth); ("path", req.path)] in
+  let ctx = match Domain.DLS.get _current_request_id with
+    | Some rid -> ("rid", rid) :: ctx | None -> ctx in
   let ctx = match Session_store.get ~session_id:req.session_id ~key:"user_id" with
     | Some uid -> ("uid", uid) :: ctx | None -> ctx in
   ctx
@@ -1307,11 +1493,19 @@ let error_handler : middleware = fun next req ->
 
 let _csrf_tokens : (string, string) Hashtbl.t = Hashtbl.create 64
 
+(* Wire session_regenerate to migrate CSRF tokens *)
+let () = _session_regenerate_hook := (fun old_sid new_sid ->
+  match Hashtbl.find_opt _csrf_tokens old_sid with
+  | Some t -> Hashtbl.replace _csrf_tokens new_sid t; Hashtbl.remove _csrf_tokens old_sid
+  | None -> ())
+
 module Csrf_ctx = Context(struct type t = string let empty = "" end)
 
 let generate_csrf_token () =
-  let data = Printf.sprintf "csrf-%f-%d" (Unix.gettimeofday ()) (Random.bits ()) in
-  Digestif.SHA1.(digest_string data |> to_hex)
+  let bytes = Mirage_crypto_rng.generate 32 in
+  let buf = Buffer.create 64 in
+  String.iter (fun c -> Buffer.add_string buf (Printf.sprintf "%02x" (Char.code c))) bytes;
+  Buffer.contents buf
 
 let csrf_token req = Csrf_ctx.get req
 
@@ -1349,12 +1543,22 @@ let csrf : middleware = fun next req ->
           | Some t -> t
           | None -> ""
       in
-      if submitted = token then next req
+      (* Constant-time comparison to prevent timing side-channel *)
+      let ct_equal a b =
+        let la = String.length a and lb = String.length b in
+        let r = ref (la lxor lb) in
+        for i = 0 to min la lb - 1 do
+          r := !r lor (Char.code a.[i] lxor Char.code b.[i])
+        done;
+        !r = 0
+      in
+      if ct_equal submitted token then next req
       else `Text "Forbidden — invalid CSRF token" |> status 403
 
 (* ── Rate limiting middleware ────────────────────────────────────── *)
 
 let _rate_limit_store : (string, float list) Hashtbl.t = Hashtbl.create 256
+let _rate_limit_mu = Mutex.create ()
 let _rate_limit_counter = ref 0
 
 let rate_limit ~max_requests ~window_ms () : middleware = fun next req ->
@@ -1368,30 +1572,36 @@ let rate_limit ~max_requests ~window_ms () : middleware = fun next req ->
         | Some ip -> ip
         | None -> req.session_id
   in
-  (* Cleanup stale entries every 100 requests *)
-  incr _rate_limit_counter;
-  if !_rate_limit_counter >= 100 then begin
-    _rate_limit_counter := 0;
-    let cutoff = now -. window in
-    Hashtbl.filter_map_inplace
-      (fun _k timestamps ->
-        let filtered = List.filter (fun t -> t > cutoff) timestamps in
-        if filtered = [] then None else Some filtered)
-      _rate_limit_store
-  end;
-  let timestamps =
-    match Hashtbl.find_opt _rate_limit_store client_key with
-    | Some ts -> List.filter (fun t -> t > now -. window) ts
-    | None -> []
+  let allowed =
+    Mutex.lock _rate_limit_mu;
+    Fun.protect ~finally:(fun () -> Mutex.unlock _rate_limit_mu) (fun () ->
+      (* Cleanup stale entries every 100 requests *)
+      incr _rate_limit_counter;
+      if !_rate_limit_counter >= 100 then begin
+        _rate_limit_counter := 0;
+        let cutoff = now -. window in
+        Hashtbl.filter_map_inplace
+          (fun _k timestamps ->
+            let filtered = List.filter (fun t -> t > cutoff) timestamps in
+            if filtered = [] then None else Some filtered)
+          _rate_limit_store
+      end;
+      let timestamps =
+        match Hashtbl.find_opt _rate_limit_store client_key with
+        | Some ts -> List.filter (fun t -> t > now -. window) ts
+        | None -> []
+      in
+      if List.length timestamps >= max_requests then false
+      else begin
+        Hashtbl.replace _rate_limit_store client_key (now :: timestamps);
+        true
+      end)
   in
-  if List.length timestamps >= max_requests then
+  if allowed then next req
+  else
     let retry_after = int_of_float (window /. 1000.0) in
     `Text "Too Many Requests" |> status 429
     |> header "Retry-After" (string_of_int retry_after)
-  else begin
-    Hashtbl.replace _rate_limit_store client_key (now :: timestamps);
-    next req
-  end
 
 (* ── Auth middleware ──────────────────────────────────────────────── *)
 
@@ -1419,7 +1629,14 @@ let require_auth ?(login_path = "/login") () : middleware = fun next req ->
         | None -> true
       in
       if accepts_html then
-        `Redirect (login_path ^ "?return_to=" ^ req.path)
+        (* Validate return_to is a relative path (no scheme, no //) *)
+        let safe_path =
+          let p = req.path in
+          if String.length p >= 2 && String.sub p 0 2 = "//" then "/"
+          else if String.length p >= 1 && p.[0] = '/' then p
+          else "/"
+        in
+        `Redirect (login_path ^ "?return_to=" ^ safe_path)
       else
         `Text "Unauthorized" |> status 401
 
@@ -1445,6 +1662,20 @@ let _base64_decode s =
   done;
   Buffer.contents buf
 
+let allowed_hosts ~hosts () : middleware = fun next req ->
+  let host =
+    match List.assoc_opt "host" req.headers with
+    | Some h ->
+        (* Strip port if present *)
+        (match String.index_opt h ':' with
+         | Some i -> String.sub h 0 i
+         | None -> h)
+    | None -> ""
+  in
+  if host = "" || List.mem host hosts then next req
+  else
+    `Text "Forbidden — invalid Host header" |> status 403
+
 let basic_auth ~check ?(realm = "Restricted") () : middleware = fun next req ->
   let authorized =
     match List.assoc_opt "authorization" req.headers with
@@ -1468,6 +1699,23 @@ let basic_auth ~check ?(realm = "Restricted") () : middleware = fun next req ->
     `Text "Unauthorized"
     |> status 401
     |> header "WWW-Authenticate" (Printf.sprintf "Basic realm=\"%s\"" realm)
+
+(* ── Security headers middleware ──────────────────────────────────── *)
+
+let secure_headers
+    ?(csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:")
+    ?(frame_options = "DENY")
+    ?(content_type_options = "nosniff")
+    ?(referrer_policy = "strict-origin-when-cross-origin")
+    ?(hsts = "max-age=31536000; includeSubDomains")
+    () : middleware = fun next req ->
+  let resp = next req in
+  resp
+  |> header "Content-Security-Policy" csp
+  |> header "X-Frame-Options" frame_options
+  |> header "X-Content-Type-Options" content_type_options
+  |> header "Referrer-Policy" referrer_policy
+  |> header "Strict-Transport-Security" hsts
 
 (* ── Fetch (HTTP client) ───────────────────────────────────────────── *)
 
@@ -1585,7 +1833,9 @@ let parse_fetch_status reader =
           Option.value ~default:0
             (int_of_string_opt (String.sub rest 0 j)))
 
-let read_fetch_body reader hdrs =
+let read_fetch_body ~method_ reader hdrs =
+  if method_ = "HEAD" then ""
+  else
   let is_chunked =
     match List.assoc_opt "transfer-encoding" hdrs with
     | Some v -> String.lowercase_ascii (String.trim v) = "chunked"
@@ -1660,6 +1910,35 @@ let stream_file ?(content_type = "application/octet-stream") ?(headers = []) pat
     in
     loop 0)
 
+(* ── Request ID ───────────────────────────────────────────────────── *)
+
+let _request_id_counter = Atomic.make 0
+
+let generate_request_id () =
+  let n = Atomic.fetch_and_add _request_id_counter 1 in
+  let t = int_of_float (Unix.gettimeofday () *. 1000.0) in
+  Printf.sprintf "%08x%08x" (t land 0xFFFFFFFF) (n land 0xFFFFFFFF)
+
+let request_id (req : request) =
+  match List.assoc_opt "x-request-id" req.headers with
+  | Some id -> id
+  | None -> ""
+
+(* ── Connection config ─────────────────────────────────────────────── *)
+
+exception Keep_alive_timeout
+
+let _with_ka_timeout : (float -> (unit -> unit) -> unit) ref =
+  ref (fun _t f -> f ())  (* default: no timeout *)
+let _keep_alive_timeout = ref 5.0
+let _request_timeout = ref 30.0
+let keep_alive_timeout n = _keep_alive_timeout := n
+let request_timeout n = _request_timeout := n
+let _ws_rate_limit = ref 100.0
+let ws_rate_limit n = _ws_rate_limit := n
+let ws_max_frame_size n = Websocket._max_frame_size := n
+let max_upload_size n = Liveview._max_upload_size := n
+
 (* ── Shutdown state ────────────────────────────────────────────────── *)
 
 exception Shutdown
@@ -1667,38 +1946,49 @@ let _shutting_down = Atomic.make false
 
 (* ── Server ────────────────────────────────────────────────────────── *)
 
+let client_wants_close hdrs =
+  match List.assoc_opt "connection" hdrs with
+  | Some v -> String.lowercase_ascii v = "close"
+  | None -> false
+
 let handle_connection flow _addr =
   let close_flow () = Eio.Flow.close flow in
   let flow = (flow :> Eio.Flow.two_way_ty Eio.Resource.t) in
   let reader =
     Eio.Buf_read.of_flow ~max_size:(!_max_body_size + 4096) flow
   in
-  (try
-     let meth, raw_path = parse_request_line reader in
-     let hdrs = parse_headers reader in
-     let query_params =
-       parse_query raw_path
-       |> List.map (fun (k, v) -> (url_decode k, url_decode v))
-     in
-     let path =
-       match String.index_opt raw_path '?' with
-       | Some i -> String.sub raw_path 0 i
-       | None -> raw_path
-     in
-     (* Check for WebSocket upgrade — bypasses middleware *)
-     let is_upgrade =
-       match List.assoc_opt "upgrade" hdrs with
-       | Some v -> String.lowercase_ascii v = "websocket"
-       | None -> false
-     in
-     if is_upgrade then begin
-       let existing_session = parse_session_id hdrs in
-       let session_id =
-         match existing_session with
-         | Some sid -> sid
-         | None -> generate_session_id ()
-       in
-       match match_ws_route path with
+  Telemetry.incr_active_connections ();
+  let do_close () =
+    Telemetry.decr_active_connections ();
+    close_flow ()
+  in
+  let handle_one_request () =
+    let meth, raw_path = parse_request_line reader in
+    let hdrs = parse_headers reader in
+    let query_params =
+      parse_query raw_path
+      |> List.map (fun (k, v) -> (url_decode k, url_decode v))
+    in
+    let path =
+      match String.index_opt raw_path '?' with
+      | Some i -> String.sub raw_path 0 i
+      | None -> raw_path
+    in
+    (* Check for WebSocket upgrade — bypasses middleware *)
+    let is_upgrade =
+      match List.assoc_opt "upgrade" hdrs with
+      | Some v -> String.lowercase_ascii v = "websocket"
+      | None -> false
+    in
+    if is_upgrade then begin
+      let existing_session = parse_session_id hdrs in
+      let session_id =
+        match existing_session with
+        | Some sid -> sid
+        | None -> generate_session_id ()
+      in
+      Telemetry.incr_active_ws ();
+      (match match_ws_route path with
        | Some (route, params) ->
            (match Websocket.handshake hdrs flow reader with
             | Ok ws ->
@@ -1717,85 +2007,176 @@ let handle_connection flow _addr =
             | Error msg ->
                 Log.log ~level:"error" "ws handshake error: %s" msg;
                 let r = resolve (`Text "Bad Request" |> status 400) in
-                write_response flow r;
-                close_flow ())
+                write_response flow r)
        | None ->
            let r = resolve (`Text "Not Found" |> status 404) in
-           write_response flow r;
-           close_flow ()
-     end else begin
-       let t0 = Unix.gettimeofday () in
-       let body = read_body reader hdrs in
-       let is_cap_path =
-         let p = path in
-         String.length p >= 7 && String.sub p 0 7 = "/_well/"
-         || p = "/_well"
-       in
-       let base_handler (req : request) =
-         (* Check cap routes first (bypass global middleware) *)
-         match (if is_cap_path then match_cap_route req.meth req.path
-                else None) with
-         | Some (route, params) ->
-             (try route.handler { req with params }
-              with exn ->
-                let msg = Printexc.to_string exn in
-                Log.log ~level:"error" "cap handler error: %s" msg;
-                `Text ("Internal Server Error: " ^ msg) |> status 500)
-         | None ->
-         match match_route req.meth req.path with
-         | Some (route, params) ->
-             (try route.handler { req with params }
-              with exn ->
-                let msg = Printexc.to_string exn in
-                Log.log ~level:"error" "handler error: %s" msg;
-                `Text ("Internal Server Error: " ^ msg) |> status 500)
-         | None ->
-             (match try_serve_static req.meth req.path req.headers with
-              | Some r ->
-                  `Custom { status = Some r.r_status;
-                            headers = r.r_headers; body = `Text r.r_body }
-              | None -> `Text "Not Found" |> status 404)
-       in
-       let pipeline =
-         if is_cap_path then
-           (* Cap routes: session middleware only, skip global middleware *)
-           session_middleware base_handler
-         else
-           session_middleware
-             (apply_middlewares (List.rev !global_middlewares) base_handler)
-       in
-       let req =
-         { meth; path; headers = hdrs; body; params = [];
-           query = query_params; session_id = ""; _context = [] }
-       in
-       let resp = pipeline req in
-       Telemetry.incr_requests ();
-       let dt_us = int_of_float ((Unix.gettimeofday () -. t0) *. 1e6) in
-       Telemetry.add_latency_us dt_us;
-       (match extract_stream resp with
-        | Some (cfg, extra_hdrs) ->
-            write_stream_response flow cfg extra_hdrs;
-            close_flow ()
+           write_response flow r);
+      Telemetry.decr_active_ws ();
+      `Close  (* WS always closes after *)
+    end else begin
+      let t0 = Unix.gettimeofday () in
+      let body = read_body reader hdrs in
+      let is_cap_path =
+        let p = path in
+        String.length p >= 7 && String.sub p 0 7 = "/_well/"
+        || p = "/_well"
+      in
+      let safe_500 exn label =
+        let msg = Printexc.to_string exn in
+        Log.log ~level:"error" "%s error: %s" label msg;
+        `Text "Internal Server Error" |> status 500
+      in
+      let base_handler (req : request) =
+        (* Check cap routes first (bypass global middleware) *)
+        match (if is_cap_path then match_cap_route req.meth req.path
+               else None) with
+        | Some (route, params) ->
+            (try route.handler { req with params }
+             with exn -> safe_500 exn "cap handler")
         | None ->
-            let resolved = maybe_compress hdrs (resolve resp) in
-            if resolved.r_status >= 500 then Telemetry.incr_errors ();
-            write_response flow resolved;
-            close_flow ())
-     end
+        (* Auto-HEAD: if HEAD request and no HEAD route, try GET handler *)
+        let effective_meth =
+          if req.meth = "HEAD" then
+            match match_route "HEAD" req.path with
+            | Some _ -> "HEAD"
+            | None -> "GET"
+          else req.meth
+        in
+        match match_route effective_meth req.path with
+        | Some (route, params) ->
+            (try route.handler { req with params }
+             with exn -> safe_500 exn "handler")
+        | None ->
+            (match try_serve_static req.meth req.path req.headers with
+             | Some r when r.r_status = -1 ->
+                 (* Large file — stream via chunked transfer *)
+                 let file_path = List.assoc "_stream_path" r.r_headers in
+                 let hdrs = List.filter (fun (k, _) -> k <> "_stream_path" && k <> "Content-Type") r.r_headers in
+                 let ct = match List.assoc_opt "Content-Type" r.r_headers with
+                   | Some v -> v | None -> "application/octet-stream" in
+                 stream ~content_type:ct ~headers:hdrs (fun write_chunk ->
+                   let ic = open_in_bin file_path in
+                   (try
+                      let chunk_size = 65536 in
+                      let tmp = Bytes.create chunk_size in
+                      let rec loop () =
+                        let n = input ic tmp 0 chunk_size in
+                        if n > 0 then begin
+                          write_chunk (Bytes.sub_string tmp 0 n);
+                          loop ()
+                        end
+                      in
+                      loop ();
+                      close_in ic
+                    with exn -> close_in_noerr ic; raise exn))
+             | Some r ->
+                 `Custom { status = Some r.r_status;
+                           headers = r.r_headers; body = `Text r.r_body }
+             | None ->
+                 (* 405 check: does path match any method? *)
+                 let all_methods = ["GET"; "POST"; "PUT"; "DELETE"; "HEAD"] in
+                 let matching =
+                   List.filter (fun m -> match_route m req.path <> None) all_methods
+                 in
+                 if matching <> [] then
+                   `Text "Method Not Allowed" |> status 405
+                   |> header "Allow" (String.concat ", " matching)
+                 else
+                   `Text "Not Found" |> status 404)
+      in
+      let pipeline =
+        if is_cap_path then
+          session_middleware base_handler
+        else
+          session_middleware
+            (apply_middlewares (List.rev !global_middlewares) base_handler)
+      in
+      let req_id =
+        match List.assoc_opt "x-request-id" hdrs with
+        | Some id -> id
+        | None -> generate_request_id ()
+      in
+      Domain.DLS.set _current_request_id (Some req_id);
+      let req =
+        { meth; path; headers = hdrs; body; params = [];
+          query = query_params; session_id = ""; _context = [] }
+      in
+      let resp = pipeline req in
+      Domain.DLS.set _current_request_id None;
+      Telemetry.incr_requests ();
+      let dt_us = int_of_float ((Unix.gettimeofday () -. t0) *. 1e6) in
+      Telemetry.add_latency_us dt_us;
+      let wants_close = client_wants_close hdrs in
+      match extract_stream resp with
+      | Some (cfg, extra_hdrs) ->
+          write_stream_response flow cfg (("X-Request-ID", req_id) :: extra_hdrs);
+          `Close  (* stream responses always close *)
+      | None ->
+          let resolved = maybe_compress hdrs (resolve resp) in
+          let resolved = { resolved with r_headers = ("X-Request-ID", req_id) :: resolved.r_headers } in
+          if resolved.r_status >= 500 then Telemetry.incr_errors ();
+          let ka = not wants_close in
+          write_response ~keep_alive:ka ~head:(meth = "HEAD") flow resolved;
+          if wants_close then `Close else `KeepAlive
+    end
+  in
+  let timed_request () =
+    let result = ref `Close in
+    (try
+       !_with_ka_timeout !_request_timeout (fun () ->
+         result := handle_one_request ())
+     with
+     | Keep_alive_timeout ->
+         let r = resolve (`Text "Request Timeout" |> status 408) in
+         (try write_response flow r with _ -> ());
+         result := `Close);
+    !result
+  in
+  (* Keep-alive loop *)
+  let rec ka_loop first =
+    if first then begin
+      (* First request — no idle timeout needed *)
+      match timed_request () with
+      | `Close -> do_close ()
+      | `KeepAlive -> ka_loop false
+    end else begin
+      (* Subsequent requests — wait for data with idle timeout *)
+      let got_data =
+        try
+          !_with_ka_timeout !_keep_alive_timeout (fun () ->
+            ignore (Eio.Buf_read.peek reader));
+          true
+        with _ -> false
+      in
+      if got_data then
+        match timed_request () with
+        | `Close -> do_close ()
+        | `KeepAlive -> ka_loop false
+      else
+        do_close ()
+    end
+  in
+  (try ka_loop true
    with
   | Body_too_large ->
       (try
          let r = resolve (`Text "Payload Too Large" |> status 413) in
          write_response flow r;
-         close_flow ()
-       with _ -> (try close_flow () with _ -> ()))
-  | Eio.Io _ -> (try close_flow () with _ -> ())
-  | End_of_file -> (try close_flow () with _ -> ())
-  | Eio.Cancel.Cancelled _ -> (try close_flow () with _ -> ())
+         do_close ()
+       with _ -> (try do_close () with _ -> ()))
+  | Headers_too_large ->
+      (try
+         let r = resolve (`Text "Request Header Fields Too Large" |> status 431) in
+         write_response flow r;
+         do_close ()
+       with _ -> (try do_close () with _ -> ()))
+  | Eio.Io _ -> (try do_close () with _ -> ())
+  | End_of_file -> (try do_close () with _ -> ())
+  | Eio.Cancel.Cancelled _ -> (try do_close () with _ -> ())
   | exn ->
       Log.log ~level:"error" "connection error: %s"
         (Printexc.to_string exn);
-      (try close_flow () with _ -> ()))
+      (try do_close () with _ -> ()))
 
 (* ── TLS support ──────────────────────────────────────────────────── *)
 
@@ -1901,7 +2282,9 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
   Eio_main.run @@ fun env ->
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
+  _with_ka_timeout := (fun t f -> Eio.Time.with_timeout_exn clock t f);
   Service._sleep := (fun seconds -> Eio.Time.sleep clock seconds);
+  Service._ws_rate_limit := !_ws_rate_limit;
   Acme._sleep_ref := (fun seconds -> Eio.Time.sleep clock seconds);
   _fetch_impl :=
     (fun ~method_ ~headers ~body url ->
@@ -1918,7 +2301,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
         let reader = Eio.Buf_read.of_flow ~max_size:(10 * 1024 * 1024) flow in
         let status = parse_fetch_status reader in
         let resp_hdrs = parse_headers reader in
-        let body = read_fetch_body reader resp_hdrs in
+        let body = read_fetch_body ~method_ reader resp_hdrs in
         { status; headers = resp_hdrs; body }
       in
       if parsed.p_scheme = "https" then (
@@ -1995,6 +2378,83 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     get "/health" (fun _req ->
       let statuses = Service.health () in
       `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
+    (* Readiness probe *)
+    get "/ready" (fun _req ->
+      let service_statuses = Service.health () in
+      let all_running = List.for_all (fun (_, st) -> st = "running") service_statuses in
+      let db_ok = Session_store.check () in
+      if all_running && db_ok then
+        `Assoc [("status", `String "ready")]
+      else
+        `Assoc [("status", `String "not_ready");
+                ("services", `Assoc (List.map (fun (n, s) -> (n, `String s)) service_statuses));
+                ("db", `Bool db_ok)]
+        |> status 503);
+    (* Prometheus metrics *)
+    get "/metrics" (fun _req ->
+      let cs = Telemetry.snapshot_counters () in
+      let sys = Telemetry.system_snapshot () in
+      let rps = Telemetry.requests_per_sec () in
+      let buf = Buffer.create 1024 in
+      let line fmt = Printf.ksprintf (fun s -> Buffer.add_string buf s; Buffer.add_char buf '\n') fmt in
+      line "# HELP well_http_requests_total Total HTTP requests";
+      line "# TYPE well_http_requests_total counter";
+      line "well_http_requests_total %d" cs.total_requests;
+      line "# HELP well_http_errors_5xx_total Total 5xx errors";
+      line "# TYPE well_http_errors_5xx_total counter";
+      line "well_http_errors_5xx_total %d" cs.errors_5xx;
+      line "# HELP well_http_latency_avg_us Average request latency in microseconds";
+      line "# TYPE well_http_latency_avg_us gauge";
+      line "well_http_latency_avg_us %d" cs.avg_latency_us;
+      line "# HELP well_http_requests_per_second Current requests per second";
+      line "# TYPE well_http_requests_per_second gauge";
+      line "well_http_requests_per_second %.2f" rps;
+      line "# HELP well_ws_messages_total Total WebSocket messages received";
+      line "# TYPE well_ws_messages_total counter";
+      line "well_ws_messages_total %d" cs.ws_messages;
+      line "# HELP well_bus_events_total Total MessageBus events published";
+      line "# TYPE well_bus_events_total counter";
+      line "well_bus_events_total %d" cs.bus_events;
+      line "# HELP well_active_connections Current active connections";
+      line "# TYPE well_active_connections gauge";
+      line "well_active_connections %d" (Atomic.get Telemetry.active_connections);
+      line "# HELP well_active_ws_connections Current active WebSocket connections";
+      line "# TYPE well_active_ws_connections gauge";
+      line "well_active_ws_connections %d" (Atomic.get Telemetry.active_ws_connections);
+      line "# HELP well_process_cpu_percent Process CPU usage percent";
+      line "# TYPE well_process_cpu_percent gauge";
+      line "well_process_cpu_percent %.2f" sys.cpu_pct;
+      line "# HELP well_process_rss_bytes Process RSS in bytes";
+      line "# TYPE well_process_rss_bytes gauge";
+      line "well_process_rss_bytes %.0f" (sys.rss_mb *. 1048576.0);
+      line "# HELP well_gc_major_collections_total GC major collections";
+      line "# TYPE well_gc_major_collections_total counter";
+      line "well_gc_major_collections_total %d" sys.gc_major;
+      line "# HELP well_uptime_seconds Process uptime in seconds";
+      line "# TYPE well_uptime_seconds gauge";
+      line "well_uptime_seconds %.0f" sys.uptime_s;
+      `Text (Buffer.contents buf)
+      |> header "Content-Type" "text/plain; version=0.0.4; charset=utf-8");
+    (* Session + CSRF auto-cleanup fiber *)
+    Eio.Fiber.fork ~sw (fun () ->
+      let rec cleanup_loop () =
+        Eio.Time.sleep clock 3600.0;
+        (try Session_store.cleanup ~max_age_days:7 () with _ -> ());
+        (try Liveview.cleanup_sessions () with _ -> ());
+        (try Liveview.cleanup_uploads () with _ -> ());
+        (* Prune CSRF tokens for sessions no longer in the store *)
+        (try
+           let to_remove = ref [] in
+           Hashtbl.iter (fun sid _token ->
+             if Session_store.get ~session_id:sid ~key:"__exists" = None
+             && Session_store.get_all_with_prefix ~session_id:sid ~prefix:"" = []
+             then to_remove := sid :: !to_remove
+           ) _csrf_tokens;
+           List.iter (Hashtbl.remove _csrf_tokens) !to_remove
+         with _ -> ());
+        cleanup_loop ()
+      in
+      cleanup_loop ());
     (* Cap *)
     if not disable_cap then begin
       Cap_hook._register_cap_get := (fun path handler ->
@@ -2062,7 +2522,8 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     let socket =
       Eio.Net.listen net ~sw ~backlog:128 ~reuse_addr:true addr
     in
-    let scheme = if tls_cfg <> None then "https" else "http" in
+    _tls_active := tls_cfg <> None;
+    let scheme = if !_tls_active then "https" else "http" in
     let host = if acme_mode then "0.0.0.0" else "localhost" in
     Log.log "listening on %s://%s:%d%s" scheme host port
       (if workers > 0 then Printf.sprintf " (%d workers)" workers else "");
@@ -2138,6 +2599,7 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
   Eio_main.run @@ fun env ->
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
+  _with_ka_timeout := (fun t f -> Eio.Time.with_timeout_exn clock t f);
   Service._sleep := (fun seconds -> Eio.Time.sleep clock seconds);
   _fetch_impl :=
     (fun ~method_ ~headers ~body url ->
@@ -2154,7 +2616,7 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
         let reader = Eio.Buf_read.of_flow ~max_size:(10 * 1024 * 1024) flow in
         let status = parse_fetch_status reader in
         let resp_hdrs = parse_headers reader in
-        let body = read_fetch_body reader resp_hdrs in
+        let body = read_fetch_body ~method_ reader resp_hdrs in
         { status; headers = resp_hdrs; body }
       in
       if parsed.p_scheme = "https" then (
@@ -2208,6 +2670,61 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
   get "/health" (fun _req ->
     let statuses = Service.health () in
     `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
+  get "/ready" (fun _req ->
+    let service_statuses = Service.health () in
+    let all_running = List.for_all (fun (_, st) -> st = "running") service_statuses in
+    let db_ok = Session_store.check () in
+    if all_running && db_ok then
+      `Assoc [("status", `String "ready")]
+    else
+      `Assoc [("status", `String "not_ready");
+              ("services", `Assoc (List.map (fun (n, s) -> (n, `String s)) service_statuses));
+              ("db", `Bool db_ok)]
+      |> status 503);
+  get "/metrics" (fun _req ->
+    let cs = Telemetry.snapshot_counters () in
+    let sys = Telemetry.system_snapshot () in
+    let rps = Telemetry.requests_per_sec () in
+    let buf = Buffer.create 1024 in
+    let line fmt = Printf.ksprintf (fun s -> Buffer.add_string buf s; Buffer.add_char buf '\n') fmt in
+    line "# HELP well_http_requests_total Total HTTP requests";
+    line "# TYPE well_http_requests_total counter";
+    line "well_http_requests_total %d" cs.total_requests;
+    line "# HELP well_http_errors_5xx_total Total 5xx errors";
+    line "# TYPE well_http_errors_5xx_total counter";
+    line "well_http_errors_5xx_total %d" cs.errors_5xx;
+    line "# HELP well_http_latency_avg_us Average request latency in microseconds";
+    line "# TYPE well_http_latency_avg_us gauge";
+    line "well_http_latency_avg_us %d" cs.avg_latency_us;
+    line "# HELP well_http_requests_per_second Current requests per second";
+    line "# TYPE well_http_requests_per_second gauge";
+    line "well_http_requests_per_second %.2f" rps;
+    line "# HELP well_ws_messages_total Total WebSocket messages received";
+    line "# TYPE well_ws_messages_total counter";
+    line "well_ws_messages_total %d" cs.ws_messages;
+    line "# HELP well_bus_events_total Total MessageBus events published";
+    line "# TYPE well_bus_events_total counter";
+    line "well_bus_events_total %d" cs.bus_events;
+    line "# HELP well_active_connections Current active connections";
+    line "# TYPE well_active_connections gauge";
+    line "well_active_connections %d" (Atomic.get Telemetry.active_connections);
+    line "# HELP well_active_ws_connections Current active WebSocket connections";
+    line "# TYPE well_active_ws_connections gauge";
+    line "well_active_ws_connections %d" (Atomic.get Telemetry.active_ws_connections);
+    line "# HELP well_process_cpu_percent Process CPU usage percent";
+    line "# TYPE well_process_cpu_percent gauge";
+    line "well_process_cpu_percent %.2f" sys.cpu_pct;
+    line "# HELP well_process_rss_bytes Process RSS in bytes";
+    line "# TYPE well_process_rss_bytes gauge";
+    line "well_process_rss_bytes %.0f" (sys.rss_mb *. 1048576.0);
+    line "# HELP well_gc_major_collections_total GC major collections";
+    line "# TYPE well_gc_major_collections_total counter";
+    line "well_gc_major_collections_total %d" sys.gc_major;
+    line "# HELP well_uptime_seconds Process uptime in seconds";
+    line "# TYPE well_uptime_seconds gauge";
+    line "well_uptime_seconds %.0f" sys.uptime_s;
+    `Text (Buffer.contents buf)
+    |> header "Content-Type" "text/plain; version=0.0.4; charset=utf-8");
   if not disable_cap then begin
     Cap_hook._register_cap_get := (fun path handler ->
       register_cap "GET" path (fun req ->
