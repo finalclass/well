@@ -1083,6 +1083,20 @@ let update ctx model = function
 2. ~~Dokumentacja + generator~~ ✅ DONE
 3. ~~Graceful shutdown~~ ✅ DONE, ~~Let's Encrypt / ACME~~ ✅ DONE
 
+### TODO — Well.uniq_name / random string generator
+
+Każda web app potrzebuje generatora losowych stringów. Trzy warianty:
+
+1. **`Well.uuid ()`** — klasyczny UUID v4, np. `"550e8400-e29b-41d4-a716-446655440000"`
+2. **`Well.random_string ?length:(n=16) ()`** — losowy alfanumeryczny string, np. `"a8Kx2mPq9nRt4wZy"` — do tokenów, kluczy sesji
+3. **`Well.uniq_name ()`** — krótka unikalna nazwa gwarantowana w systemie:
+   - Zaczyna od 6 znaków (`[A-Z0-9]`, 36^6 = 2.18 mld kombinacji)
+   - Sprawdza w SQLite (`_well_uniq_names`) czy już istnieje
+   - Jeśli kolizja → generuje nowy (przy 6 znakach kolizje praktycznie niemożliwe)
+   - Użycie: kody zamówień, numery faktur, krótkie ID do pokazania userowi
+
+Implementacja w `lib/well/well.ml` lub osobny `lib/well/random.ml`.
+
 ---
 
 ## 10. REPL — `well repl`

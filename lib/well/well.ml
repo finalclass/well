@@ -1423,6 +1423,52 @@ let require_auth ?(login_path = "/login") () : middleware = fun next req ->
       else
         `Text "Unauthorized" |> status 401
 
+(* ── Basic Auth middleware ──────────────────────────────────────────── *)
+
+let _base64_decode s =
+  let tbl = Array.make 256 (-1) in
+  String.iteri (fun i c -> tbl.(Char.code c) <- i)
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let len = String.length s in
+  let buf = Buffer.create (len * 3 / 4) in
+  let acc = ref 0 and bits = ref 0 in
+  for i = 0 to len - 1 do
+    let v = tbl.(Char.code s.[i]) in
+    if v >= 0 then begin
+      acc := !acc lsl 6 lor v;
+      bits := !bits + 6;
+      if !bits >= 8 then begin
+        bits := !bits - 8;
+        Buffer.add_char buf (Char.chr ((!acc lsr !bits) land 0xff));
+      end
+    end
+  done;
+  Buffer.contents buf
+
+let basic_auth ~check ?(realm = "Restricted") () : middleware = fun next req ->
+  let authorized =
+    match List.assoc_opt "authorization" req.headers with
+    | Some v ->
+      let v = String.trim v in
+      if String.length v > 6
+         && String.lowercase_ascii (String.sub v 0 6) = "basic " then
+        let encoded = String.trim (String.sub v 6 (String.length v - 6)) in
+        let decoded = _base64_decode encoded in
+        (match String.index_opt decoded ':' with
+         | Some i ->
+           let user = String.sub decoded 0 i in
+           let pass = String.sub decoded (i + 1) (String.length decoded - i - 1) in
+           check user pass
+         | None -> false)
+      else false
+    | None -> false
+  in
+  if authorized then next req
+  else
+    `Text "Unauthorized"
+    |> status 401
+    |> header "WWW-Authenticate" (Printf.sprintf "Basic realm=\"%s\"" realm)
+
 (* ── Fetch (HTTP client) ───────────────────────────────────────────── *)
 
 type fetch_response = {
@@ -2282,6 +2328,46 @@ let log = Log.log
 
 let topic_name (t : _ topic) = t.Message_bus.t_channel
 let publish ?ephemeral t v = ignore (Message_bus.publish_typed ?ephemeral t v)
-let subscribe t f = Message_bus.subscribe_typed t f
+let subscribe ?live_only t f = Message_bus.subscribe_typed ?live_only t f
+let is_replaying = Message_bus.is_replaying
 let replay ?since_id t f = Message_bus.replay_typed ?since_id t f
 let prune = Message_bus.prune
+
+(* ── Keyed pub/sub (channel:key) ─────────────────────────────────── *)
+
+type 'a keyed_event = 'a Message_bus.keyed_event = {
+  key : string;
+  event : 'a event;
+}
+
+let publish_keyed ?ephemeral t ~key v =
+  ignore (Message_bus.publish_keyed_typed ?ephemeral t ~key v)
+
+let subscribe_keyed ?live_only t f =
+  Message_bus.subscribe_keyed_typed ?live_only t f
+
+(* ── Request/reply over bus ──────────────────────────────────────── *)
+
+exception Request_timeout
+
+let request ~cmd ~reply ~key ?(timeout = 5.0) value =
+  let result = Atomic.make None in
+  let reply_channel = reply.Message_bus.t_channel ^ ":" ^ key in
+  let sub_id = Message_bus.once reply_channel (fun event ->
+    match reply.Message_bus.of_yojson event.Message_bus.payload with
+    | Ok v -> Atomic.set result (Some v)
+    | Error _ -> ()) in
+  ignore (Message_bus.publish_keyed_typed cmd ~key value);
+  let deadline = Unix.gettimeofday () +. timeout in
+  let rec wait () =
+    match Atomic.get result with
+    | Some v -> v
+    | None ->
+      if Unix.gettimeofday () >= deadline then begin
+        Message_bus.unsubscribe sub_id;
+        raise Request_timeout
+      end;
+      !Service._sleep 0.005;
+      wait ()
+  in
+  wait ()

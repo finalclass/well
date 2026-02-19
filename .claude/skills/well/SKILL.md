@@ -305,19 +305,61 @@ let view model =
 
 ## Cross-LiveView Communication
 
-Use `Well.LiveView.broadcast` to send messages between LiveViews:
+Use typed topics via `Well.publish` / `Well.subscribe` (through `events.ml`):
 
 ```ocaml
-(* In sender's update *)
+(* In sender's update — publish typed event *)
 let update _req model = function
   | Increment ->
     let m = { count = model.count + 1 } in
-    Well.LiveView.broadcast "/live/activity_log"
-      (`List [`String "CounterEvent"; `String "increment"; `Int m.count]);
+    Well.publish Events.counter_event (`Incremented ("increment", m.count));
     m
 
-(* Receiver's msg type must match the broadcast format *)
-type msg = CounterEvent of string * int [@@deriving yojson]
+(* Receiver subscribes via subscriptions field *)
+let subscriptions = [Well.topic_name Events.counter_event]
+type msg = Events.counter_event [@@deriving yojson]
+```
+
+### Keyed Topics (channel:key) — Request/Reply Pattern
+
+For dynamic channels with UUIDs (e.g. command sourcing), use keyed topics.
+The topic's channel becomes a prefix, the key is appended after `:`.
+
+```ocaml
+(* events.ml — define command and response topics *)
+type order_cmd = { items: string list } [@@deriving yojson, topic ~name:"order:cmd"]
+type order_result = { order_id: string } [@@deriving yojson, topic ~name:"order:result"]
+```
+
+**Manager** subscribes to all `order:cmd:*`:
+```ocaml
+Well.subscribe_keyed Events.order_cmd (fun kev ->
+  let cmd = kev.event.value in   (* typed: order_cmd *)
+  let key = kev.key in           (* the UUID suffix *)
+  let result = process cmd in
+  Well.publish_keyed ~ephemeral:true Events.order_result ~key result)
+```
+
+**HTTP endpoint** sends command, awaits typed response:
+```ocaml
+Well.post "/orders" @@ fun req ->
+let cmd = parse_body req in
+let key = generate_uuid () in
+let result = Well.request ~cmd:Events.order_cmd ~reply:Events.order_result
+               ~key cmd in
+Well.json (order_result_to_yojson result)
+```
+
+`Well.request` blocks the current fiber (not thread), default timeout 5s, raises `Well.Request_timeout`.
+
+**Replay safety**: `~live_only:true` subscriptions are skipped during replay, and all `publish` calls during replay are automatically ephemeral:
+```ocaml
+(* Always runs — cross-Manager state update *)
+Well.subscribe_keyed Events.order_cmd (fun kev -> process kev.event.value)
+
+(* Only runs live — external side effect *)
+Well.subscribe ~live_only:true Events.order_event (fun evt ->
+  External_api.sync evt.value)
 ```
 
 ## Type-Safe SQL (well.ppx)
@@ -450,9 +492,17 @@ Well.session_delete req "user_id";
 (* Check current user *)
 let user = Well.current_user req  (* string option *)
 
-(* Require auth middleware *)
+(* Require auth middleware — session-based, redirects to login *)
 let auth = [Well.require_auth ()]
 Well.get ~middleware:auth "/protected" @@ fun req -> ...
+
+(* Basic auth middleware — HTTP Basic Authentication *)
+let api_auth = [Well.basic_auth ~check:(fun user pass ->
+  user = "admin" && pass = "secret") ()]
+Well.get ~middleware:api_auth "/api/data" @@ fun req -> ...
+
+(* Basic auth with custom realm *)
+let admin = [Well.basic_auth ~check:check_credentials ~realm:"Admin Panel" ()]
 ```
 
 ## Forms & File Upload
@@ -484,17 +534,33 @@ match Well.file req "file" with
 ## MessageBus & Channels
 
 ```ocaml
-(* Publish persistent event *)
+(* ── Typed topics (fixed channel) ── *)
+Well.publish Events.counter_event (`Incremented ("increment", 42))
+Well.subscribe Events.counter_event (fun evt -> ignore evt.value)
+
+(* ── Keyed topics (channel:key — dynamic) ── *)
+Well.publish_keyed Events.order_cmd ~key:"abc-123" { items = ["x"] }
+Well.subscribe_keyed Events.order_cmd (fun kev ->
+  let _uuid = kev.key in          (* "abc-123" *)
+  let _cmd = kev.event.value in)  (* typed order_cmd *)
+
+(* ── Request/reply (publish + await response) ── *)
+let result = Well.request ~cmd:Events.order_cmd ~reply:Events.order_result
+               ~key:"abc-123" { items = ["x"] }
+(* Blocks fiber, 5s timeout, raises Well.Request_timeout *)
+
+(* ── Replay safety ── *)
+Well.subscribe ~live_only:true Events.x (fun _ -> send_email ())
+(* live_only subscribers are skipped during replay *)
+(* All publish calls during replay are automatically ephemeral *)
+
+(* ── Low-level MessageBus (untyped) ── *)
 Well.MessageBus.publish "orders/new" (`Assoc [("id", `Int 42)]);
-
-(* Publish ephemeral (skip SQLite) *)
 Well.MessageBus.publish ~ephemeral:true "typing/user1" `Null;
-
-(* Subscribe with wildcard *)
 Well.MessageBus.subscribe "orders/*" (fun event ->
   Printf.printf "Got: %s\n" event.channel);
 
-(* Channel — authorized WS gateway *)
+(* ── Channel — authorized WS gateway ── *)
 Well.channel "room:*" (fun req topic ->
   match Well.current_user req with
   | Some _ -> Ok { subscribe = [topic] }

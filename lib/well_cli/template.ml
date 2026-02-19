@@ -152,6 +152,12 @@ let app_ml _name =
   Well.Service.register Task_manager_impl.spec;
   Well.Service.expose "TaskManager";
 
+  (* Keyed pub/sub — echo handler: listens for echo:cmd:*, replies on echo:result:key *)
+  ignore (Well.subscribe_keyed Events.echo_cmd (fun kev ->
+    let text = kev.event.value.text in
+    Well.publish_keyed ~ephemeral:true Events.echo_result
+      ~key:kev.key { reply = "Echo: " ^ text }));
+
   Well.live "/counter" (module Counter_live);
   Well.live "/activity_log" (module Activity_log_live);
   Well.static "/static" "static";
@@ -188,6 +194,15 @@ in
     <p class_="request-id">(txt ("Request: " ^ Request_id.get req))</p>
 </div>
 </Layout>
+
+(* Request/reply demo — keyed pub/sub over MessageBus *)
+;;
+Well.post "/api/echo" @@ fun req ->
+let text = Well.form req "text" in
+let key = string_of_float (Unix.gettimeofday ()) in
+let result = Well.request ~cmd:Events.echo_cmd ~reply:Events.echo_result
+               ~key { text } in
+Well.json (`Assoc [("reply", `String result.reply)])
 |}
     name name
 
@@ -435,11 +450,22 @@ let events _name =
   {|(* Events — typed pub/sub topics for the application *)
 (* Each type defines a message shape; [@@deriving topic] generates a Well.topic value *)
 
+(* ── Domain events (fixed channel, cross-LiveView) ───────────────── *)
+
 type counter_event =
   [ `Incremented of string * int
   | `Decremented of string * int
   | `Reset ]
 [@@deriving yojson, topic]
+
+(* ── Keyed commands & responses (channel:key, request/reply) ─────── *)
+(* Example: HTTP → Manager → response via Well.request *)
+
+type echo_cmd = { text : string }
+[@@deriving yojson, topic ~name:"echo:cmd"]
+
+type echo_result = { reply : string }
+[@@deriving yojson, topic ~name:"echo:result"]
 |}
 
 let counter_live _name =
@@ -3076,6 +3102,48 @@ let subscriptions = [Well.topic_name Events.counter_event]
 type msg = Events.counter_event [@@deriving yojson]
 ```
 
+### Keyed Topics (channel:key) — Request/Reply Pattern
+
+For dynamic channels with UUIDs (e.g. command sourcing), use keyed topics.
+The topic's channel becomes a prefix, the key is appended after `:`.
+
+```ocaml
+(* events.ml — define command and response topics *)
+type order_cmd = { items: string list } [@@deriving yojson, topic ~name:"order:cmd"]
+type order_result = { order_id: string } [@@deriving yojson, topic ~name:"order:result"]
+```
+
+**Manager** subscribes to all `order:cmd:*`:
+```ocaml
+Well.subscribe_keyed Events.order_cmd (fun kev ->
+  let cmd = kev.event.value in   (* typed: order_cmd *)
+  let key = kev.key in           (* the UUID suffix *)
+  let result = process cmd in
+  Well.publish_keyed ~ephemeral:true Events.order_result ~key result)
+```
+
+**HTTP endpoint** sends command, awaits typed response:
+```ocaml
+Well.post "/orders" @@ fun req ->
+let cmd = parse_body req in
+let key = generate_uuid () in
+let result = Well.request ~cmd:Events.order_cmd ~reply:Events.order_result
+               ~key cmd in
+Well.json (order_result_to_yojson result)
+```
+
+`Well.request` blocks the current fiber (not thread), default timeout 5s, raises `Well.Request_timeout`.
+
+**Replay safety**: `~live_only:true` subscriptions are skipped during replay, and all `publish` calls during replay are automatically ephemeral:
+```ocaml
+(* Always runs — cross-Manager state update *)
+Well.subscribe_keyed Events.order_cmd (fun kev -> process kev.event.value)
+
+(* Only runs live — external side effect *)
+Well.subscribe ~live_only:true Events.order_event (fun evt ->
+  External_api.sync evt.value)
+```
+
 ## Type-Safe SQL (well.ppx)
 
 Define models and queries — compiler validates SQL at build time.
@@ -3204,9 +3272,17 @@ Well.session_delete req "user_id";
 (* Check current user *)
 let user = Well.current_user req  (* string option *)
 
-(* Require auth middleware *)
+(* Require auth middleware — session-based, redirects to login *)
 let auth = [Well.require_auth ()]
 Well.get ~middleware:auth "/protected" @@ fun req -> ...
+
+(* Basic auth middleware — HTTP Basic Authentication *)
+let api_auth = [Well.basic_auth ~check:(fun user pass ->
+  user = "admin" && pass = "secret") ()]
+Well.get ~middleware:api_auth "/api/data" @@ fun req -> ...
+
+(* Basic auth with custom realm *)
+let admin = [Well.basic_auth ~check:check_credentials ~realm:"Admin Panel" ()]
 ```
 
 ## Forms & File Upload
@@ -3238,17 +3314,33 @@ match Well.file req "file" with
 ## MessageBus & Channels
 
 ```ocaml
-(* Publish persistent event *)
+(* ── Typed topics (fixed channel) ── *)
+Well.publish Events.counter_event (`Incremented ("increment", 42))
+Well.subscribe Events.counter_event (fun evt -> ignore evt.value)
+
+(* ── Keyed topics (channel:key — dynamic) ── *)
+Well.publish_keyed Events.order_cmd ~key:"abc-123" { items = ["x"] }
+Well.subscribe_keyed Events.order_cmd (fun kev ->
+  let _uuid = kev.key in          (* "abc-123" *)
+  let _cmd = kev.event.value in)  (* typed order_cmd *)
+
+(* ── Request/reply (publish + await response) ── *)
+let result = Well.request ~cmd:Events.order_cmd ~reply:Events.order_result
+               ~key:"abc-123" { items = ["x"] }
+(* Blocks fiber, 5s timeout, raises Well.Request_timeout *)
+
+(* ── Replay safety ── *)
+Well.subscribe ~live_only:true Events.x (fun _ -> send_email ())
+(* live_only subscribers are skipped during replay *)
+(* All publish calls during replay are automatically ephemeral *)
+
+(* ── Low-level MessageBus (untyped) ── *)
 Well.MessageBus.publish "orders/new" (`Assoc [("id", `Int 42)]);
-
-(* Publish ephemeral (skip SQLite) *)
 Well.MessageBus.publish ~ephemeral:true "typing/user1" `Null;
-
-(* Subscribe with wildcard *)
 Well.MessageBus.subscribe "orders/*" (fun event ->
   Printf.printf "Got: %s\n" event.channel);
 
-(* Channel — authorized WS gateway *)
+(* ── Channel — authorized WS gateway ── *)
 Well.channel "room:*" (fun req topic ->
   match Well.current_user req with
   | Some _ -> Ok { subscribe = [topic] }
@@ -3350,6 +3442,15 @@ well db diff            # Show pending migrations
 well repl               # Interactive service shell
 ```
 
+## Companion Skills
+
+When working on this project, use these companion skills for specialized decisions:
+
+- **idesign-architecture**: Use for ALL architectural decisions — decomposing the system into services, deciding where code should live, reviewing layer violations, designing service contracts. Routes/LiveViews (client layer) must NEVER call access layer directly — always go through a manager.
+- **frontend-design**: Use when building or improving UI — pages, components, layouts, styling. Produces distinctive, production-grade interfaces instead of generic HTML.
+
+Services must hide internal functions using `open struct ... end`. Only the contract-defined interface should be public.
+
 ## Common Patterns Checklist
 
 When adding a new feature, you typically need:
@@ -3360,6 +3461,1342 @@ When adding a new feature, you typically need:
 4. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module in `lib/feature_access/`, register in `lib/app.ml`
 5. **Tests**: Add to `test/` with `Well.Db.with_test_db` or `Well.with_test_server`
 |well_skill}
+
+let idesign_skill_md = {idesign|---
+name: idesign-architecture
+description: >
+  IDesign Method for system architecture based on Juval Lowy's "Righting Software".
+  Use when designing system architecture, decomposing systems into services,
+  reviewing architecture for anti-patterns, discussing volatility-based decomposition,
+  layered architecture, service contracts, or composable design.
+  Triggers: system design, architecture review, decomposition, microservices,
+  service boundaries, layered architecture, volatility analysis, service contracts,
+  system structure, anti-patterns, functional decomposition critique.
+---
+
+# IDesign Architecture Method
+
+You are a software architect applying the IDesign Method from Juval Lowy's "Righting Software." Every recommendation you make MUST comply with the closed layered architecture, volatility-based decomposition, and the rules below. If you are unsure whether a recommendation complies, check it against the Design "Don'ts" and Interaction Rules before presenting it.
+
+**The Method = System Design + Project Design**
+
+This skill covers **System Design** -- the architecture half.
+
+## The Design Prime Directive
+
+**Never design against the requirements.**
+
+There should never be a direct mapping between the requirements and the design. Requirements tell you WHAT the system must do. Design tells you HOW to structure it to accommodate change.
+
+## Core Directives
+
+1. **Avoid functional decomposition.** Never decompose a system based on its required functionality.
+2. **Decompose based on volatility.** Identify areas of potential change and encapsulate them.
+3. **Provide a composable design.** Find the smallest set of building blocks that satisfies all use cases.
+4. **Offer features as aspects of integration, not implementation.** There is no feature -- features emerge from how components interact.
+5. **Design iteratively, build incrementally.** Iterate on the design; build in vertical slices.
+
+## Agent Decision Rules
+
+When making architectural recommendations, you MUST follow these classification rules. Every component you recommend must fit into exactly one of the IDesign categories.
+
+### Component Classification Decision Tree
+
+When the user needs shared logic between multiple Managers:
+1. **Is it a business activity (algorithm, calculation, validation, transformation)?** → Recommend a shared **Engine**. Engines are designed to be reused across Managers. Name it with a gerund prefix: `CalculatingEngine`, `ValidatingEngine`, `SearchEngine`.
+2. **Is it access to a resource (database, external system, file store)?** → Recommend a shared **ResourceAccess**. Both Managers and Engines can call ResourceAccess. Name it with a noun prefix: `MembersAccess`, `PaymentsAccess`.
+3. **Is it cross-cutting infrastructure (logging, security, messaging, diagnostics)?** → Recommend a **Utility**. The litmus test: could this component plausibly be used in any other system?
+4. **Is it use-case orchestration (workflow, sequence of steps)?** → It belongs in a **Manager**. If two Managers need the same orchestration, reconsider your decomposition -- you may have too many Managers.
+
+### NEVER Recommend These
+
+- **NEVER** recommend shared libraries, shared modules, helper packages, or common code projects for business logic. In IDesign, ALL business logic lives in services (Managers, Engines, ResourceAccess). Shared business logic = shared Engine.
+- **NEVER** recommend direct service-to-service calls that violate the closed architecture (calling up, calling sideways, skipping layers).
+- **NEVER** recommend an open or semi-open architecture pattern.
+- **NEVER** recommend services named after business domains or entities (OrderService, CustomerService, ProductService) -- this is domain/functional decomposition.
+- **NEVER** recommend CRUD-based ResourceAccess contracts (Insert, Select, Delete). Use atomic business verbs (Credit, Debit, Enroll, Pay).
+- **NEVER** recommend generic patterns (repository pattern, unit of work, mediator) as substitutes for proper IDesign classification. If you are tempted to suggest a pattern, first classify the component into an IDesign layer.
+
+### Before Presenting Any Recommendation
+
+Run this checklist:
+1. **Layer check**: Does every component belong to exactly one layer (Client, Manager, Engine, ResourceAccess, Resource, Utility)?
+2. **Naming check**: Managers have noun prefixes, Engines have gerund prefixes, ResourceAccess has noun prefixes. No gerunds outside Engines.
+3. **Closed architecture check**: Does every call go to the adjacent lower layer only? Are there any up-calls, sideways calls, or skip-layer calls?
+4. **Cardinality check**: Are there more than 5 Managers? Is the Manager-to-Engine ratio reasonable?
+5. **Functional decomposition check**: Do any service names mirror requirements or business domains? If yes, reconsider.
+6. **Reuse check**: If two Managers use different components for the same activity, you have functional decomposition. They should share one Engine.
+7. **Symmetry check**: Do call chains across use cases follow similar patterns? Asymmetry is a design smell.
+
+## What Is Wrong with Functional Decomposition
+
+Functional decomposition (creating services that mirror requirements: InvoicingService, BillingService, ShippingService) is the most common and most damaging approach. It:
+
+- **Couples services to requirements** -- any requirement change forces architecture change
+- **Precludes reuse** -- services encode call ordering and cannot be used independently
+- **Bloats clients** -- clients must orchestrate services, absorbing business logic
+- **Creates either god services or service explosions** -- too few massive or too many tiny services
+- **Maximizes the effect of change** -- changes ripple across multiple services
+- **Makes systems untestable** -- regression testing becomes impractical
+
+**Domain decomposition** (services per business domain: Sales, Accounting, Shipping) is functional decomposition in disguise with the same problems plus cross-domain duplication.
+
+**The anti-design exercise:** Split the team. Ask one half for the best design, the other for the worst. They produce the same design -- because functional decomposition is both the natural approach AND the worst approach.
+
+See [references/decomposition.md](references/decomposition.md) for full details.
+
+## Volatility-Based Decomposition
+
+The Method's core design directive: **decompose based on volatility.**
+
+- Identify **areas of potential change** and encapsulate them into services
+- Implement required behavior as the **interaction between encapsulated areas of volatility**
+- Any change is contained within its vault -- no shrapnel flying everywhere
+- What you encapsulate CAN be functional in nature but is hardly ever domain-functional
+
+### Identifying Volatility
+
+- Volatility is NOT variability. A tradesman gaining new attributes is variable. The membership management process changing is volatile.
+- If identifying a volatility produces domain decomposition along entity lines, look further.
+- You must clearly state: WHAT the volatility is, WHY it is volatile, WHAT RISK it poses.
+- Volatility may reside outside the system (e.g., payments as external Resources).
+- Solutions masquerading as requirements must be eliminated before identifying volatilities.
+
+### Common Axes of Volatility
+
+When examining a system, look for volatility in these areas:
+
+| Axis | Examples |
+|------|----------|
+| **Client applications** | Different UIs, devices, APIs, connectivity models |
+| **Business workflows** | Sequence of activities in use cases changing over time |
+| **Business rules/activities** | How specific activities are performed (algorithms, regulations) |
+| **Resource access** | Storage technology, location, access method |
+| **Regulations/compliance** | Rules changing per locale, over time |
+| **Integration** | External systems, protocols, data formats |
+| **Security** | Authentication models, authorization schemes |
+| **Deployment** | Cloud vs on-premise, data locality |
+
+See [references/decomposition.md](references/decomposition.md) for full details.
+
+## Layered Architecture (The Four Layers + Utilities)
+
+The Method prescribes a **closed architecture** with four layers plus a Utilities bar.
+
+```
+  ┌─────────────────────────────────────────────┐
+  │              CLIENT LAYER                    │  ← Who
+  │  (Portals, Apps, APIs, Timers, Admin)       │
+  ├─────────────────────────────────────────────┤
+  │         BUSINESS LOGIC LAYER                │
+  │  ┌──────────────┐  ┌──────────────┐         │
+  │  │   Managers    │  │   Engines    │         │  ← What / How
+  │  │ (sequence)    │  │ (activity)   │         │
+  │  └──────────────┘  └──────────────┘         │
+  ├─────────────────────────────────────────────┤  ┌──────────┐
+  │         RESOURCE ACCESS LAYER               │  │          │
+  │  (Atomic business verbs, NOT CRUDs)         │  │ UTILITIES│
+  ├─────────────────────────────────────────────┤  │  BAR     │
+  │            RESOURCE LAYER                   │  │(Security,│
+  │  (Database, Files, Queues, External Systems)│  │ Logging, │
+  └─────────────────────────────────────────────┘  │ Pub/Sub) │
+                                                   └──────────┘
+```
+
+### Layer Roles
+
+| Layer | Encapsulates | Component Type | Named As |
+|-------|-------------|----------------|----------|
+| **Client** | Volatility in WHO interacts | Client apps | N/A |
+| **Manager** | Volatility in WHAT (use case sequence) | Managers | NounManager |
+| **Engine** | Volatility in HOW (business activity) | Engines | GerundEngine |
+| **ResourceAccess** | Volatility in HOW to access resources | ResourceAccess | NounAccess |
+| **Resource** | WHERE system state lives | Resources | N/A |
+| **Utilities** | Cross-cutting infrastructure | Utilities | Security, Logging, etc. |
+
+### Key Properties
+
+- **Volatility decreases top-down**: Clients are most volatile; Resources are least volatile
+- **Reuse increases top-down**: Clients are least reusable; Resources are most reusable
+- **Managers should be almost expendable**: If changing a Manager is expensive, it is too big. If trivial, it is pass-through (a flaw).
+- **Closed architecture**: Components call only the adjacent lower layer. No up, no sideways, no skip-layer.
+- **ResourceAccess exposes atomic business verbs** (Credit, Debit, Pay), NOT CRUDs (Select, Insert, Delete)
+
+### Naming Rules
+
+- Two-part compound words in PascalCase: prefix + type suffix
+- **Managers**: noun prefix (AccountManager, MarketManager)
+- **Engines**: gerund prefix (CalculatingEngine, SearchEngine, RegulationEngine)
+- **ResourceAccess**: noun prefix associated with the Resource (MembersAccess, PaymentsAccess)
+- Gerund prefixes ONLY on Engines. Gerunds elsewhere signal functional decomposition.
+
+### Cardinality Guidelines
+
+- **Max 5 Managers** in a system without subsystems
+- **Max a handful of subsystems**
+- **Max 3 Managers per subsystem**
+- Golden ratio: 1 Manager: 0-1 Engines, 2 Managers: ~1 Engine, 3 Managers: ~2 Engines, 5 Managers: ~3 Engines
+- **8+ Managers**: you have failed to produce a good design
+
+See [references/structure.md](references/structure.md) for full details.
+
+## Design "Don'ts"
+
+These are **red flags indicating functional decomposition**. Violations must be investigated.
+
+See [references/design-donts.md](references/design-donts.md) for the complete list (verbatim from the book).
+
+## Composable Design
+
+### Core Use Cases
+
+Every system has 2-6 **core use cases** representing its raison d'etre. The composable design finds the **smallest set of ~10 components** that satisfies ALL core use cases. Non-core use cases (add member, create project, pay) are simple functionalities that any design can handle.
+
+### "There Is No Feature"
+
+Features are aspects of **integration**, not implementation. You do not implement features in individual services. Features emerge from how services interact. To add or change a feature, you change the workflows of the Managers, not the participating services.
+
+### Handling Change
+
+When a new requirement arrives, the correct response with a composable design is:
+1. Mostly leave existing things alone
+2. Extend the system by adding more slices or subsystems
+3. Never destroy the first floor to add a second floor
+
+See [references/composition.md](references/composition.md) for full details.
+
+## Service Contract Design
+
+Contracts are the public interfaces services present to clients. The basic element of reuse is the **contract, not the service**.
+
+### Good Contracts Are:
+1. **Logically consistent** -- no unrelated operations
+2. **Cohesive** -- all aspects of the interaction, no more, no less
+3. **Independent** -- each facet stands alone
+
+### Contract Size Metrics
+- **Optimal**: 3-5 operations per contract
+- **Acceptable**: 6-9 operations
+- **Poor design**: 12+ operations
+- **Immediate reject**: 20+ operations
+- **Red flag**: single-operation contracts
+
+### Other Rules
+- Avoid property-like operations (getters/setters)
+- Limit contracts per service to 1 or 2
+- Factor contracts down (base extraction), sideways (separate unrelated), up (shared hierarchy)
+
+### Area of Minimum Cost
+Total system cost = cost per service + integration cost. Both are nonlinear. There exists an **area of minimum cost** where services are not too big, not too small. Functional decomposition always lands at the expensive edges.
+
+See [references/contract-design.md](references/contract-design.md) for full details.
+
+## Design Validation
+
+Validate the architecture BEFORE work begins:
+
+1. Show the **call chain** or **sequence diagram** for each core use case
+2. Demonstrate that the same components participate in multiple use cases in consistent patterns
+3. Look for **self-similarity and symmetry** across call chains -- hallmark of good design
+4. If validation is ambiguous, go back to the drawing board
+
+## Business Alignment
+
+Architecture must serve the business:
+
+1. **Vision** -- terse, explicit, like a legal statement (e.g., "A platform for building applications to support the marketplace")
+2. **Objectives** -- business perspective items derived from the vision (NOT technology objectives)
+3. **Mission Statement** -- HOW you will deliver (e.g., "Design and build a collection of software components that the team can assemble into applications and features")
+4. **Architecture** -- derived from mission statement, supporting all objectives
+
+This chain (Vision -> Objectives -> Mission -> Architecture) reverses typical dynamics and gets the business on your side.
+
+## Interaction Rules (Closed Architecture)
+
+**Allowed:**
+- All components can call Utilities
+- Managers and Engines can call ResourceAccess
+- Managers can call Engines
+- Managers can queue calls to another Manager
+
+**Forbidden** (see [Design "Don'ts"](references/design-donts.md)):
+- No calling up
+- No calling sideways (except queued Manager-to-Manager)
+- No calling more than one layer down
+- Resolve violations with queued calls or Pub/Sub
+
+## Quick Reference Files
+
+- [Decomposition](references/decomposition.md) -- Volatility-based decomposition, why functional/domain decomposition fail
+- [Structure](references/structure.md) -- Layers, classification, naming, open/closed architectures, symmetry
+- [Composition](references/composition.md) -- Composable design, core use cases, handling change
+- [Design "Don'ts"](references/design-donts.md) -- VERBATIM list of architectural violations
+- [Design Standard](references/design-standard.md) -- VERBATIM checklist of all directives and guidelines
+- [Contract Design](references/contract-design.md) -- Service contracts, factoring, metrics, area of minimum cost
+- [Design Example](references/design-example.md) -- TradeMe case study demonstrating the full method
+|idesign}
+
+let idesign_ref_decomposition = {idesign|# Decomposition (Ch. 2)
+
+## Core Premise: Architecture = Decomposition
+
+- **Software architecture** is the high-level design and structure of the software system.
+- The essence of architecture is the breakdown of the system into its comprising components and how those components interact at run-time. This act is called **system decomposition**.
+- **Wrong decomposition = wrong architecture**, which inflicts horrendous pain in the future, often leading to a complete rewrite.
+- Services (in the service-orientation sense) are the most granular unit of architecture. Technology details (interfaces, operations, class hierarchies) are detailed design, NOT system decomposition.
+
+## Avoid Functional Decomposition
+
+Functional decomposition decomposes a system into building blocks based on its functionality. If the system needs invoicing, billing, and shipping, you create InvoicingService, BillingService, ShippingService.
+
+### Why It Fails
+
+1. **Couples services to requirements** -- any change in required functionality imposes a change on services. Such changes are inevitable over time.
+2. **Precludes reuse** -- services encode call ordering (what comes before/after), forming a clique of tightly coupled services that cannot be independently reused.
+3. **Too many or too big** -- leads to an explosion of services (hundreds of narrow functionalities) or bloated god monoliths. Both afflictions often appear side by side.
+4. **Client bloat and coupling** -- someone must combine functional services into required behavior; that someone is the client. The client absorbs business logic (sequencing, ordering, error compensation). The client IS the system. Multiple clients (web, mobile) duplicate orchestration logic.
+5. **Multiple points of entry** -- the client enters the system in multiple places, multiplying security, scalability, and cross-cutting concerns.
+6. **Service chaining bloat** -- alternative: services call each other (A calls B calls C). Services become coupled to call order. Error compensation creates massive coupling (C must undo A and B on failure).
+7. **Maximizes the effect of change** -- by definition, changes affect multiple (if not most) components. Accommodating change is THE reason to avoid functional decomposition.
+8. **Makes systems untestable** -- coupling and complexity make only unit testing practical. Unit testing alone is borderline useless (defects are in interactions). Functional decomposition makes regression testing impractical, producing systems rife with defects.
+
+### The TANSTAAFL Argument
+
+Functional decomposition violates the first law of thermodynamics: the outcome (system design) should be high-value, but the process (mapping requirements to services) is fast, easy, mechanistic. **You cannot add value without effort.** The very attributes that make functional decomposition appealing preclude it from adding value.
+
+### When TO Use Functional Decomposition
+
+Functional decomposition IS a decent **requirements discovery technique** -- it helps discover hidden functionality areas, uncover requirements and their relationships. **Extending functional decomposition into a design is deadly.** There should never be a direct mapping between requirements and design.
+
+## Avoid Domain Decomposition
+
+Domain decomposition decomposes based on business domains (Sales, Engineering, Accounting). It is **even worse** than functional decomposition -- it is functional decomposition in disguise (Kitchen is where you do the cooking, Bedroom is where you do the sleeping).
+
+Problems unique to domain decomposition:
+- Each domain must duplicate functionality that occurs across domains
+- Each domain devolves into an ugly grab bag of functionality
+- Cross-domain communication reduced to CRUD-like state changes
+- Building sequentially by domain is catastrophically wasteful (each new domain requires reworking all previous domains)
+- There is no meaningful reuse between parts
+
+## Volatility-Based Decomposition
+
+### The Method's Design Directive
+
+**Decompose based on volatility.**
+
+### Definition
+
+Volatility-based decomposition identifies **areas of potential change** and encapsulates those into services or system building blocks. You then implement the required behavior as the **interaction between the encapsulated areas of volatility**.
+
+### The Vault Metaphor
+
+Think of your system as a series of vaults. Any change is like a hand grenade with the pin pulled out. With volatility-based decomposition: open the appropriate vault's door, toss the grenade inside, close the door. Whatever was inside may be destroyed completely, but **there is no shrapnel flying everywhere**. You have contained the change.
+
+### Encapsulation Is Not Necessarily Functional
+
+What you encapsulate CAN be functional in nature but is hardly ever domain-functional (meaningful to the business). Example: Electricity in a house is an area of functionality AND an important area to encapsulate because power is highly volatile (AC/DC, 110V/220V, solar/generator/grid) and not specific to any domain. The receptacle encapsulates all that volatility.
+
+### Identifying Volatility
+
+- **Volatility vs. Variability**: A tradesman gaining new attributes is variable (data changes). The membership management process changing is volatile (behavior/structure changes). Only volatile things merit components.
+- If identifying a volatility produces domain decomposition along entity lines, look further for the true underlying volatility.
+- You must clearly state: WHAT the volatility is, WHY it is volatile, WHAT RISK it poses (likelihood and effect).
+- There is nothing wrong with suggesting candidate volatilities, then examining the resultant architecture. If the result is a spiderweb of interactions or is asymmetric, the design is likely wrong.
+- Volatility may reside outside the system entirely (e.g., payments handled by external systems as Resources).
+
+### Solutions Masquerading as Requirements
+
+Requirements often contain embedded solutions that constrain the design space unnecessarily. Before identifying volatilities, eliminate solutions masquerading as requirements:
+- "The system shall use a SQL database" -- the real requirement is data persistence
+- "The system shall send email notifications" -- the real requirement is user notification
+- Strip away the "how" to reveal the "what"
+
+### Benefits
+
+- Changes are **contained in each module** -- no side effects outside the module boundary
+- Lower complexity + easier maintenance = much improved quality
+- **Reuse**: if something is encapsulated the same way in another system, you have a chance at reuse
+- **Extensibility**: extend by adding more areas of encapsulated volatility or integrating existing areas differently
+- **Resilience to feature creep**: changes during development are contained, giving a better chance of meeting the schedule
+
+### VBD and Testing
+
+Volatility-based decomposition lends well to regression testing. Fewer components, smaller components, and simpler interactions drastically reduce complexity. This makes it feasible to write regression testing that tests the system end to end, tests each subsystem individually, and eventually tests independent components. Since VBD contains changes inside building blocks, inevitable changes do not disrupt regression testing. You can test a change in isolation without interfering with inter-component and inter-subsystem testing.
+
+### The Volatility Challenge
+
+The main challenges in performing volatility-based decomposition have to do with **time, communication, and perception**:
+
+- Volatility is often not self-evident. No customer will present requirements as areas of volatility -- they present functionality.
+- VBD takes longer than functional decomposition. You must analyze requirements to recognize areas of volatility.
+- The whole purpose of requirements analysis is to identify areas of volatility. This requires effort and sweat -- complying with the first law of thermodynamics (TANSTAAFL).
+- **The 2% problem**: Architects decompose complete systems only every few years. The week-to-year ratio is roughly 1:50, or 2%. You will never be good at something you spend only 2% of your time on. Managers who spend an even smaller fraction managing architects during this critical phase will not understand why it takes time.
+- **Dunning-Kruger effect**: People unskilled in a domain underestimate its complexity. When a manager says "just do A, then B, then C" they genuinely do not understand why proper decomposition takes time. Expect this and educate.
+- **Fighting insanity**: If functional decomposition is all you have ever done, you will hear an irresistible pull to repeat it. You must resist. Your professional integrity is at stake.
+
+### Resist the Siren Song
+
+Just because you always had a reporting block, or because a reporting block already exists, does not mean you need a dedicated reporting component. If reporting is not a volatile area (from the business perspective), there is nothing to encapsulate. Adding such a component manifests functional decomposition.
+
+You are Odysseus. Volatility-based decomposition is your mast. Resist the siren song of your previous bad habits. Plug the ears of the developers (they row/write code) and tie yourself to the method even when temptation strikes.
+
+### Volatility and the Business
+
+Not everything that could change should be encapsulated. Do **not** attempt to encapsulate the **nature of the business**.
+
+Two indicators that a potential change is the nature of the business (and should NOT be encapsulated):
+1. **The change is very rare** -- the likelihood of it happening is very low
+2. **The encapsulation can only be done poorly** -- no practical amount of investment in time or effort will properly encapsulate it
+
+A change to the nature of the business justifies killing the old system and starting from scratch (like razing a house to build a skyscraper on the same plot).
+
+**Speculative design**: Once you embrace VBD, you may start seeing volatilities everywhere and try to encapsulate everything. This produces numerous building blocks -- a clear sign of bad design. If the use of an encapsulation is extremely unlikely, or it attempts to change the nature of the system, you have fallen into the speculative design trap.
+
+### Design for Your Competitors
+
+A useful technique for identifying volatilities: try to design a system for your competitor (or another division).
+
+- Ask: Can your competitor use the system you are building? Can you use theirs?
+- If not, list the barriers to reuse. Where both companies perform the same service differently, that activity is probably volatile -- encapsulate it.
+- If both do something identically with no chance of divergence, there is no need for a component. Allocating one would be functional decomposition. Things competitors do identically likely represent the nature of the business.
+- If you encapsulate a volatile activity and your competitor later adopts the same approach, the change is contained in a single component -- you have future-proofed your system.
+
+### Volatility and Longevity
+
+Volatility is intimately related to longevity. The longer things have been done a certain way, the longer they will likely continue -- but also the longer until they eventually change.
+
+- You must put forward a design that accommodates changes even if at first glance they seem independent of current requirements.
+- **Heuristic for time horizon**: If the projected system lifespan is 5-7 years, identify everything that changed in the application domain over the past 7 years. Similar changes will likely occur within a similar timespan.
+- Examine the longevity of all involved systems and subsystems your design interacts with. If the ERP changes every 10 years and the last change was 8 years ago, encapsulate the ERP volatility.
+- The more frequently things change, the more likely they will change again at the same rate.
+
+### The Importance of Practicing
+
+Identifying areas of volatility is an **acquired skill**. Hardly any architect is initially trained in VBD, and the vast majority use functional decomposition. The best way to master VBD is to practice:
+
+- Practice on everyday software systems you are familiar with (insurance company, mobile app, bank, online store)
+- Examine your own past projects -- what were the pain points? Was it functional decomposition? What would the volatility-based design look like?
+- Practice on physical systems (house, car, airplane) -- the principles are universal
+- Study existing well-designed systems and identify their encapsulated volatilities
+
+## Red Flags / Anti-Patterns
+
+1. Services named after business operations (InvoicingService, BillingService, BuyingStocks)
+2. Client orchestrating multiple functional services
+3. Services that know about call ordering (what comes before/after them)
+4. Services chaining to each other with error compensation callbacks
+5. Multiple points of entry to the system
+6. Changes to one requirement requiring changes across multiple services
+7. God services that are grab bags of related functionality
+8. Explosion of tiny services each handling a narrow functional variation
+9. Direct 1:1 mapping from requirements list to service list
+10. Business logic residing in the client
+11. Difficulty switching clients (web to mobile) due to embedded logic
+12. Cross-cutting concern changes (notifications, storage) requiring changes to all services
+|idesign}
+
+let idesign_ref_structure = {idesign|# Structure (Ch. 3)
+
+## Layers and Services
+
+A layered approach to system design requires a handful of layers, terminating with a layer of actual physical resources (database, message queue, etc.). The preferred way of crossing layers is by calling services.
+
+### Benefits of Using Services
+
+1. **Scalability** -- services can be instantiated per-call, avoiding proportional back-end load
+2. **Security** -- service-oriented platforms treat security as first-class; they authenticate and authorize all calls (not just from client, but between services)
+3. **Throughput and availability** -- services can accept calls over queues, handling excess load; multiple instances can process the same queue
+4. **Responsiveness** -- services can throttle calls into a buffer
+5. **Reliability** -- can use reliable messaging protocols, handle network issues, order calls
+6. **Consistency** -- services can participate in the same unit of work (transaction or coordinated business transaction with eventual consistency)
+7. **Synchronization** -- calls can be automatically synchronized even if clients use multiple concurrent threads
+
+## The Four Layers + Utilities
+
+### Client Layer (Presentation Layer)
+
+- The top layer. Elements can be end-user applications OR other systems interacting with your system.
+- All Clients use the same entry points, subject to the same access security, data types, and interfacing requirements.
+- Encapsulates the potential volatility in Clients: desktop apps, web portals, mobile apps, APIs, admin applications. These use different technologies, deploy differently, have their own versions and life cycles.
+- Often the most volatile part of a typical software system.
+- Changes in one Client component do not affect another.
+
+### Business Logic Layer
+
+Encapsulates the volatility in the system's business logic (required behavior, best expressed in use cases).
+
+#### Managers
+- Encapsulate the volatility in the **sequence** (orchestration of the workflow)
+- Tend to encapsulate a **family of logically related use cases** within a particular subsystem
+- Each Manager has its own related set of use cases to execute
+
+#### Engines
+- Encapsulate the volatility in the **activity** (business rules and activities)
+- More restricted scope than Managers
+- Managers may use zero or more Engines
+- Engines may be shared between Managers (designed with reuse in mind)
+- If two Managers use two different Engines for the same activity, you have functional decomposition
+
+### Resource Access Layer
+
+- Encapsulates the volatility in accessing a resource
+- Must encapsulate both: (a) volatility in the method of access, and (b) volatility in the resource itself
+
+**Critical Rule: Do NOT expose CRUD-like or I/O-like contracts.**
+- If your ResourceAccess contract has Select(), Insert(), Delete() -- you are exposing that the resource is a database
+- Avoid operations like Open(), Close(), Seek(), Read(), Write() -- these betray a file-based resource
+
+**Use Atomic Business Verbs:**
+- Activities decompose to indivisible activities called atomic business verbs
+- Example: In a bank, "credit" and "debit" are atomic business verbs (atomic from the business perspective)
+- Atomic business verbs are practically immutable because they relate to the nature of the business
+- A well-designed ResourceAccess exposes atomic business verbs, converting them internally to CRUDs
+
+### Resource Layer
+
+- Contains actual physical Resources: database, file system, cache, message queue
+- The Resource can be internal or external to the system
+- Often the Resource is a whole system in its own right
+
+### Utilities Bar
+
+- A vertical bar on the side of the architecture containing Utility services
+- Common infrastructure that nearly all systems require
+- Examples: Security, Logging, Diagnostics, Instrumentation, Pub/Sub, Message Bus, Hosting
+- **Litmus test**: Can the component plausibly be used in any other system, such as a smart cappuccino machine?
+
+## Classification Guidelines
+
+### Naming Rules
+
+Names must be two-part compound words in PascalCase. The suffix is the service type.
+
+| Type | Suffix | Prefix | Examples |
+|------|--------|--------|----------|
+| Manager | Manager | Noun associated with encapsulated use case volatility | AccountManager, MarketManager, MembershipManager |
+| Engine | Engine | Gerund (noun from verb + "-ing") or noun describing activity | CalculatingEngine, SearchEngine, RegulationEngine |
+| ResourceAccess | Access | Noun associated with the Resource | MembersAccess, PaymentsAccess, ProjectsAccess |
+
+**Gerund rules:**
+- Gerunds should ONLY be used as prefix with Engines. Gerunds elsewhere signal functional decomposition.
+- Good: CalculatingEngine (Engines "do" things: aggregate, adapt, strategize, validate, rate, calculate, transform)
+- Bad: BillingManager, BillingAccess -- the gerund conveys "doing" rather than orchestration or access volatility
+- Good: AccountManager, AccountAccess
+
+**Atomic business verbs should NOT be used in a prefix** for a service name. These verbs belong only in operation names in contracts at the resource access level.
+
+### The Four Questions
+
+| Question | Layer | Description |
+|----------|-------|-------------|
+| **Who** | Clients | Who interacts with the system |
+| **What** | Managers | What is required of the system |
+| **How** (Business) | Engines | How the system performs business activities |
+| **How** (Resource) | ResourceAccess | How the system accesses Resources |
+| **Where** | Resources | Where the system state is |
+
+Use the four questions for **initiation** (start with a clean slate) and **validation** (check: are all Clients purely "who" with no "what"?).
+
+### Managers-to-Engines Ratio
+
+| Managers | Engines |
+|----------|---------|
+| 1 | 0 or at most 1 |
+| 2 | likely 1 |
+| 3 | 2 is likely best |
+| 5 | may need as many as 3 |
+| 8+ | you have already failed |
+
+Most systems will never have many Managers because they will not have many truly independent families of use cases. A single Manager can support more than one family of use cases (different service contracts or facets).
+
+### Key Observations
+
+**Volatility decreases top-down:**
+- Clients are the most volatile
+- Managers change when use cases change, but less than Clients
+- Engines are less volatile than Managers
+- ResourceAccess is even less volatile
+- Resources are the least volatile, changing at a glacial pace
+
+This is extremely valuable: the most-depended-upon components (lower layers) are also the least volatile. If they were most volatile, the system would implode.
+
+**Reuse increases top-down:**
+- Clients are hardly ever reusable (platform-specific)
+- Managers are reusable (same Manager from multiple Clients)
+- Engines are even more reusable (same Engine called by multiple Managers)
+- ResourceAccess components are very reusable
+- Resources are the most reusable element
+
+**Almost-Expendable Managers:**
+1. **Expensive Manager** -- you fight the change, fear its cost. Too big, likely functional decomposition.
+2. **Expendable Manager** -- you shrug it off, think nothing of it. Pass-through. Always a design flaw.
+3. **Almost-Expendable Manager** -- you contemplate the change, think through specific ways to adapt. **This is the ideal.** The Manager merely orchestrates Engines and ResourceAccess, encapsulating sequence volatility.
+
+## Subsystems and Services
+
+### Vertical Slices
+- A cohesive interaction between Manager, Engine, and ResourceAccess constitutes a logical subsystem -- a vertical slice
+- Each vertical slice implements a corresponding set of use cases
+
+### Sizing
+- Avoid over-partitioning. Most systems: only a handful of subsystems.
+- Limit Managers per subsystem to three.
+
+### Incremental Construction
+- **Incremental** = build components layer by layer within a correct architecture (foundation, walls, roof)
+- **Iterative** = grow from a small version to a larger one (skateboard to car) -- wasteful and difficult
+- Building incrementally is predicated on the architecture remaining constant. Only possible with volatility-based decomposition.
+- Extensibility: mostly leave existing things alone, extend by adding more slices or subsystems.
+
+## About Microservices
+
+There are no microservices -- only services. Services are services regardless of size.
+
+### Three Problems with Microservices (as commonly practiced)
+
+1. **Implied constraint on the number of services** -- the building blocks within subsystems (Manager, Engine, ResourceAccess) should all be services too. Push the benefits of services as deep as possible.
+2. **Widespread use of functional decomposition** -- dooms every microservices effort. Potentially the biggest failure in the history of software.
+3. **Communication protocols** -- the vast majority use REST/HTTP for all communication. A well-designed system should NEVER use the same communication mechanism internally and externally. External: HTTP may be fine. Internal: use fast, reliable channels (TCP/IP, named pipes, IPC, message queues, etc.).
+
+## Open and Closed Architectures
+
+### Open Architecture (Avoid)
+- Any component can call any other regardless of layer
+- Trading encapsulation for flexibility is a bad trade
+- Calling down multiple layers: when you switch a Resource, all Engines must change
+- Calling up: Manager must respond to UI changes
+- Calling sideways: Manager A calling Manager B -- almost always functional decomposition
+
+### Closed Architecture (Preferred)
+- Components in one layer can call those in the adjacent lower layer only
+- Promotes decoupling by trading flexibility for encapsulation -- the better trade
+
+### Semi-Closed/Semi-Open (Avoid)
+- Allows calling more than one layer down
+- Justified only in: (1) key infrastructure where every ounce of performance matters, (2) codebases that hardly ever change
+
+## Relaxing the Rules
+
+### Calling Utilities
+Utilities reside in a vertical bar cutting across all layers. Any component can use any Utility.
+
+### Calling ResourceAccess by Business Logic
+Both Managers and Engines can call ResourceAccess without violating closed architecture.
+
+### Managers Calling Engines
+Managers can directly call Engines. Engines are really an expression of the Strategy design pattern.
+
+### Queued Manager-to-Manager Calls
+A Manager can queue a call to another Manager (the queue listener is effectively another Client). Business systems commonly have one use case triggering a deferred execution of another use case.
+
+### Opening the Architecture (Handling Violations)
+- Do NOT brush transgressions aside or demand blind compliance
+- Nearly always, a transgression indicates an underlying need
+- Address the need in a way that complies with closed architecture
+- Sideways Manager call? -> Queue the call instead
+- Manager calls up to Client? -> Use Pub/Sub Utility service
+
+## Strive for Symmetry
+
+- All good architectures are symmetric
+- Symmetry appears as repeated call patterns across use cases
+- Absence of symmetry is a cause for concern
+- If a Manager implements four use cases and three publish events but the fourth does not -- why? Investigate.
+- If only one of four use cases queues a call to another Manager -- that asymmetry is a design smell
+- Symmetry is so fundamental you should see the same call patterns across Managers
+|idesign}
+
+let idesign_ref_composition = {idesign|# Composition (Ch. 4)
+
+## Requirements and Changes
+
+Requirements change -- that is what requirements do. The more requirements change, the higher the demand for software professionals. Embrace change; it is what keeps you employed.
+
+### Resenting Change
+
+Most developers design their system against the requirements, maximizing the affinity between requirements and architecture. When requirements change, the design must change too. This makes change painful, expensive, and destructive. People learn to resent change -- literally resenting the hand that feeds them.
+
+### The Design Prime Directive
+
+**Never design against the requirements.**
+
+Any attempt at designing against the requirements will always guarantee pain. There should never be a direct mapping between requirements and design.
+
+### Futility of Requirements
+
+- A decent system has dozens of use cases; large systems have hundreds
+- No one has ever had the time to correctly spec all use cases upfront
+- Requirements specs contain duplicates, contradictions, missing items
+- Requirements will change over time: new ones added, existing ones removed or modified
+- Attempting to gather the complete set and design against them is an exercise in futility
+
+## Composable Design
+
+The goal of any system design is to satisfy ALL use cases -- present and future, known and unknown. A composable design does not aim to satisfy any use case in particular.
+
+### Core Use Cases
+
+Not all use cases are equal. There are only two types:
+- **Core use cases**: represent the essence of the business (2-6 per system, rarely more)
+- **Regular use cases**: variations and permutations of core use cases
+
+Core use cases:
+- Will hardly ever be presented explicitly in the requirements document
+- Are not easy to find, and the small number does not make it simple to agree on what they are
+- Will almost always be some kind of abstraction of other use cases
+- May require a new term or name to differentiate them from the rest
+- Even a flawed requirements document will contain them because they ARE the essence of the business
+
+Finding core use cases is an iterative process between the architect and the requirements owner.
+
+### The Architect's Mission
+
+Your mission as architect: identify the **smallest set of components** that you can put together to satisfy all the core use cases. Since all other use cases are merely variations, regular use cases represent a different interaction between the components, not a different decomposition.
+
+**When requirements change, your design does not.**
+
+This is about decomposition into components, not implementation. The integration code inside Managers will change as requirements change -- but that is an implementation change, not an architectural change.
+
+## Architecture Validation
+
+Composable design enables **design validation**: produce an interaction between your services for each core use case.
+
+### Call Chain Diagrams
+- Superimpose the call chain onto the layered architecture diagram
+- Components connected by arrows showing direction and type of call
+- Solid black arrow = synchronous (request/response) call
+- Dashed gray arrow = queued call
+- Simple, quick, good for nontechnical audiences
+- Downside: no notion of call order, duration, or multiple calls to same component
+
+### Sequence Diagrams
+- Similar to UML sequence diagrams with IDesign notational differences
+- Lifelines colored according to architectural layers
+- Each participating component has a vertical bar (lifeline)
+- Time flows top to bottom; length of bars indicates relative duration
+- Better for complex use cases and technical audiences
+- Extremely useful for subsequent detailed design (interfaces, methods, parameters)
+
+### Smallest Set
+
+You want not just a set of components but the **smallest** set. Less is more in architecture.
+
+- A monolith (1 component) is too few -- horrible internal complexity
+- 300 components (one per use case) is too many -- high integration cost
+- The order of magnitude for a typical system is ~10 services
+- Using The Method: 2-5 Managers, 2-3 Engines, 3-8 ResourceAccess, plus Resources and Utilities = ~12 building blocks at most
+- If larger, break into subsystems
+
+**You cannot validate architectures with a single component or hundreds of components.** A single large component by definition does everything, and a component per use case also supports all use cases -- neither proves design merit.
+
+### Duration of Design Effort
+
+- Requirements gathering and analysis may take weeks or months -- that is NOT design
+- Once you have the core use cases and areas of volatility, producing a valid design using The Method takes hours to a few days at most
+- Design is not time-consuming if you know what you are doing
+
+## There Is No Feature
+
+**Features are always and everywhere aspects of integration, not implementation.**
+
+This is a universal design rule governing all systems. You never see a "feature" as a discrete component in any well-designed system:
+- A car transports you from A to B -- the feature emerges from integrating chassis, engine, gearbox, seats, dashboard, driver, road, insurance, and fuel
+- A laptop provides word processing -- the feature emerges from integrating keyboard, screen, hard drive, bus, CPU, and memory
+- This is fractal: every level of every system works the same way, down to the quarks
+
+In software: you do not implement features in individual services. Features emerge from how services interact. To add or change a feature, you change the workflows of the Managers, not the participating services.
+
+## Handling Change
+
+With functional decomposition, change is spread across multiple components and aspects of the system. People defer changes, fight changes, or explain to customers that changes are bad ideas. Fighting change is tantamount to killing the system -- customers need the feature now, not in six months.
+
+### Containing the Change
+
+The trick is not to fight, postpone, or punt change -- it is to **contain its effects**.
+
+With volatility-based decomposition:
+- A change to a requirement is a change to a use case
+- Some Manager implements the workflow executing that use case
+- The Manager may be gravely affected -- perhaps you discard it entirely and create a new one
+- But the underlying components (Engines, ResourceAccess, Resources, Utilities) are NOT affected
+
+The bulk of effort in any system goes into the services the Manager uses:
+- **Engines** are expensive: business activities vital to the system's workflows
+- **ResourceAccess** is nontrivial: identifying atomic business verbs, translating them to resource access methods
+- **Resources** must be scalable, reliable, highly performant: schemas, caching, replication, partitioning, connection management, indexing, transactions, etc.
+- **Utilities** require top skills: world-class security, diagnostics, logging, messaging, hosting
+- **Clients** are time and labor intensive: superior UX, convenient and reusable APIs
+
+When a change happens to the Manager, you salvage and reuse ALL the effort that went into Clients, Engines, ResourceAccess, Resources, and Utilities. By reintegrating these services in the Manager, you contain the change and respond quickly and efficiently.
+
+**This is the essence of agility.**
+|idesign}
+
+let idesign_ref_design_donts = {idesign|# Design "Don'ts" (Ch. 3 - Structure)
+
+Red flags indicating functional decomposition or architectural violations. If you do any of these, treat it as a warning sign and investigate what you are missing.
+
+## Call-Flow Violations
+
+### Clients must not call multiple Managers in the same use case
+- Doing so tightly couples Managers -- they no longer represent separate families of use cases, separate subsystems, or separate slices
+- Chained Manager calls from the Client indicate functional decomposition: the Client is stitching together underlying functionalities
+- Clients CAN call multiple Managers but NOT in the same use case (e.g., Client calls Manager A for use case 1, then Manager B for use case 2)
+
+### Clients must not call Engines
+- The only entry points to the business layer are the Managers
+- Managers represent the system; Engines are an internal layer implementation detail
+- If Clients call Engines, use case sequencing and associated volatility migrates to the Clients, polluting them with business logic
+- Calls from Clients to Engines are the hallmark of functional decomposition
+
+### Managers must not queue calls to more than one Manager in the same use case
+- If two Managers receive a queued call, why not a third? Why not all of them?
+- The need for multiple Managers to respond to a queued call is a strong indication you should use a Pub/Sub Utility service instead
+
+### Engines must not receive queued calls
+- Engines are utilitarian and exist to execute a volatile activity for a Manager
+- They have no independent meaning on their own
+- A queued call, by definition, executes independently from anything else in the system
+- Performing just the activity of an Engine, disconnected from any use case or other activities, does not make any business sense
+
+### ResourceAccess services must not receive queued calls
+- Similar to the Engines guideline
+- ResourceAccess services exist to service a Manager or an Engine and have no meaning on their own
+- Accessing a Resource independently from anything else in the system does not make any business sense
+
+### Engines never call each other
+- Not only does this violate the closed architecture principle, it also does not make sense in a volatility-based decomposition
+- The Engine should have already encapsulated everything to do with that activity
+- Any Engine-to-Engine calls indicate functional decomposition
+
+### ResourceAccess services never call each other
+- If ResourceAccess services encapsulate the volatility of an atomic business verb, one atomic verb cannot require another
+- Similar to the rule that Engines should not call each other
+- Note: a 1:1 mapping between ResourceAccess and Resources is NOT required
+- Often two or more Resources logically must be joined together to implement some atomic business verbs
+- A single ResourceAccess service should perform the join rather than making inter-ResourceAccess calls
+
+## Event/Pub-Sub Violations
+
+### Clients must not publish events
+- Events represent changes to the state of the system about which Clients (or Managers) may want to know
+- A Client has no need to notify itself (or other Clients)
+- Knowledge of the internals of the system is often required to detect the need to publish an event -- knowledge that the Clients should not have
+- However, with functional decomposition the Client IS the system and needs to publish events
+
+### Engines must not publish events
+- Publishing an event requires noticing and responding to a change in the system
+- This is typically a step in a use case executed by the Manager
+- An Engine performing an activity has no way of knowing much about the context of the activity or the state of the use case
+
+### ResourceAccess services must not publish events
+- ResourceAccess services have no way of knowing the significance of the state of the Resource to the system
+- Any such knowledge or responding behavior should reside in Managers
+
+### Resources must not publish events
+- The need for the Resource to publish events is often the result of a tightly coupled functional decomposition
+- Similar to the case for ResourceAccess -- business logic of this kind should reside in Managers
+- As a Manager modifies the state of the system, the Manager should also publish the appropriate events
+
+### Engines, ResourceAccess, and Resources must not subscribe to events
+- Processing an event is almost always the start of some use case, so it must be done in a Client or a Manager
+- The Client may inform a user about the event, and the Manager may execute some back-end behavior
+|idesign}
+
+let idesign_ref_design_standard = {idesign|# Design Standard (Appendix C) -- System Design & Service Contract Parts
+
+A consolidated checklist of all directives and guidelines from the book. A **directive** is a rule you should never violate -- doing so is certain to cause failure. A **guideline** is advice you should follow unless you have a strong and unusual justification for going against it. Violating a single guideline alone is not certain to cause failure, but too many violations will.
+
+## The Prime Directive
+
+**Never design against the requirements.**
+
+## Directives (System Design)
+
+1. Avoid functional decomposition.
+2. Decompose based on volatility.
+3. Provide a composable design.
+4. Offer features as aspects of integration, not implementation.
+5. Design iteratively, build incrementally.
+
+## System Design Guidelines
+
+### 1. Requirements
+
+a. Capture required behavior, not required functionality.
+b. Describe required behavior with use cases.
+c. Document all use cases that contain nested conditions with activity diagrams.
+d. Eliminate solutions masquerading as requirements.
+e. Validate the system design by ensuring it supports all core use cases.
+
+### 2. Cardinality
+
+a. Avoid more than five Managers in a system without subsystems.
+b. Avoid more than a handful of subsystems.
+c. Avoid more than three Managers per subsystem.
+d. Strive for a golden ratio of Engines to Managers.
+e. Allow ResourceAccess components to access more than one Resource if necessary.
+
+### 3. Attributes
+
+a. Volatility should decrease top-down.
+b. Reuse should increase top-down.
+c. Do not encapsulate changes to the nature of the business.
+d. Managers should be almost expendable.
+e. Design should be symmetric.
+f. Never use public communication channels for internal system interactions.
+
+### 4. Layers
+
+a. Avoid open architecture.
+b. Avoid semi-closed/semi-open architecture.
+c. Prefer a closed architecture.
+   - i. Do not call up.
+   - ii. Do not call sideways (except queued calls between Managers).
+   - iii. Do not call more than one layer down.
+   - iv. Resolve attempts at opening the architecture by using queued calls or asynchronous event publishing.
+d. Extend the system by implementing subsystems.
+
+### 5. Interaction Rules
+
+a. All components can call Utilities.
+b. Managers and Engines can call ResourceAccess.
+c. Managers can call Engines.
+d. Managers can queue calls to another Manager.
+
+### 6. Interaction Don'ts
+
+a. Clients do not call multiple Managers in the same use case.
+b. Managers do not queue calls to more than one Manager in the same use case.
+c. Engines do not receive queued calls.
+d. ResourceAccess components do not receive queued calls.
+e. Clients do not publish events.
+f. Engines do not publish events.
+g. ResourceAccess components do not publish events.
+h. Resources do not publish events.
+i. Engines, ResourceAccess, and Resources do not subscribe to events.
+
+## Service Contract Design Guidelines
+
+1. Design reusable service contracts.
+2. Comply with service contract design metrics:
+   - a. Avoid contracts with a single operation.
+   - b. Strive to have 3 to 5 operations per service contract.
+   - c. Avoid service contracts with more than 12 operations.
+   - d. Reject service contracts with 20 or more operations.
+3. Avoid property-like operations.
+4. Limit the number of contracts per service to 1 or 2.
+5. Avoid junior hand-offs.
+6. Have only the architect or competent senior developers design the contracts.
+|idesign}
+
+let idesign_ref_contract_design = {idesign|# Service Contract Design (Appendix B)
+
+## Modularity and Cost
+
+Total system cost is the sum of two nonlinear cost elements:
+
+### Cost per Service
+- As the number of services decreases, their size increases (toward a monolith)
+- Complexity increases nonlinearly with size: a service 2x as big may be 4x more complex; 4x as big may be 20-100x more complex
+- Increased complexity induces nonlinear increases in cost
+- Result: cost per service is a compounded, nonlinear, monotonically increasing function of size
+
+### Integration Cost
+- As the number of services increases, the complexity of possible interactions increases
+- With n services, interaction complexity grows in proportion to n^2 or even n^n
+- Integration cost is also a nonlinear curve, shooting up with more services
+
+### Area of Minimum Cost
+- The total system cost curve (sum of both) has a flat region: the **area of minimum cost**
+- Services are not too big, not too small; not too many, not too few
+- You do not need the absolute minimum -- just stay in the flat region (diminishing returns beyond that)
+- What you MUST avoid: the nonlinear edges (monolith or explosion of services), which are many multiples more expensive
+- **Functional decomposition always lands at the expensive edges** -- either a few massive accumulations or an explosion of small services
+- Systems designed outside the area of minimum cost have already failed before anyone writes the first line of code -- because the tools organizations have (add another developer, another month) are linear, and the problem is nonlinear
+
+## Services and Contracts
+
+A **contract** is the public interface that the service presents to its clients -- a set of operations that clients can call. Not all interfaces are service contracts; service contracts are formal interfaces the service commits to support, unchanged.
+
+### Contracts as Facets
+- A contract represents a facet of the service (like an employment contract is one facet of a person)
+- A single service can support more than one contract (multiple facets)
+- The first reduction: assume a one-to-one ratio between services and contracts, then the cost curve behavior remains unchanged
+
+### Attributes of Good Contracts
+
+Good contracts are:
+
+1. **Logically consistent** -- no unrelated operations bundled together. Every operation in the contract must logically belong with the others.
+2. **Cohesive** -- all the aspects required to describe the interaction, no more, no less. Nothing missing, nothing extra.
+3. **Independent** -- each contract (facet) stands alone and operates independently of other contracts.
+
+**The basic element of reuse is the contract, not the service.** Good interfaces are reusable while the underlying services never are (like the tool-hand interface reused from stone axe to computer mouse).
+
+Logically consistent, cohesive, and independent contracts ARE reusable contracts. Reusability is not binary -- it is a spectrum. The more a contract has these three attributes, the more reusable it is.
+
+## Factoring Contracts
+
+Design contracts as if they will be reused countless times across multiple systems including your competitors'. The degree of actual reuse is immaterial -- the obligation to design reusable contracts keeps you in the area of minimum cost.
+
+### Factoring Down (Base Extraction)
+- Extract a base contract from a more specific contract
+- When a contract has operations that are not universally applicable, factor the general operations into a base contract and keep the specific ones in a derived contract
+- Example: `IScannerAccess` has `ScanCode()` and `AdjustBeam()` -- but `AdjustBeam()` is scanner-specific. Factor down to `IReaderAccess` (base with `ReadCode()`) and `IScannerAccess : IReaderAccess` (derived with `AdjustBeam()`)
+- This enables non-optical devices (keypads, RFID readers) to implement `IReaderAccess`
+
+### Factoring Sideways (Separating Concerns)
+- Separate logically unrelated operations into independent contracts
+- When a contract is not logically consistent (grab-bag of unrelated operations), split it
+- Example: `IReaderAccess` with `ReadCode()`, `OpenPort()`, `ClosePort()` -- port management is a different concern than code reading. Factor sideways into `IReaderAccess` and `ICommunicationDevice`
+- Services implement both contracts; other devices (conveyer belts) can reuse just `ICommunicationDevice`
+- Every change in business domain should NOT lead to a reflected change in the design -- that is the hallmark of bad design
+
+### Factoring Up (Contract Hierarchy)
+- Create a shared base contract when identical operations appear in multiple unrelated contracts
+- Example: all devices need `Abort()` and `RunDiagnostics()` -- factor up to `IDeviceControl` base contract
+- Both `IReaderAccess` and `IBeltAccess` derive from `IDeviceControl`
+
+## Contract Design Metrics
+
+Metrics are **evaluation tools, not validation tools**. Complying does not guarantee a good design, but violating implies a bad design.
+
+### Size Metrics (Operations per Contract)
+
+| Operations | Assessment |
+|-----------|------------|
+| 1 | Red flag -- investigate. A single-operation facet is suspect |
+| 2 | Possibly fine, but examine carefully |
+| **3-5** | **Optimal range** |
+| 6-9 | Acceptable, but starting to drift from area of minimum cost |
+| 12+ | Very likely a poor design -- look for ways to factor |
+| 20+ | **Immediately reject** -- no possible circumstances where this is benign |
+
+### Avoid Properties
+- Do not expose property-like operations (getters/setters) in service contracts
+- Properties imply state and implementation details -- when the service changes, the client must change
+- Good interactions are always behavioral: `DoSomething()`, `Abort()` -- not `GetName()`, `SetName()`
+- Keep data where the data is; only invoke operations on it
+
+### Limit the Number of Contracts per Service
+- A service should support no more than 1 or 2 contracts
+- If a service supports 3+ independent facets, the service may be too big
+- In order of magnitude: 1-4 contracts per service, with PERT estimate of ~2.2
+- In practice: most well-designed services have 1 or 2 contracts
+- Tip: if your architecture has 8+ Managers, represent some Managers as additional independent facets (contracts) on other Managers to reduce the count
+
+### Using Metrics
+- Do NOT try to design to the metrics -- contract design is iterative
+- Spend time identifying the reusable contract, keep examining if they are logically consistent, cohesive, and independent
+- If you violate the metrics, keep working until you have decent contracts
+- Once you have devised good contracts, you will find that they match the metrics naturally
+
+## The Contract Design Challenge
+
+- Designing contracts is an acquired skill requiring practice and mentorship
+- The ideas are simple but not simplistic
+- The real challenge is not designing the contracts but getting management support for the time investment
+- Rushing to implementation with poor contracts will cause the project to fail (nonlinear cost consequences)
+- With junior teams: the architect must design the contracts or closely guide the process
+- Make contract design part of each service life cycle
+|idesign}
+
+let idesign_ref_design_example = {idesign|# System Design Example: TradeMe (Ch. 5)
+
+A complete case study demonstrating The Method applied to a real system. Focus on the **thought process and rationale**, not on copying the specific outcome -- every system is different.
+
+## System Overview
+
+**TradeMe** is a marketplace system for matching tradesmen (plumbers, electricians, etc.) to contractors and construction projects. Think of it as a brokerage platform.
+
+- **Tradesmen**: Self-employed skilled workers with skill levels, certifications, geographic areas, expected pay rates
+- **Contractors**: Need tradesmen on an ad hoc basis (days to weeks), list projects with required trades, skills, location, rates, duration
+- **Revenue model**: Spread between tradesman ask rate and contractor bid rate + membership fees
+- **Operations**: 9 call centers across Europe, ~220 account reps, locale-specific regulations
+- **Legacy system**: Two-tier desktop app, 5 disconnected subsystems, business logic in clients, no security design, change-resistant
+
+**Goals for new system**: Automate work, single system across all locales, deploy beyond Europe, compete with more flexible competitors.
+
+## Use Cases and Core Use Case Identification
+
+The customer provided 8 use cases (mostly reflecting legacy behavior):
+1. Add Tradesman/Contractor
+2. Request Tradesman
+3. Match Tradesman
+4. Assign Tradesman
+5. Terminate Tradesman
+6. Pay Tradesman
+7. Create Project
+8. Close Project
+
+### Finding the Core Use Case
+
+Most provided use cases were simple functionalities (add member, create project, pay someone) that any design can handle. The system's raison d'etre is **matching tradesmen to contractors and projects**. Only **Match Tradesman** resembles the core purpose.
+
+**Principles**:
+- Core use cases represent the essence of the business (2-6 per system)
+- They are rarely presented explicitly in requirements
+- They are almost always abstractions of other use cases
+- Even flawed requirements contain them because they ARE the business
+- Do NOT ignore non-core use cases -- demonstrating that the design easily supports them shows the design's versatility
+
+### Simplifying Use Cases
+
+**Swim lanes technique**: Show flow of control between roles. For TradeMe, three role types were identified:
+- **Client** (users -- back-office reps or system admins)
+- **Market** (core marketplace logic)
+- **Member** (tradesmen and contractors)
+
+Swim lanes help clarify required behavior, add decision boxes or synchronization bars, and are later used to seed and validate the design.
+
+## The Anti-Design Effort
+
+Deliberately produce the **worst possible design** through functional decomposition, to expose what NOT to do.
+
+### Anti-Design #1: The Monolith
+A single god service -- dumping ground of all functionalities. No encapsulation. Cannot validate.
+
+### Anti-Design #2: Granular Building Blocks (Services Explosion)
+Every activity in the use cases becomes a component. Results in either:
+- **Fat client**: Client absorbs all business logic (orchestration, sequencing, error compensation)
+- **Chained services**: Services call each other up and sideways -- tight coupling, open architecture
+
+### Anti-Design #3: Domain Decomposition
+Decompose along entity lines (Tradesman service, Contractor service, Project service). Nearly limitless possible domain boundaries with no principled selection criteria. Impossible to validate -- a request touches multiple domains. Has all drawbacks from Chapter 2.
+
+## Business Alignment
+
+### The Vision
+> *A platform for building applications to support the TradeMe marketplace.*
+
+- Terse and explicit -- read like a legal statement
+- "Platform" (not just "application") addresses business need for diversity and extensibility
+- Powerful tool for **repelling irrelevant demands** that do not serve the vision
+
+### The Business Objectives (7 items)
+1. Unify repositories and applications
+2. Quick turnaround for new requirements
+3. High degree of customization across countries/markets
+4. Full business visibility and accountability (fraud detection, audit)
+5. Forward looking on technology and regulations
+6. Integrate well with external systems
+7. Streamline security
+
+**Note**: Development cost was NOT an objective. The pain was in the items above.
+
+### The Mission Statement
+> *Design and build a collection of software components that the development team can assemble into applications and features.*
+
+Deliberately does NOT identify developing features as the mission. The mission is to **build components** -- making volatility-based decomposition the natural approach.
+
+### The Chain
+```
+Vision → Objectives → Mission Statement → Architecture
+```
+This **reverses typical dynamics**: instead of the architect pleading with management, you compel the business to instruct you to design the right architecture. Once they agree on the chain, they are on your side.
+
+## Volatility Identification
+
+### Glossary (Who/What/How/Where)
+Before decomposing, answer four questions to seed the effort:
+
+- **Who**: Tradesmen, Contractors, Reps, Education centers, Background processes (timers)
+- **What**: Membership, Marketplace of projects, Certificates/training
+- **How**: Searching, Complying with regulations, Accessing resources
+- **Where**: Local database, Cloud, Other systems
+
+The "what" list hints strongly at possible subsystems. Use it to **seed decomposition** as you look for volatilities.
+
+### Rejected/Reframed Volatility Candidates
+
+| Candidate | Verdict | Reason |
+|-----------|---------|--------|
+| **Tradesman** | Rejected | Variable, not volatile. Adding attributes doesn't change architecture. Signals domain decomposition. Real volatility is *membership management*. |
+| **Education certificates** | Reframed | Certification itself is just an attribute. Real volatility is in the *workflow of matching regulations with certifications* (→ Regulation Engine). |
+| **Projects** | Reframed | A `Project Manager` implies domain decomposition. A `Market Manager` is better -- many activities don't require a project context. Core volatility is *the marketplace*. |
+| **Payments** | Outside system | Volatile but ancillary. TradeMe is not a payment system. Handled as external *Resources*. |
+| **Notification** | Weak | Message Bus Utility suffices. Only if notification transport became strongly volatile would a dedicated Manager be needed. |
+| **Analysis** | Rejected | Speculative design. The company is not in the optimization business. Folded into Market Manager if ever needed. |
+
+**Principle**: If identifying a volatility produces domain decomposition along entity lines, look further. You must clearly state: WHAT the volatility is, WHY it is volatile, WHAT RISK it poses.
+
+### Accepted Areas of Volatility
+
+| Volatility Area | Encapsulated In | Notes |
+|---|---|---|
+| Client applications | Individual Client apps | Each client environment evolves independently |
+| Managing membership | `Membership Manager` | Adding/removing members, benefits, discounts |
+| Fees | `Market Manager` | All ways TradeMe makes money |
+| Projects | `Market Manager` | NOT a separate Project service |
+| Disputes | `Membership Manager` | Misunderstandings, fraud |
+| Matching and approvals | `Search Engine` + `Market Manager` | Two sub-volatilities: algorithm + criteria definition |
+| Education | `Education Manager` + `Search Engine` | Training workflow + class searching |
+| Regulations | `Regulation Engine` | Changes per country and over time |
+| Reports | `Regulation Engine` | Reporting and auditing requirements |
+| Localization | `Clients` (UI) + `Regulation Engine` (rules) | Two distinct sub-volatilities |
+| Resources (storage) | `ResourceAccess` + `Resources` | Storage nature is volatile |
+| Deployment model | Subsystem composition + `Message Bus` | Cloud vs on-premise, data locality |
+| Authentication/authorization | `Security` Utility | Credential models, identity, roles |
+
+**Key**: The mapping of volatilities to components is NOT 1:1. A single Manager can encapsulate multiple related volatilities.
+
+## Static Architecture
+
+```
+CLIENT TIER:
+  Tradesman Portal | Contractors Portal | Education Portal | Marketplace App | Timer
+
+UTILITIES (vertical bar):
+  Security | Logging | Message Bus
+
+BUSINESS LOGIC TIER:
+  Membership Manager | Market Manager | Education Manager
+  Regulation Engine | Search Engine
+
+RESOURCE ACCESS TIER:
+  Regulations Access | Payments Access | Members Access
+  Projects Access | Contractors Access | Education Access | Workflows Access
+
+RESOURCES TIER:
+  Regulations | Payments | Members | Projects | Contractors | Education | Workflows
+```
+
+### Key Observations
+- **3 Managers** (Membership, Market, Education) -- within cardinality guidelines
+- **2 Engines** (Regulation, Search) -- golden ratio to Managers
+- **Timer** is in Client tier because it initiates behavior even though it's not part of the system
+- **ResourceAccess** converts atomic business verbs (e.g., "pay") into resource access
+- **3 Utilities**: Security, Message Bus, Logging
+
+## Operational Concepts
+
+### All Communication via Message Bus
+All Client-to-Manager communication happens over the Message Bus. Clients and Managers never interact directly -- they are unaware of each other, fostering extensibility and independent evolution.
+
+### Message Bus Properties
+- Queued Pub/Sub mechanism: N:M communication
+- Messages queue if bus or publisher is down, process when connectivity restores
+- Private queue per subscriber handles subscriber downtime
+- Minimum features: queuing, multicast, security, headers/context propagation, offline work, failure handling, transactional processing, high throughput, multiple-protocol support, reliable messaging
+
+### "The Message Is the Application" Pattern
+
+The most important operational concept. There is no single collection of components you can point to as "the application." The system is a loose collection of services posting and receiving messages. Each service processes a message, does local work, posts back to the bus. Behavior changes are induced by changing how services respond to messages, not by changing the architecture.
+
+**When NOT to use**: Adds complexity. A simpler design where Clients just queue calls to Managers may suffice. Calibrate to the capability of the developers and management.
+
+## Workflow Manager Pattern
+
+A Manager that can create, store, retrieve, and execute workflows using a third-party workflow execution tool.
+
+**How it operates**:
+1. For each Client call, load the correct workflow type AND specific instance (with state/context)
+2. Execute the workflow
+3. Persist the workflow instance back to the workflow store
+4. No session with the Client -- state-aware through workflow persistence
+5. Each call carries the unique workflow instance ID
+
+**Benefits**:
+- To add/change a feature, change the *workflows*, not the participating services
+- Product owners or end users can edit workflows (with safeguards)
+- Enables high degree of customization across markets
+- Software team focuses on core services rather than chasing requirement changes
+
+## Design Validation
+
+Validate the architecture BEFORE work commences by showing the call chain for each use case.
+
+### Validation Pattern (Self-Similar Across All Use Cases)
+1. A Client posts to the Message Bus
+2. A Manager (workflow-based) picks up the message and loads the appropriate workflow
+3. The Manager consults Engines and/or ResourceAccess components
+4. The Manager posts results back to the Message Bus
+5. Other Managers and/or Clients respond to the posted message
+
+### Use Case Validations Summary
+
+**Add Tradesman/Contractor**: Client → Message Bus → Membership Manager (loads workflow from Workflows Access) → Regulation Engine + Payments Access + Members Access
+
+**Request Tradesman**: Client → Message Bus → Market Manager (loads workflow) → Regulation Engine + Projects Access. Posts back to bus triggering Match Tradesman.
+
+**Match Tradesman** (core use case): Client/Timer → Message Bus → Market Manager → Search Engine + Members Access + Projects Access + Contractors Access. Posts to bus → triggers Membership Manager for Assign.
+
+**Assign Tradesman**: Message Bus → Membership Manager → Regulation Engine + Members Access. Posts to bus → Market Manager → Projects Access. Collaborative execution between two Managers via bus.
+
+**Terminate Tradesman**: Client → Message Bus → Market Manager → Projects Access. Posts to bus → Membership Manager → Regulation Engine + Members Access. Flow can also run in **reverse direction** (tradesman-initiated).
+
+**Pay Tradesman**: Timer → Message Bus → Market Manager → Workflows Access + Payments Access (→ external payment system).
+
+**Create Project**: Client → Message Bus → Market Manager → Workflows Access + Projects Access. Simple, handled entirely by one Manager.
+
+**Close Project**: Client → Message Bus → Market Manager → Projects Access. Posts to bus → Membership Manager → Regulation Engine + Members Access. Same pattern as Terminate Tradesman -- reinforces self-similarity.
+
+### Cross-Cutting Patterns
+
+- **Self-similarity and symmetry**: Every call chain follows the same structural pattern. This is a hallmark of good design.
+- **Use case chaining**: Request → Match → Assign → Pay. Each operates independently, chaining through messages on the bus.
+- **Bidirectional flow**: Same architecture supports flows from different initiators (contractor-initiated vs tradesman-initiated termination).
+- **Composability**: New capabilities added by subscribing new services to existing messages or adding new workflows -- no modification of existing components.
+
+## Principles Demonstrated
+
+1. Design takes hours to days, not months (TradeMe: less than a week, two-person team)
+2. Always transform, clarify, and consolidate raw requirements
+3. The anti-design effort exposes what NOT to do
+4. Business alignment (Vision → Objectives → Mission → Architecture) gets the business on your side
+5. Candidate volatilities must be rigorously challenged -- entities as volatilities signal domain decomposition
+6. Distinguish variable (data changes) from volatile (behavior/structure changes)
+7. Volatility may reside outside the system (payments as external Resources)
+8. The mapping of volatilities to components is not 1:1
+9. Self-similarity and symmetry in call chains validate the design
+10. The design is open-ended -- extend by adding more services or workflows, never by modifying existing ones
+|idesign}
+
+let frontend_design_skill = {frontend|---
+name: frontend-design
+description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, or applications. Generates creative, polished code that avoids generic AI aesthetics.
+license: Complete terms in LICENSE.txt
+---
+
+This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
+
+The user provides frontend requirements: a component, page, application, or interface to build. They may include context about the purpose, audience, or technical constraints.
+
+## Design Thinking
+
+Before coding, understand the context and commit to a BOLD aesthetic direction:
+- **Purpose**: What problem does this interface solve? Who uses it?
+- **Tone**: Pick an extreme: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
+- **Constraints**: Technical requirements (framework, performance, accessibility).
+- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+
+**CRITICAL**: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work - the key is intentionality, not intensity.
+
+Then implement working code (HTML/CSS/JS, React, Vue, etc.) that is:
+- Production-grade and functional
+- Visually striking and memorable
+- Cohesive with a clear aesthetic point-of-view
+- Meticulously refined in every detail
+
+## Frontend Aesthetics Guidelines
+
+Focus on:
+- **Typography**: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial and Inter; opt instead for distinctive choices that elevate the frontend's aesthetics; unexpected, characterful font choices. Pair a distinctive display font with a refined body font.
+- **Color & Theme**: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes.
+- **Motion**: Use animations for effects and micro-interactions. Prioritize CSS-only solutions for HTML. Use Motion library for React when available. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (animation-delay) creates more delight than scattered micro-interactions. Use scroll-triggering and hover states that surprise.
+- **Spatial Composition**: Unexpected layouts. Asymmetry. Overlap. Diagonal flow. Grid-breaking elements. Generous negative space OR controlled density.
+- **Backgrounds & Visual Details**: Create atmosphere and depth rather than defaulting to solid colors. Add contextual effects and textures that match the overall aesthetic. Apply creative forms like gradient meshes, noise textures, geometric patterns, layered transparencies, dramatic shadows, decorative borders, custom cursors, and grain overlays.
+
+NEVER use generic AI-generated aesthetics like overused font families (Inter, Roboto, Arial, system fonts), cliched color schemes (particularly purple gradients on white backgrounds), predictable layouts and component patterns, and cookie-cutter design that lacks context-specific character.
+
+Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. NEVER converge on common choices (Space Grotesk, for example) across generations.
+
+**IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
+
+Remember: Claude is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision.
+|frontend}
 
 let systemd_unit name =
   Printf.sprintf
@@ -3459,4 +4896,15 @@ let project_files name =
     { path = "data/uploads/.gitkeep"; content = "" };
     { path = Printf.sprintf "%s.service" name; content = systemd_unit name };
     { path = ".claude/skills/well/SKILL.md"; content = well_skill };
+    (* .claude/skills/idesign-architecture/ *)
+    { path = ".claude/skills/idesign-architecture/SKILL.md"; content = idesign_skill_md };
+    { path = ".claude/skills/idesign-architecture/references/decomposition.md"; content = idesign_ref_decomposition };
+    { path = ".claude/skills/idesign-architecture/references/structure.md"; content = idesign_ref_structure };
+    { path = ".claude/skills/idesign-architecture/references/composition.md"; content = idesign_ref_composition };
+    { path = ".claude/skills/idesign-architecture/references/design-donts.md"; content = idesign_ref_design_donts };
+    { path = ".claude/skills/idesign-architecture/references/design-standard.md"; content = idesign_ref_design_standard };
+    { path = ".claude/skills/idesign-architecture/references/contract-design.md"; content = idesign_ref_contract_design };
+    { path = ".claude/skills/idesign-architecture/references/design-example.md"; content = idesign_ref_design_example };
+    (* .claude/skills/frontend-design/ *)
+    { path = ".claude/skills/frontend-design/SKILL.md"; content = frontend_design_skill };
   ]
