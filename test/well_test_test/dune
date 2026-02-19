@@ -1,0 +1,3 @@
+(test
+ (name well_test_test)
+ (libraries well.test))

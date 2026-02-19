@@ -1,5 +1,4 @@
 (library
  (name well)
  (public_name well.core)
- (libraries eio eio_main yojson unix tls-eio mirage-crypto-rng.unix mirage-crypto-pk x509 ptime domain-name digestif base64 zarith str well_html sqlite3 zip)
- (instrumentation (backend bisect_ppx)))
+ (libraries eio eio_main yojson unix tls-eio mirage-crypto-rng.unix mirage-crypto-pk x509 ptime domain-name digestif base64 zarith str well_html sqlite3 zip))

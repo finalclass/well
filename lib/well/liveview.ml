@@ -374,7 +374,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
     let rec read_loop () =
       match Websocket.receive_json ws with
       | None -> Eio.Stream.add unified WsClosed
-      | Some json -> Eio.Stream.add unified (WsMsg json); read_loop ()
+      | Some json -> Telemetry.incr_ws_messages (); Eio.Stream.add unified (WsMsg json); read_loop ()
     in
     read_loop ()
   );

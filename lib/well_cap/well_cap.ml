@@ -13,6 +13,7 @@ let init () =
   Well.LiveView.register "/live/_well/services" (module Services_live);
   Well.LiveView.register "/live/_well/messages" (module Messages_live);
   Well.LiveView.register "/live/_well/logs" (module Logs_live);
+  Well.LiveView.register "/live/_well/telemetry" (module Telemetry_live);
   Well.LiveView.register "/live/_well/repl" (module Repl_live);
   (* Serve embedded well.js — no auth needed for static asset *)
   !(Well.Cap_hook._register_cap_get) "/_well/well.js" (fun _req ->
@@ -64,6 +65,9 @@ let init () =
   !(Well.Cap_hook._register_cap_get) "/_well/logs" (authed (fun _req ->
     Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/logs" ~title:"Logs"
               ~endpoint:"/live/_well/logs")));
+  !(Well.Cap_hook._register_cap_get) "/_well/telemetry" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/telemetry" ~title:"Telemetry"
+              ~endpoint:"/live/_well/telemetry")));
   !(Well.Cap_hook._register_cap_get) "/_well/repl" (authed (fun _req ->
     Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/repl" ~title:"REPL"
               ~endpoint:"/live/_well/repl")));

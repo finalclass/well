@@ -535,7 +535,6 @@ it "serves homepage" (fun () ->
 ```bash
 well init <name>        # Scaffold new project
 well test [-w] [-f pat] # Run tests (watch, filter)
-well test --coverage    # With bisect_ppx coverage
 well docs [--open]      # Generate HTML documentation
 well contract build .   # Generate from TOML contracts
 well db diff            # Show pending migrations

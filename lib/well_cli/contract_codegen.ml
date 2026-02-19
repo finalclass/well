@@ -179,8 +179,9 @@ let generate_struct_module ~local_module msg_name props =
   p "    match wire with\n";
   p "    | `List arr ->\n";
   p "      let a = Array.of_list arr in\n";
+  p "      let _g i = if i < Array.length a then a.(i) else `Null in\n";
   List.iteri (fun i (prop : property) ->
-    let access = Printf.sprintf "a.(%d)" i in
+    let access = Printf.sprintf "(_g %d)" i in
     let expr =
       if prop.optional then
         of_wire_expr ~local_module access (Optional prop.type_info)

@@ -34,7 +34,7 @@ let root_dune = {|(dirs :standard \ _build)
 |}
 
 let makefile =
-  {|.PHONY: build check test clean lock dev coverage
+  {|.PHONY: build check test clean lock dev
 
 build:
 	dune build
@@ -53,13 +53,6 @@ lock:
 
 dev:
 	dune exec -w bin/main.exe
-
-coverage:
-	dune test --instrument-with bisect_ppx --force
-	dune exec -- bisect-ppx-report html -o _coverage/
-	dune exec -- bisect-ppx-report summary
-	@echo "Coverage report: _coverage/index.html"
-	@rm -f *.coverage
 |}
 
 let readme name =
@@ -118,8 +111,6 @@ data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
 node_modules/
-_coverage/
-*.coverage
 _docs/
 |}
 
@@ -141,8 +132,7 @@ let lib_app_dune _name =
  (name app)
  (wrapped false)
  (libraries contract well.core well.html eio yojson sqlite3)
- (preprocess (pps ppx_deriving_yojson well.ppx))
- (instrumentation (backend bisect_ppx)))
+ (preprocess (pps ppx_deriving_yojson well.ppx)))
 |}
 
 let app_ml _name =
@@ -227,8 +217,7 @@ let test_dune name =
   Printf.sprintf
     {|(test
  (name %s_test)
- (libraries app well.test)
- (instrumentation (backend bisect_ppx)))
+ (libraries app well.test))
 |}
     name
 
@@ -1430,10 +1419,10 @@ module Note = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let id = (match a.(0) with `Int i -> i | _ -> 0) in
-      let title = (match a.(1) with `String s -> s | _ -> "") in
-      let body = (match a.(2) with `String s -> s | _ -> "") in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
+      let title = (match (_g 1) with `String s -> s | _ -> "") in
+      let body = (match (_g 2) with `String s -> s | _ -> "") in
       { id; title; body }
     | _ -> failwith "Note.of_wire: expected JSON array"
 end
@@ -1454,8 +1443,8 @@ module ListReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let limit = (match a.(0) with `Int i -> i | _ -> 0) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let limit = (match (_g 0) with `Int i -> i | _ -> 0) in
       { limit }
     | _ -> failwith "ListReq.of_wire: expected JSON array"
 end
@@ -1476,8 +1465,8 @@ module IdReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let id = (match a.(0) with `Int i -> i | _ -> 0) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
       { id }
     | _ -> failwith "IdReq.of_wire: expected JSON array"
 end
@@ -1500,9 +1489,9 @@ module CreateReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let title = (match a.(0) with `String s -> s | _ -> "") in
-      let body = (match a.(1) with `String s -> s | _ -> "") in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let title = (match (_g 0) with `String s -> s | _ -> "") in
+      let body = (match (_g 1) with `String s -> s | _ -> "") in
       { title; body }
     | _ -> failwith "CreateReq.of_wire: expected JSON array"
 end
@@ -1523,8 +1512,8 @@ module Ok = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let ok = (match a.(0) with `Bool b -> b | _ -> false) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let ok = (match (_g 0) with `Bool b -> b | _ -> false) in
       { ok }
     | _ -> failwith "Ok.of_wire: expected JSON array"
 end
@@ -1545,8 +1534,8 @@ module NoteList = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let notes = (match a.(0) with `List items -> List.map (fun item -> Note.of_wire item) items | _ -> []) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let notes = (match (_g 0) with `List items -> List.map (fun item -> Note.of_wire item) items | _ -> []) in
       { notes }
     | _ -> failwith "NoteList.of_wire: expected JSON array"
 end
@@ -1637,10 +1626,10 @@ module Task = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let id = (match a.(0) with `Int i -> i | _ -> 0) in
-      let title = (match a.(1) with `String s -> s | _ -> "") in
-      let completed = (match a.(2) with `Bool b -> b | _ -> false) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
+      let title = (match (_g 1) with `String s -> s | _ -> "") in
+      let completed = (match (_g 2) with `Bool b -> b | _ -> false) in
       { id; title; completed }
     | _ -> failwith "Task.of_wire: expected JSON array"
 end
@@ -1661,8 +1650,8 @@ module ListReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let limit = (match a.(0) with `Int i -> i | _ -> 0) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let limit = (match (_g 0) with `Int i -> i | _ -> 0) in
       { limit }
     | _ -> failwith "ListReq.of_wire: expected JSON array"
 end
@@ -1683,8 +1672,8 @@ module IdReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let id = (match a.(0) with `Int i -> i | _ -> 0) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
       { id }
     | _ -> failwith "IdReq.of_wire: expected JSON array"
 end
@@ -1705,8 +1694,8 @@ module CreateReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let title = (match a.(0) with `String s -> s | _ -> "") in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let title = (match (_g 0) with `String s -> s | _ -> "") in
       { title }
     | _ -> failwith "CreateReq.of_wire: expected JSON array"
 end
@@ -1731,10 +1720,10 @@ module UpdateReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let id = (match a.(0) with `Int i -> i | _ -> 0) in
-      let title = (match a.(1) with `Null -> None | x -> Some ((match x with `String s -> s | _ -> ""))) in
-      let completed = (match a.(2) with `Null -> None | x -> Some ((match x with `Bool b -> b | _ -> false))) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
+      let title = (match (_g 1) with `Null -> None | x -> Some ((match x with `String s -> s | _ -> ""))) in
+      let completed = (match (_g 2) with `Null -> None | x -> Some ((match x with `Bool b -> b | _ -> false))) in
       { id; title; completed }
     | _ -> failwith "UpdateReq.of_wire: expected JSON array"
 end
@@ -1755,8 +1744,8 @@ module Ok = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let ok = (match a.(0) with `Bool b -> b | _ -> false) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let ok = (match (_g 0) with `Bool b -> b | _ -> false) in
       { ok }
     | _ -> failwith "Ok.of_wire: expected JSON array"
 end
@@ -1777,8 +1766,8 @@ module TaskList = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let tasks = (match a.(0) with `List items -> List.map (fun item -> Task.of_wire item) items | _ -> []) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let tasks = (match (_g 0) with `List items -> List.map (fun item -> Task.of_wire item) items | _ -> []) in
       { tasks }
     | _ -> failwith "TaskList.of_wire: expected JSON array"
 end
@@ -1876,8 +1865,8 @@ module AddReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let title = (match a.(0) with `String s -> s | _ -> "") in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let title = (match (_g 0) with `String s -> s | _ -> "") in
       { title }
     | _ -> failwith "AddReq.of_wire: expected JSON array"
 end
@@ -1898,8 +1887,8 @@ module ToggleReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let id = (match a.(0) with `Int i -> i | _ -> 0) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
       { id }
     | _ -> failwith "ToggleReq.of_wire: expected JSON array"
 end
@@ -1920,8 +1909,8 @@ module DeleteReq = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let id = (match a.(0) with `Int i -> i | _ -> 0) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
       { id }
     | _ -> failwith "DeleteReq.of_wire: expected JSON array"
 end
@@ -1942,8 +1931,8 @@ module TaskListRes = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let tasks = (match a.(0) with `List items -> List.map (fun item -> Task_access.Task.of_wire item) items | _ -> []) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let tasks = (match (_g 0) with `List items -> List.map (fun item -> Task_access.Task.of_wire item) items | _ -> []) in
       { tasks }
     | _ -> failwith "TaskListRes.of_wire: expected JSON array"
 end
@@ -1964,8 +1953,8 @@ module TaskRes = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let task = Task_access.Task.of_wire a.(0) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let task = Task_access.Task.of_wire (_g 0) in
       { task }
     | _ -> failwith "TaskRes.of_wire: expected JSON array"
 end
@@ -1986,8 +1975,8 @@ module StatusRes = struct
   let of_wire (wire : Yojson.Safe.t) : t =
     match wire with
     | `List arr ->
-      let a = Array.of_list arr in
-      let ok = (match a.(0) with `Bool b -> b | _ -> false) in
+      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
+      let ok = (match (_g 0) with `Bool b -> b | _ -> false) in
       { ok }
     | _ -> failwith "StatusRes.of_wire: expected JSON array"
 end
@@ -3266,6 +3255,61 @@ Well.channel "room:*" (fun req topic ->
   | None -> Error "unauthorized");
 ```
 
+## S3 Storage
+
+Environment variables: `AWS_ENDPOINT_URL`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`.
+
+```ocaml
+(* Connect — reads env vars, with optional overrides *)
+let s3 = Well.S3.connect ()
+(* Or with explicit config: *)
+let s3 = Well.S3.connect
+  ~endpoint_url:"https://s3.amazonaws.com"
+  ~region:"eu-central-1"
+  ~bucket:"my-bucket" ()
+
+(* Upload — auto-detects MIME from extension *)
+let () = match Well.S3.put s3 ~key:"photos/cat.jpg" image_data with
+  | Ok () -> ()
+  | Error msg -> failwith msg
+
+(* Upload with explicit content type *)
+let () = match Well.S3.put s3 ~key:"data/export" ~content_type:"application/csv" csv with
+  | Ok () -> ()
+  | Error msg -> failwith msg
+
+(* Download *)
+let data = match Well.S3.get s3 ~key:"photos/cat.jpg" with
+  | Ok body -> body
+  | Error msg -> failwith msg
+
+(* Delete *)
+let () = match Well.S3.delete s3 ~key:"photos/cat.jpg" with
+  | Ok () -> ()
+  | Error msg -> failwith msg
+
+(* Copy *)
+let () = match Well.S3.copy s3 ~src:"photos/cat.jpg" ~dst:"backup/cat.jpg" with
+  | Ok () -> ()
+  | Error msg -> failwith msg
+
+(* Head — returns (status, headers) *)
+let () = match Well.S3.head s3 ~key:"photos/cat.jpg" with
+  | Ok (_status, headers) ->
+    let size = List.assoc_opt "content-length" headers in
+    ignore size
+  | Error msg -> failwith msg
+
+(* Presigned URL — default 24h expiry *)
+let url = Well.S3.presigned_url s3 ~key:"photos/cat.jpg" ()
+let url = Well.S3.presigned_url s3 ~key:"photos/cat.jpg" ~expires_in:3600 ()
+
+(* Create bucket on startup *)
+let () = match Well.S3.create_bucket s3 with
+  | Ok () -> ()
+  | Error msg -> failwith msg
+```
+
 ## Testing
 
 ```ocaml
@@ -3300,7 +3344,6 @@ it "serves homepage" (fun () ->
 ```bash
 well init <name>        # Scaffold new project
 well test [-w] [-f pat] # Run tests (watch, filter)
-well test --coverage    # With bisect_ppx coverage
 well docs [--open]      # Generate HTML documentation
 well contract build .   # Generate from TOML contracts
 well db diff            # Show pending migrations
@@ -3317,6 +3360,36 @@ When adding a new feature, you typically need:
 4. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module in `lib/feature_access/`, register in `lib/app.ml`
 5. **Tests**: Add to `test/` with `Well.Db.with_test_db` or `Well.with_test_server`
 |well_skill}
+
+let systemd_unit name =
+  Printf.sprintf
+    {|[Unit]
+Description=%s (well app)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/%s
+ExecStart=/srv/%s/bin/%s
+Restart=on-failure
+RestartSec=3
+
+# Environment
+Environment=PORT=4000
+Environment=WELL_CAP_PASS=
+# Environment=WELL_DOMAIN=example.com
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/%s/data
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+|}
+    name name name name name
 
 type file = {
   path : string;
@@ -3384,5 +3457,6 @@ let project_files name =
     { path = "tsconfig.json"; content = tsconfig_json };
     { path = "data/.gitkeep"; content = "" };
     { path = "data/uploads/.gitkeep"; content = "" };
+    { path = Printf.sprintf "%s.service" name; content = systemd_unit name };
     { path = ".claude/skills/well/SKILL.md"; content = well_skill };
   ]

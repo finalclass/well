@@ -1,0 +1,3 @@
+(test
+ (name html_test)
+ (libraries well.html well.test))

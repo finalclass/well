@@ -97,6 +97,7 @@ let publish ?(ephemeral = false) channel payload =
   if ephemeral then begin
     let event = { id = 0; channel; payload; created_at = now } in
     notify event;
+    Telemetry.incr_bus_events ();
     0
   end else begin
     let db = get_db () in
@@ -115,6 +116,7 @@ let publish ?(ephemeral = false) channel payload =
     let _ = Sqlite3.finalize stmt in
     let event = { id; channel; payload; created_at = now } in
     notify event;
+    Telemetry.incr_bus_events ();
     id
   end
 

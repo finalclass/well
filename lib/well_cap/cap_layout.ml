@@ -6,6 +6,7 @@ let nav_items = [
   ("/_well/services", "Services", {|&#9656;|});
   ("/_well/messages", "Messages", {|&#9993;|});
   ("/_well/logs", "Logs", {|&#9776;|});
+  ("/_well/telemetry", "Telemetry", {|&#9201;|});
   ("/_well/repl", "REPL", {|&#9002;|});
 ]
 
@@ -330,6 +331,13 @@ Well.hooks.ReplTerminal = {
     if (this._hideComp) this._hideComp();
     if (this._updateHint) this._updateHint();
   }
+};
+Well.hooks.TelemetryRefresh = {
+  mounted() {
+    this._timer = setInterval(() => this.pushEvent("tick", {}), 2000);
+  },
+  updated() {},
+  destroyed() { if (this._timer) clearInterval(this._timer); }
 };
 function _t(ts) {
   const d = new Date(ts * 1000);

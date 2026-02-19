@@ -2,5 +2,4 @@
  (name well_html)
  (public_name well.html)
  (wrapped false)
- (libraries str)
- (instrumentation (backend bisect_ppx)))
+ (libraries str))

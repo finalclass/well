@@ -1,8 +1,7 @@
 (library
  (name well_cap)
  (public_name well.cap)
- (libraries well well_html)
- (instrumentation (backend bisect_ppx)))
+ (libraries well well_html))
 
 (rule
  (targets cap_css.ml)

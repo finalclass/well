@@ -1,0 +1,3 @@
+(test
+ (name bus_test)
+ (libraries well well.test))

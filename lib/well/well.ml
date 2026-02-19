@@ -1678,6 +1678,7 @@ let handle_connection flow _addr =
            write_response flow r;
            close_flow ()
      end else begin
+       let t0 = Unix.gettimeofday () in
        let body = read_body reader hdrs in
        let is_cap_path =
          let p = path in
@@ -1722,12 +1723,16 @@ let handle_connection flow _addr =
            query = query_params; session_id = ""; _context = [] }
        in
        let resp = pipeline req in
+       Telemetry.incr_requests ();
+       let dt_us = int_of_float ((Unix.gettimeofday () -. t0) *. 1e6) in
+       Telemetry.add_latency_us dt_us;
        (match extract_stream resp with
         | Some (cfg, extra_hdrs) ->
             write_stream_response flow cfg extra_hdrs;
             close_flow ()
         | None ->
             let resolved = maybe_compress hdrs (resolve resp) in
+            if resolved.r_status >= 500 then Telemetry.incr_errors ();
             write_response flow resolved;
             close_flow ())
      end
@@ -1887,6 +1892,12 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
       { Acme.http_status = r.status;
         http_headers = r.headers;
         http_body = r.body });
+  (* Wire S3._fetch_ref — converts fetch_response to (status, headers, body) tuple *)
+  S3._fetch_ref :=
+    (fun ~method_ ~headers ~body url ->
+      let r = !_fetch_impl ~method_ ~headers ~body url in
+      (r.status, r.headers, r.body));
+  S3._mime_ref := ext_to_mime;
   let cwd = Eio.Stdenv.cwd env in
   _write_file_impl :=
     (fun path data ->
@@ -2110,6 +2121,11 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
         let tls_flow = Tls_eio.client_of_flow ?host tls_cfg tcp_flow in
         send_and_receive tls_flow)
       else send_and_receive tcp_flow);
+  S3._fetch_ref :=
+    (fun ~method_ ~headers ~body url ->
+      let r = !_fetch_impl ~method_ ~headers ~body url in
+      (r.status, r.headers, r.body));
+  S3._mime_ref := ext_to_mime;
   let cwd = Eio.Stdenv.cwd env in
   _write_file_impl :=
     (fun path data ->
@@ -2253,6 +2269,8 @@ module LiveView = Liveview
 module Service = Service
 module MessageBus = Message_bus
 module Channel = Channel
+module S3 = S3
+module Telemetry = Telemetry
 
 (* ── Typed pub/sub ────────────────────────────────────────────────── *)
 
