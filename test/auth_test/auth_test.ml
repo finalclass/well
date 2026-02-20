@@ -238,6 +238,209 @@ let () =
     let _r = Well.Auth.register ~email:"grantuser@example.com" ~password:"password123" in
     (* We can't easily set session in test, so we verify the module behavior directly *)
 
+    (* ── create_user_without_password ────────────────────────────────── *)
+
+    let r_nopw = Well.Auth.create_user_without_password ~email:"oauth@example.com" in
+    check "create_user_without_password: ok" (Result.is_ok r_nopw);
+    let nopw_user = Result.get_ok r_nopw in
+    check "create_user_without_password: has id" (nopw_user.id > 0);
+    check "create_user_without_password: email" (nopw_user.email = "oauth@example.com");
+
+    (* Password login impossible on no-password account *)
+    let l_nopw = Well.Auth.login ~email:"oauth@example.com" ~password:"anything" in
+    check "no-password user: login fails" (Result.is_error l_nopw);
+
+    (* Duplicate email *)
+    let r_dup_nopw = Well.Auth.create_user_without_password ~email:"oauth@example.com" in
+    check "create_user_without_password: dup email" (Result.is_error r_dup_nopw);
+
+    (* Invalid email *)
+    let r_bad_nopw = Well.Auth.create_user_without_password ~email:"notanemail" in
+    check "create_user_without_password: invalid email" (Result.is_error r_bad_nopw);
+
+    (* ── find_user_by_email ──────────────────────────────────────────── *)
+
+    let found = Well.Auth.find_user_by_email "oauth@example.com" in
+    check "find_user_by_email: found" (Option.is_some found);
+    check "find_user_by_email: correct id" ((Option.get found).id = nopw_user.id);
+
+    (* Case insensitive *)
+    let found_case = Well.Auth.find_user_by_email "OAUTH@EXAMPLE.COM" in
+    check "find_user_by_email: case insensitive" (Option.is_some found_case);
+
+    (* Missing *)
+    let not_found = Well.Auth.find_user_by_email "nobody@nowhere.com" in
+    check "find_user_by_email: not found" (Option.is_none not_found);
+
+    (* ── with_db ─────────────────────────────────────────────────────── *)
+
+    let db_ok = ref false in
+    Well.Auth.with_db (fun _db -> db_ok := true);
+    check "with_db: executes under mutex" !db_ok;
+
+    (* ── OAuth identity DB ───────────────────────────────────────────── *)
+
+    (* Create identity *)
+    Well.OAuth.create_identity ~user_id:nopw_user.id
+      ~provider:"google" ~provider_uid:"g_12345"
+      ~email:"oauth@example.com" ~name:"Test User" ();
+
+    (* Find identity *)
+    let ident = Well.OAuth.find_identity ~provider:"google" ~provider_uid:"g_12345" in
+    check "find_identity: found" (Option.is_some ident);
+    check "find_identity: correct user_id" (Option.get ident = nopw_user.id);
+
+    (* Not found *)
+    let no_ident = Well.OAuth.find_identity ~provider:"google" ~provider_uid:"g_99999" in
+    check "find_identity: not found" (Option.is_none no_ident);
+
+    (* User identities *)
+    let idents = Well.OAuth.user_identities ~user_id:nopw_user.id in
+    check "user_identities: one identity" (List.length idents = 1);
+    check "user_identities: provider" (fst (List.hd idents) = "google");
+    check "user_identities: uid" (snd (List.hd idents) = "g_12345");
+
+    (* Add second identity *)
+    Well.OAuth.create_identity ~user_id:nopw_user.id
+      ~provider:"github" ~provider_uid:"gh_67890" ();
+    let idents2 = Well.OAuth.user_identities ~user_id:nopw_user.id in
+    check "user_identities: two identities" (List.length idents2 = 2);
+
+    (* Empty for nonexistent user *)
+    let no_idents = Well.OAuth.user_identities ~user_id:999999 in
+    check "user_identities: empty for missing user" (no_idents = []);
+
+    (* ── Provider configs ────────────────────────────────────────────── *)
+
+    let gp = Well.OAuth.google ~client_id:"cid" ~client_secret:"csec" in
+    check "google: name" (gp.name = "google");
+    check "google: is_oidc" gp.is_oidc;
+    check "google: has scopes" (List.length gp.scopes > 0);
+
+    let ghp = Well.OAuth.github ~client_id:"cid" ~client_secret:"csec" in
+    check "github: name" (ghp.name = "github");
+    check "github: not oidc" (not ghp.is_oidc);
+
+    let msp = Well.OAuth.microsoft ~client_id:"cid" ~client_secret:"csec" in
+    check "microsoft: name" (msp.name = "microsoft");
+    check "microsoft: is_oidc" msp.is_oidc;
+
+    let fbp = Well.OAuth.facebook ~client_id:"cid" ~client_secret:"csec" in
+    check "facebook: name" (fbp.name = "facebook");
+    check "facebook: not oidc" (not fbp.is_oidc);
+
+    (* ── configured_providers ────────────────────────────────────────── *)
+
+    (* Before setup: empty *)
+    check "configured_providers: empty before setup" (Well.OAuth.configured_providers () = []);
+
+    (* ── PKCE: code_challenge is S256 of verifier ────────────────────── *)
+
+    let verifier = Well.OAuth.generate_code_verifier () in
+    check "PKCE verifier: length 43" (String.length verifier = 43);
+    (* All chars in unreserved set *)
+    check "PKCE verifier: valid chars" (
+      let valid = ref true in
+      String.iter (fun c ->
+        match c with
+        | 'A'..'Z' | 'a'..'z' | '0'..'9' | '-' | '.' | '_' | '~' -> ()
+        | _ -> valid := false
+      ) verifier;
+      !valid);
+    (* Challenge is not empty *)
+    let challenge = Well.OAuth.code_challenge verifier in
+    check "PKCE challenge: not empty" (String.length challenge > 0);
+    (* Challenge is URL-safe base64 (no +, /, =) *)
+    check "PKCE challenge: url-safe" (
+      let safe = ref true in
+      String.iter (fun c ->
+        if c = '+' || c = '/' || c = '=' then safe := false
+      ) challenge;
+      !safe);
+    (* Two different verifiers produce different challenges *)
+    let verifier2 = Well.OAuth.generate_code_verifier () in
+    let challenge2 = Well.OAuth.code_challenge verifier2 in
+    check "PKCE: different verifiers → different challenges"
+      (challenge <> challenge2);
+
+    (* ── State generation ────────────────────────────────────────────── *)
+
+    let state1 = Well.OAuth.generate_state () in
+    let state2 = Well.OAuth.generate_state () in
+    check "state: 64 hex chars" (String.length state1 = 64);
+    check "state: unique" (state1 <> state2);
+
+    (* ── Provider userinfo parsing ───────────────────────────────────── *)
+
+    (* Google *)
+    let google_json = Yojson.Safe.from_string
+      {|{"sub":"123","email":"test@gmail.com","email_verified":true,"name":"Test","picture":"https://photo"}|} in
+    let gu = Well.OAuth.parse_google_user google_json in
+    check "parse google: uid" (gu.uid = "123");
+    check "parse google: email" (gu.email = Some "test@gmail.com");
+    check "parse google: verified" gu.email_verified;
+    check "parse google: name" (gu.name = Some "Test");
+    check "parse google: avatar" (gu.avatar_url = Some "https://photo");
+
+    (* Microsoft *)
+    let ms_json = Yojson.Safe.from_string
+      {|{"id":"ms456","mail":"user@outlook.com","displayName":"MS User"}|} in
+    let mu = Well.OAuth.parse_microsoft_user ms_json in
+    check "parse microsoft: uid" (mu.uid = "ms456");
+    check "parse microsoft: email" (mu.email = Some "user@outlook.com");
+    check "parse microsoft: not auto-verified" (not mu.email_verified);
+    check "parse microsoft: name" (mu.name = Some "MS User");
+
+    (* Microsoft fallback to userPrincipalName *)
+    let ms_json2 = Yojson.Safe.from_string
+      {|{"id":"ms789","userPrincipalName":"upn@example.com","displayName":"UPN"}|} in
+    let mu2 = Well.OAuth.parse_microsoft_user ms_json2 in
+    check "parse microsoft: fallback to UPN" (mu2.email = Some "upn@example.com");
+
+    (* Facebook *)
+    let fb_json = Yojson.Safe.from_string
+      {|{"id":"fb111","name":"FB User","email":"fb@example.com","picture":{"data":{"url":"https://fbpic"}}}|} in
+    let fu = Well.OAuth.parse_facebook_user fb_json in
+    check "parse facebook: uid" (fu.uid = "fb111");
+    check "parse facebook: email" (fu.email = Some "fb@example.com");
+    check "parse facebook: name" (fu.name = Some "FB User");
+    check "parse facebook: avatar" (fu.avatar_url = Some "https://fbpic");
+
+    (* ── Account linking: verified email links to existing ───────────── *)
+
+    let r_link = Well.Auth.register ~email:"linked@example.com" ~password:"password123" in
+    check "link: register existing user" (Result.is_ok r_link);
+    let link_user = Result.get_ok r_link in
+    let link_result = Well.OAuth.link_or_create_user
+      { uid = "link_uid_1"; email = Some "linked@example.com";
+        email_verified = true; name = Some "Linked"; avatar_url = None }
+      ~provider_name:"google" in
+    check "link: verified email links to existing" (Result.is_ok link_result);
+    check "link: same user id" ((Result.get_ok link_result).id = link_user.id);
+    let link_idents = Well.OAuth.user_identities ~user_id:link_user.id in
+    check "link: identity created" (List.exists (fun (p, _) -> p = "google") link_idents);
+
+    (* ── Account linking: unverified email creates separate ──────────── *)
+
+    let r_existing = Well.Auth.register ~email:"existing@example.com" ~password:"password123" in
+    check "separate: register existing" (Result.is_ok r_existing);
+    let existing_user = Result.get_ok r_existing in
+    let sep_result = Well.OAuth.link_or_create_user
+      { uid = "sep_uid_1"; email = Some "existing@example.com";
+        email_verified = false; name = None; avatar_url = None }
+      ~provider_name:"github" in
+    check "separate: unverified creates new account" (Result.is_ok sep_result);
+    check "separate: different user id" ((Result.get_ok sep_result).id <> existing_user.id);
+
+    (* ── Account linking: same provider UID reuses ───────────────────── *)
+
+    let reuse_result = Well.OAuth.link_or_create_user
+      { uid = "link_uid_1"; email = Some "linked@example.com";
+        email_verified = true; name = Some "Updated Name"; avatar_url = None }
+      ~provider_name:"google" in
+    check "reuse: same provider UID" (Result.is_ok reuse_result);
+    check "reuse: same user id" ((Result.get_ok reuse_result).id = link_user.id);
+
     Printf.printf "Auth tests: %d passed, %d failed\n%!" !pass !fail;
     Well.Auth.close ();
     (* Clean up test database *)

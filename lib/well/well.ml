@@ -562,6 +562,16 @@ let session_regenerate req =
   in
   (new_req, set_cookie)
 
+(* Wire OAuth route handler — uses session_regenerate for post-login *)
+let () = Oauth._handle_get_ref := (fun path handler ->
+  get path (fun req ->
+    match handler req with
+    | Oauth.ORedirect url -> (`Redirect url :> response)
+    | Oauth.OHtml (body, code) -> (status code (`Html body) :> response)
+    | Oauth.ORedirectWithRegenerate url ->
+      let (_new_req, set_cookie) = session_regenerate req in
+      (set_cookie (`Redirect url) :> response)))
+
 (* ── RPC context ─────────────────────────────────────────────────── *)
 
 type rpc_ctx = {
@@ -1948,6 +1958,49 @@ let ws_rate_limit n = _ws_rate_limit := n
 let ws_max_frame_size n = Websocket._max_frame_size := n
 let max_upload_size n = Liveview._max_upload_size := n
 
+(* ── Connection limits ────────────────────────────────────────────── *)
+
+let _max_connections = ref 10_000
+let _max_connections_per_ip = ref 100
+let _max_requests_per_connection = ref 1_000
+let max_connections n = _max_connections := n
+let max_connections_per_ip n = _max_connections_per_ip := n
+let max_requests_per_connection n = _max_requests_per_connection := n
+
+let _conn_count = Atomic.make 0
+let _ip_conn_store : (string, int) Hashtbl.t = Hashtbl.create 256
+let _ip_conn_mu = Mutex.create ()
+
+let ip_of_addr addr =
+  match addr with
+  | `Tcp (ip, _port) -> Eio.Net.Ipaddr.pp Format.str_formatter ip; Format.flush_str_formatter ()
+  | _ -> "unknown"
+
+let conn_acquire ip =
+  if Atomic.get _conn_count >= !_max_connections then false
+  else begin
+    Mutex.lock _ip_conn_mu;
+    let allowed = Fun.protect ~finally:(fun () -> Mutex.unlock _ip_conn_mu) (fun () ->
+      let cur = match Hashtbl.find_opt _ip_conn_store ip with Some n -> n | None -> 0 in
+      if cur >= !_max_connections_per_ip then false
+      else begin
+        Hashtbl.replace _ip_conn_store ip (cur + 1);
+        true
+      end)
+    in
+    if allowed then (ignore (Atomic.fetch_and_add _conn_count 1); true)
+    else false
+  end
+
+let conn_release ip =
+  ignore (Atomic.fetch_and_add _conn_count (-1));
+  Mutex.lock _ip_conn_mu;
+  Fun.protect ~finally:(fun () -> Mutex.unlock _ip_conn_mu) (fun () ->
+    match Hashtbl.find_opt _ip_conn_store ip with
+    | Some n when n <= 1 -> Hashtbl.remove _ip_conn_store ip
+    | Some n -> Hashtbl.replace _ip_conn_store ip (n - 1)
+    | None -> ())
+
 (* ── Shutdown state ────────────────────────────────────────────────── *)
 
 exception Shutdown
@@ -2143,15 +2196,18 @@ let handle_connection flow _addr =
          result := `Close);
     !result
   in
-  (* Keep-alive loop *)
+  (* Keep-alive loop with max requests per connection *)
+  let req_count = ref 0 in
+  let max_reqs = !_max_requests_per_connection in
   let rec ka_loop first =
     if first then begin
-      (* First request — no idle timeout needed *)
+      incr req_count;
       match timed_request () with
       | `Close -> do_close ()
-      | `KeepAlive -> ka_loop false
+      | `KeepAlive ->
+          if !req_count >= max_reqs then do_close ()
+          else ka_loop false
     end else begin
-      (* Subsequent requests — wait for data with idle timeout *)
       let got_data =
         try
           !_with_ka_timeout !_keep_alive_timeout (fun () ->
@@ -2159,11 +2215,14 @@ let handle_connection flow _addr =
           true
         with _ -> false
       in
-      if got_data then
+      if got_data then begin
+        incr req_count;
         match timed_request () with
         | `Close -> do_close ()
-        | `KeepAlive -> ka_loop false
-      else
+        | `KeepAlive ->
+            if !req_count >= max_reqs then do_close ()
+            else ka_loop false
+      end else
         do_close ()
     end
   in
@@ -2345,6 +2404,16 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
       (r.status, r.headers, r.body));
   Mailer._set_net net;
   Mailer._tls_config_fn := (fun () -> fetch_tls_config ());
+  (* Wire OAuth forward refs *)
+  Oauth._fetch_ref :=
+    (fun ~method_ ~headers ~body url ->
+      let r = !_fetch_impl ~method_ ~headers ~body url in
+      (r.status, r.headers, r.body));
+  Oauth._session_get_ref := (fun sid key -> Session_store.get ~session_id:sid ~key);
+  Oauth._session_set_ref := (fun sid key value -> Session_store.set ~session_id:sid ~key ~value);
+  Oauth._session_delete_ref := (fun sid key -> Session_store.delete ~session_id:sid ~key);
+  Oauth._put_flash_ref := put_flash;
+  Oauth._log_ref := (fun msg -> Log.log "%s" msg);
   let cwd = Eio.Stdenv.cwd env in
   _write_file_impl :=
     (fun path data ->
@@ -2545,7 +2614,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     let host = if acme_mode then "0.0.0.0" else "localhost" in
     Log.log "listening on %s://%s:%d%s" scheme host port
       (if workers > 0 then Printf.sprintf " (%d workers)" workers else "");
-    let handler =
+    let inner_handler =
       match domain with
       | Some _ ->
           (* ACME mode: read TLS config from mutable ref for hot-reload *)
@@ -2557,6 +2626,22 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
           (match tls_cfg with
            | Some cfg -> handle_tls_connection cfg
            | None -> handle_connection)
+    in
+    (* Wrap with connection limits *)
+    let handler flow addr =
+      let ip = ip_of_addr addr in
+      if conn_acquire ip then
+        (try inner_handler flow addr; conn_release ip
+         with exn -> conn_release ip; raise exn)
+      else begin
+        (* Over limit — send 503 and close *)
+        (try
+           let r = resolve (`Text "Service Unavailable" |> status 503) in
+           let flow = (flow :> Eio.Flow.two_way_ty Eio.Resource.t) in
+           write_response flow r
+         with _ -> ());
+        Eio.Flow.close flow
+      end
     in
     (* Fork accept loop *)
     Eio.Fiber.fork ~sw (fun () ->
@@ -2660,6 +2745,16 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
       (r.status, r.headers, r.body));
   Mailer._set_net net;
   Mailer._tls_config_fn := (fun () -> fetch_tls_config ());
+  (* Wire OAuth forward refs for test server *)
+  Oauth._fetch_ref :=
+    (fun ~method_ ~headers ~body url ->
+      let r = !_fetch_impl ~method_ ~headers ~body url in
+      (r.status, r.headers, r.body));
+  Oauth._session_get_ref := (fun sid key -> Session_store.get ~session_id:sid ~key);
+  Oauth._session_set_ref := (fun sid key value -> Session_store.set ~session_id:sid ~key ~value);
+  Oauth._session_delete_ref := (fun sid key -> Session_store.delete ~session_id:sid ~key);
+  Oauth._put_flash_ref := put_flash;
+  Oauth._log_ref := (fun msg -> Log.log "%s" msg);
   let cwd = Eio.Stdenv.cwd env in
   _write_file_impl :=
     (fun path data ->
@@ -2859,6 +2954,7 @@ module Service = Service
 module MessageBus = Message_bus
 module Channel = Channel
 module Auth = Auth
+module OAuth = Oauth
 module Mailer = Mailer
 module S3 = S3
 module Telemetry = Telemetry

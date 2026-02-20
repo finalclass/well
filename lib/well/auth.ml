@@ -253,6 +253,54 @@ let login_and_set_session (req : Types.request) ~email ~password =
     Ok user
   | Error _ as e -> e
 
+(* ── Helpers for OAuth ─────────────────────────────────────────── *)
+
+let with_db f = with_lock @@ fun () -> f (get_db ())
+
+let find_user_by_email email =
+  let email = normalize_email email in
+  with_lock @@ fun () ->
+  let db = get_db () in
+  let stmt = Sqlite3.prepare db
+    "SELECT id, email, created_at FROM users WHERE email = ?" in
+  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
+  match Sqlite3.step stmt with
+  | Sqlite3.Rc.ROW ->
+    let id = Sqlite3.column_int stmt 0 in
+    let email = Sqlite3.column_text stmt 1 in
+    let created_at = Sqlite3.column_text stmt 2 in
+    let _ = Sqlite3.finalize stmt in
+    Some { id; email; created_at }
+  | _ ->
+    let _ = Sqlite3.finalize stmt in
+    None
+
+let create_user_without_password ~email =
+  let email = normalize_email email in
+  if not (validate_email email) then
+    Error "Invalid email address"
+  else
+    with_lock @@ fun () ->
+    let db = get_db () in
+    let stmt = Sqlite3.prepare db
+      "INSERT INTO users (email, password_hash) VALUES (?, '')" in
+    let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
+    match Sqlite3.step stmt with
+    | Sqlite3.Rc.DONE ->
+      let _ = Sqlite3.finalize stmt in
+      let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
+      let sel = Sqlite3.prepare db
+        "SELECT created_at FROM users WHERE id = ?" in
+      let _ = Sqlite3.bind sel 1 (Sqlite3.Data.INT (Int64.of_int id)) in
+      let created_at = match Sqlite3.step sel with
+        | Sqlite3.Rc.ROW -> Sqlite3.column_text sel 0
+        | _ -> "" in
+      let _ = Sqlite3.finalize sel in
+      Ok { id; email; created_at }
+    | _ ->
+      let _ = Sqlite3.finalize stmt in
+      Error "Email already taken"
+
 (* ── Grants ────────────────────────────────────────────────────── *)
 
 let grant ~user_id name =

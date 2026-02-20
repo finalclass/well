@@ -153,6 +153,27 @@ let app_ml _name =
     adapter = Log;
   };
 
+  (* OAuth — set GOOGLE_CLIENT_ID/SECRET, GITHUB_CLIENT_ID/SECRET, etc. *)
+  let oauth_providers = List.filter_map Fun.id [
+    (match Sys.getenv_opt "GOOGLE_CLIENT_ID", Sys.getenv_opt "GOOGLE_CLIENT_SECRET" with
+     | Some id, Some secret -> Some (Well.OAuth.google ~client_id:id ~client_secret:secret)
+     | _ -> None);
+    (match Sys.getenv_opt "GITHUB_CLIENT_ID", Sys.getenv_opt "GITHUB_CLIENT_SECRET" with
+     | Some id, Some secret -> Some (Well.OAuth.github ~client_id:id ~client_secret:secret)
+     | _ -> None);
+    (match Sys.getenv_opt "MICROSOFT_CLIENT_ID", Sys.getenv_opt "MICROSOFT_CLIENT_SECRET" with
+     | Some id, Some secret -> Some (Well.OAuth.microsoft ~client_id:id ~client_secret:secret)
+     | _ -> None);
+    (match Sys.getenv_opt "FACEBOOK_CLIENT_ID", Sys.getenv_opt "FACEBOOK_CLIENT_SECRET" with
+     | Some id, Some secret -> Some (Well.OAuth.facebook ~client_id:id ~client_secret:secret)
+     | _ -> None);
+  ] in
+  if oauth_providers <> [] then
+    Well.OAuth.setup
+      ~base_url:(match Sys.getenv_opt "BASE_URL" with
+        | Some u -> u | None -> "http://localhost:4000")
+      oauth_providers;
+
   (* Services — IDesign: Manager → Access → DB *)
   Well.Service.register Note_access_impl.spec;
   Well.Service.register Task_access_impl.spec;
@@ -430,6 +451,17 @@ let login_page _name =
 let open Html in
 let return_to = match Well.query req "return_to" with Some p -> p | None -> "/" in
 let error = Well.get_flash req "error" in
+let providers = Well.OAuth.configured_providers () in
+let oauth_section =
+  if providers = [] then txt ""
+  else div ~class_:"oauth-section" ~children:(
+    [div ~class_:"oauth-divider" ~children:[span ~children:[txt "lub"] ()] ()] @
+    List.map (fun name ->
+      a ~href:("/auth/" ^ name ^ "?return_to=" ^ Well.url_encode return_to)
+        ~class_:("oauth-btn oauth-btn-" ^ name)
+        ~children:[txt (String.capitalize_ascii name)] ()
+    ) providers
+  ) () in
 <Layout title="Login">
 <div>
   <h1>(txt "Login")</h1>
@@ -441,6 +473,7 @@ let error = Well.get_flash req "error" in
     <input type_="text" name_="password" placeholder="Password" />
     <button type_="submit">(txt "Login")</button>
   </form>
+  oauth_section
   <p>(txt "Don't have an account? ") <a href="/signup">(txt "Sign up")</a></p>
   <p><a href="/">(txt "← Back")</a></p>
 </div>
@@ -1388,6 +1421,21 @@ let auth_css =
 .auth-form button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; }
 .auth-form button:hover { background: #1d4ed8; }
 .form-error { color: #dc2626; background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; font-size: 0.875rem; }
+
+/* OAuth */
+.oauth-section { max-width: 20rem; margin: 1rem 0; }
+.oauth-divider { display: flex; align-items: center; gap: 0.75rem; margin: 1rem 0; color: #9ca3af; font-size: 0.875rem; }
+.oauth-divider::before, .oauth-divider::after { content: ""; flex: 1; border-top: 1px solid #e5e7eb; }
+.oauth-btn { display: block; padding: 0.5rem 1rem; border: 1px solid #d1d5db; border-radius: 4px; text-align: center; text-decoration: none; font-size: 1rem; margin-bottom: 0.5rem; color: #1a1a1a; transition: background 0.15s; }
+.oauth-btn:hover { background: #f3f4f6; }
+.oauth-btn-google { border-color: #4285f4; color: #4285f4; }
+.oauth-btn-google:hover { background: #eef3ff; }
+.oauth-btn-github { border-color: #24292e; color: #24292e; }
+.oauth-btn-github:hover { background: #f0f0f0; }
+.oauth-btn-microsoft { border-color: #00a4ef; color: #00a4ef; }
+.oauth-btn-microsoft:hover { background: #e8f7fe; }
+.oauth-btn-facebook { border-color: #1877f2; color: #1877f2; }
+.oauth-btn-facebook:hover { background: #e7f0fd; }
 |}
 
 let contract_note_access_toml =
@@ -3738,6 +3786,48 @@ Well.get "/admin" @@ Well.Auth.require_grant "admin" (fun req -> ...)
 (* Check current user in handler *)
 let user_id = Well.current_user req  (* reads "user_id" from session *)
 ```
+
+---
+
+## OAuth (Well.OAuth) — Social Login
+
+OAuth 2.0 with PKCE for Google, GitHub, Microsoft, Facebook. Stored in `data/auth.sqlite` (oauth_identities table).
+
+```ocaml
+type provider_config
+
+(* Pre-configured providers *)
+Well.OAuth.google    : client_id:string -> client_secret:string -> provider_config
+Well.OAuth.github    : client_id:string -> client_secret:string -> provider_config
+Well.OAuth.microsoft : client_id:string -> client_secret:string -> provider_config
+Well.OAuth.facebook  : client_id:string -> client_secret:string -> provider_config
+
+(* Setup — registers /auth/:provider and /auth/:provider/callback routes *)
+Well.OAuth.setup : base_url:string -> provider_config list -> unit
+
+(* Query configured providers (for rendering login buttons) *)
+Well.OAuth.configured_providers : unit -> string list
+
+(* Get linked identities for a user *)
+Well.OAuth.user_identities : user_id:int -> (string * string) list
+```
+
+Setup in `lib/app.ml` (reads from env vars):
+```ocaml
+let oauth_providers = List.filter_map Fun.id [
+  (match Sys.getenv_opt "GOOGLE_CLIENT_ID", Sys.getenv_opt "GOOGLE_CLIENT_SECRET" with
+   | Some id, Some secret -> Some (Well.OAuth.google ~client_id:id ~client_secret:secret)
+   | _ -> None);
+  (* same for GITHUB_, MICROSOFT_, FACEBOOK_ *)
+] in
+if oauth_providers <> [] then
+  Well.OAuth.setup ~base_url:"https://myapp.com" oauth_providers;
+```
+
+Env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`,
+`MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `FACEBOOK_CLIENT_ID`, `FACEBOOK_CLIENT_SECRET`, `BASE_URL`.
+
+Security: PKCE S256 on all providers, state bound to session (single-use, 10-min expiry, constant-time compare), session regeneration after login, verified-email-only account linking.
 
 ---
 
