@@ -146,6 +146,13 @@ let app_ml _name =
 
   (* Per-route middleware: see notes_page.mlx for require_auth example *)
 
+  (* Email — Log adapter prints to stdout, swap for SMTP/Resend/SES in production *)
+  Well.Mailer.setup {
+    from_email = "noreply@example.com";
+    from_name = "MyApp";
+    adapter = Log;
+  };
+
   (* Services — IDesign: Manager → Access → DB *)
   Well.Service.register Note_access_impl.spec;
   Well.Service.register Task_access_impl.spec;
@@ -168,18 +175,21 @@ let home_page name =
   Printf.sprintf
     {|Well.get "/" @@ fun req ->
 let open Html in
-let user = Well.session_get req "user_id" in
-let auth_section = match user with
-  | Some name ->
+let user_id = Well.session_get req "user_id" in
+let auth_section = match user_id with
+  | Some uid ->
+      let display = match Well.Auth.get_user (int_of_string uid) with
+        | Some u -> u.email
+        | None -> uid in
       <div class_="auth-status">
-        (txt ("Logged in as " ^ name ^ " "))
+        (txt ("Logged in as " ^ display ^ " "))
         <form action="/logout" method_="POST" class_="inline-form">
           (csrf_input (Well.csrf_token req))
           <button type_="submit">(txt "Logout")</button>
         </form>
       </div>
   | None ->
-      <p class_="auth-status"><a href="/login">(txt "Login")</a></p>
+      <p class_="auth-status"><a href="/login">(txt "Login")</a> (txt " | ") <a href="/signup">(txt "Sign up")</a></p>
 in
 <Layout title="%s">
 <div>
@@ -419,31 +429,77 @@ let login_page _name =
   {|Well.get "/login" @@ fun req ->
 let open Html in
 let return_to = match Well.query req "return_to" with Some p -> p | None -> "/" in
+let error = Well.get_flash req "error" in
 <Layout title="Login">
 <div>
   <h1>(txt "Login")</h1>
-  <p>(txt "Enter any username to try the auth flow.")</p>
-  <form action="/login" method_="POST" class_="login-form">
+  (match error with Some msg -> <p class_="form-error">(txt msg)</p> | None -> (txt ""))
+  <form action="/login" method_="POST" class_="auth-form">
     (csrf_input (Well.csrf_token req))
     <input type_="hidden" name_="return_to" value=return_to />
-    <input type_="text" name_="username" placeholder="Username" />
+    <input type_="text" name_="email" placeholder="Email" />
+    <input type_="text" name_="password" placeholder="Password" />
     <button type_="submit">(txt "Login")</button>
   </form>
+  <p>(txt "Don't have an account? ") <a href="/signup">(txt "Sign up")</a></p>
   <p><a href="/">(txt "← Back")</a></p>
 </div>
 </Layout>
 ;;
 
 Well.post "/login" @@ fun req ->
-let username = Well.form req "username" in
-let return_to = let r = Well.form req "return_to" in if r = "" then "/" else r in
-if username <> "" then Well.session_set req "user_id" username;
-Well.redirect return_to
+let email = Well.form req "email" in
+let password = Well.form req "password" in
+let raw_return = Well.form req "return_to" in
+(* Validate return_to is relative path — prevent open redirect *)
+let return_to =
+  if raw_return = "" then "/"
+  else if String.length raw_return >= 1 && raw_return.[0] = '/'
+       && not (String.length raw_return >= 2 && raw_return.[1] = '/') then raw_return
+  else "/" in
+match Well.Auth.login_and_set_session req ~email ~password with
+| Ok _user -> Well.redirect return_to
+| Error msg ->
+  Well.put_flash req "error" msg;
+  Well.redirect "/login"
 ;;
 
 Well.post "/logout" @@ fun req ->
-Well.session_delete req "user_id";
+Well.Auth.logout req;
 Well.redirect "/"
+|}
+
+let signup_page _name =
+  {|Well.get "/signup" @@ fun req ->
+let open Html in
+let error = Well.get_flash req "error" in
+<Layout title="Sign Up">
+<div>
+  <h1>(txt "Sign Up")</h1>
+  (match error with Some msg -> <p class_="form-error">(txt msg)</p> | None -> (txt ""))
+  <form action="/signup" method_="POST" class_="auth-form">
+    (csrf_input (Well.csrf_token req))
+    <input type_="text" name_="email" placeholder="Email" />
+    <input type_="text" name_="password" placeholder="Password (min 8 chars)" />
+    <button type_="submit">(txt "Sign Up")</button>
+  </form>
+  <p>(txt "Already have an account? ") <a href="/login">(txt "Login")</a></p>
+  <p><a href="/">(txt "← Back")</a></p>
+</div>
+</Layout>
+;;
+
+Well.post "/signup" @@ fun req ->
+let email = Well.form req "email" in
+let password = Well.form req "password" in
+match Well.Auth.register ~email ~password with
+| Ok _user ->
+  (match Well.Auth.login_and_set_session req ~email ~password with
+   | Ok _ -> Well.redirect "/"
+   | Error _ -> Well.redirect "/login")
+| Error msg ->
+  Well.put_flash req "error" msg;
+  Well.redirect "/signup"
 |}
 
 let events _name =
@@ -1327,10 +1383,11 @@ let auth_css =
 .auth-status { margin: 1rem 0; }
 .inline-form { display: inline; }
 .inline-form button { background: none; border: none; color: #2563eb; cursor: pointer; font-size: inherit; padding: 0; text-decoration: underline; }
-.login-form { display: flex; flex-direction: column; gap: 0.5rem; max-width: 20rem; margin: 1rem 0; }
-.login-form input[type="text"] { padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 1rem; }
-.login-form button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; }
-.login-form button:hover { background: #1d4ed8; }
+.auth-form { display: flex; flex-direction: column; gap: 0.5rem; max-width: 20rem; margin: 1rem 0; }
+.auth-form input[type="text"] { padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 1rem; }
+.auth-form button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; }
+.auth-form button:hover { background: #1d4ed8; }
+.form-error { color: #dc2626; background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; font-size: 0.875rem; }
 |}
 
 let contract_note_access_toml =
@@ -2776,14 +2833,18 @@ user-invocable: true
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
-# Well Framework — Code Generation Guide
+# Well Framework — Comprehensive Reference
 
-You are generating code for a **well** application — a full-stack OCaml web framework with server-side rendering, LiveView, type-safe SQL, and service contracts.
+You are generating code for a **well** application — a batteries-included, type-safe, server-first OCaml web framework. Single binary deployment, no JavaScript for business logic. Inspired by Phoenix LiveView, Rails, and the OCaml ecosystem.
+
+**Tech stack**: OCaml 5.4 + EIO (fiber-per-connection), MLX for JSX, SQLite (bundled), dune 3.17, bun (frontend assets).
 
 ## File Extensions
 
 - `.ml` — pure OCaml (models, queries, logic, services)
 - `.mlx` — OCaml + JSX (pages, components, layouts)
+
+---
 
 ## MLX Syntax (CRITICAL)
 
@@ -2817,11 +2878,28 @@ Rules:
 - **All attribute values are strings** — use `value=(string_of_int n)` for numbers
 - **`_` suffix for OCaml keywords** — `class_`, `type_`, `method_`, `name_`, `for_`
 
-## HTML Attributes Reference
+---
 
-All HTML elements support these optional labeled parameters. There is no `empty` — there are no other attributes beyond this list.
+## HTML Library (well.html)
 
-### Available on ALL elements:
+Module `Html` — `(wrapped false)`, imported directly.
+
+### Core Types & Functions
+
+```ocaml
+type node = [ `Html of string ]  (* coerces to Well.response via :> *)
+
+val txt : string -> node        (* escaped text — safe *)
+val raw : string -> node        (* raw HTML — unescaped, use with care *)
+val escape_html : string -> string
+val cat : node list -> string   (* concatenate nodes to string *)
+val element_to_string : node -> string
+```
+
+### Tag Functions
+
+All tag functions share the same optional labeled parameters:
+
 ```
 ?id  ?class_  ?lang
 ?data_lv_click  ?data_lv_submit  ?data_lv_change
@@ -2830,15 +2908,42 @@ All HTML elements support these optional labeled parameters. There is no `empty`
 ?action  ?method_  ?href  ?type_  ?name_  ?placeholder
 ?value  ?charset  ?content  ?src  ?rel  ?enctype
 ?accept  ?for_  ?multiple (bool — only boolean attr)
+?children:node list
+unit -> node
 ```
 
-### NOT supported (do NOT use):
-`required`, `disabled`, `readonly`, `checked`, `selected`, `autofocus`, `autocomplete`, `min`, `max`, `step`, `rows`, `cols`, `width`, `height`, `target`, `alt`, `aria-*`, `role`, custom `data-*` (only `data-lv-*`)
+**Container tags**: `html`, `head`, `title`, `body`, `div`, `span`, `p`, `h1`-`h4`, `a`, `main`, `footer`, `header`, `nav`, `section`, `form`, `button`, `input`, `label`, `ul`, `ol`, `li`, `strong`, `em`, `b`, `i`, `small`, `pre`, `code`, `blockquote`, `table`, `thead`, `tbody`, `tr`, `th`, `td`, `textarea`, `select`, `option`, `script`
 
-### Available elements:
-- **Tags**: `html`, `head`, `title`, `body`, `div`, `span`, `p`, `h1`–`h4`, `a`, `main`, `footer`, `header`, `nav`, `section`, `form`, `button`, `input`, `label`, `ul`, `ol`, `li`, `strong`, `em`, `b`, `i`, `small`, `pre`, `code`, `blockquote`, `table`, `thead`, `tbody`, `tr`, `th`, `td`, `textarea`, `select`, `option`, `script`
-- **Void tags** (self-closing): `meta`, `link`
-- **Not available**: `img` (use `raw` if needed)
+**Void tags** (self-closing): `meta`, `link`
+
+**Not available**: `img` (use `raw` if needed)
+
+**NOT supported** (do NOT use): `required`, `disabled`, `readonly`, `checked`, `selected`, `autofocus`, `autocomplete`, `min`, `max`, `step`, `rows`, `cols`, `width`, `height`, `target`, `alt`, `style`, `aria-*`, `role`, custom `data-*` (only `data-lv-*`)
+
+### Form Helpers
+
+```ocaml
+val csrf_input : string -> node
+(* Generates: <input type="hidden" name="_csrf_token" value="token" /> *)
+
+val field_error : (string * string) list -> string -> node
+(* Renders error message for a form field if present in errors list *)
+```
+
+### LiveView Rendering Helpers
+
+```ocaml
+val dynamic : string -> string -> node
+(* dynamic "count" "42" → <span data-lv="count">42</span> *)
+(* Marks text that changes — patching mechanism updates only these *)
+
+val each : id:string -> ?tag_name:string -> 'a list -> key:('a -> string) -> ('a -> node) -> node
+(* Keyed list rendering with automatic diffing *)
+(* each ~id:"items" items ~key:(fun i -> string_of_int i.id) (fun i -> <div>...</div>) *)
+(* Default tag_name is "div". Container gets data-lv-each="id" *)
+```
+
+---
 
 ## Project Structure
 
@@ -2848,24 +2953,128 @@ myapp/
 ├── lib/
 │   ├── app.ml                          # Middleware, services, routes, Well.run ()
 │   ├── events.ml                       # Typed pub/sub topics
-│   ├── note_access/note_access_impl.ml # NoteAccess service implementation
-│   ├── task_access/task_access_impl.ml # TaskAccess service implementation
-│   ├── task_manager/task_manager_impl.ml
+│   ├── note_access/note_access_impl.ml # ResourceAccess service impl
 │   ├── client/
 │   │   ├── widgets/layout.mlx          # Layout component
 │   │   ├── pages/home_page.mlx         # Routes: Well.get "/" ...
 │   │   ├── live/counter_live.mlx       # LiveView module
-│   │   └── request_id.ml              # Request ID middleware
+│   │   └── request_id.ml              # Request ID context middleware
 │   └── contract/                       # Service contracts (TOML)
 ├── static/                             # CSS, JS, assets
 └── test/myapp_test.ml                  # Tests
 ```
 
-The app library uses `(include_subdirs unqualified)` and `(wrapped false)` — every file is a top-level module (e.g. `Layout`, `Counter_live`).
+The app library uses `(include_subdirs unqualified)` and `(wrapped false)` — every `.ml`/`.mlx` file is a top-level module (e.g. `Layout`, `Counter_live`).
 
-## Routes
+---
 
-Register routes in `.mlx` files. Handlers return `response` (polymorphic variant).
+## Core Types
+
+```ocaml
+type request = {
+  meth : string;
+  path : string;
+  headers : (string * string) list;
+  body : string;
+  params : (string * string) list;  (* path params *)
+  query : (string * string) list;   (* query string *)
+  session_id : string;
+  _context : (int * Obj.t) list;    (* typed context storage *)
+}
+
+type response = [
+  | `Null | `Bool of bool | `Int of int | `Float of float
+  | `String of string | `Intlit of string
+  | `List of Yojson.Safe.t list | `Assoc of (string * Yojson.Safe.t) list
+  | `Html of string | `Text of string | `Redirect of string
+  | `Custom of custom | `Stream of stream_config
+]
+
+type handler = request -> response
+type middleware = handler -> handler
+
+type uploaded_file = { filename: string; content_type: string; size: int; data: string }
+type fetch_response = { status: int; headers: (string * string) list; body: string }
+```
+
+---
+
+## Routing
+
+### Route Registration
+
+```ocaml
+Well.get  : ?middleware:middleware list -> string -> (request -> [< response]) -> unit
+Well.post : ?middleware:middleware list -> string -> (request -> [< response]) -> unit
+Well.put  : ?middleware:middleware list -> string -> (request -> [< response]) -> unit
+Well.delete : ?middleware:middleware list -> string -> (request -> [< response]) -> unit
+Well.ws   : string -> (request -> Websocket.t -> unit) -> unit
+```
+
+Path params via `:param` segments: `"/users/:id"`.
+Routes matched in registration order. No match → 404. Handler exception → 500.
+
+### Route Scoping
+
+```ocaml
+Well.scope : ?middleware:middleware list -> string -> (unit -> unit) -> unit
+
+(* Groups routes under a prefix with shared middleware *)
+Well.scope ~middleware:[Well.require_auth ()] "/admin" (fun () ->
+  Well.get "/dashboard" @@ fun req -> (* /admin/dashboard *) ...;
+  Well.get "/users" @@ fun req -> (* /admin/users *) ...
+)
+```
+
+### Response Constructors & Transformers
+
+```ocaml
+Well.html : string -> response
+Well.text : string -> response
+Well.json : Yojson.Safe.t -> response
+Well.redirect : string -> response
+Well.stream : ?content_type:string -> ?status:int -> ?headers:(string*string) list
+           -> ((string -> unit) -> unit) -> response
+
+(* Pipeable transformers — wrap in `Custom *)
+Well.status : int -> response -> response
+Well.header : string -> string -> response -> response
+
+(* Stream a file with chunked transfer *)
+Well.stream_file : ?content_type:string -> ?headers:(string*string) list -> string -> response
+```
+
+Response types coerce automatically:
+- `Html.node` — `<div>...</div>` (text/html)
+- `` `Text "..." `` or `Well.text "..."` (text/plain)
+- `` `Assoc [...] `` or `Well.json (...)` (application/json)
+- `Well.redirect "/path"` (302)
+- Pipeline: `<div/> |> Well.status 201 |> Well.header "X-Custom" "val"`
+
+### Request Helpers
+
+```ocaml
+Well.param : request -> string -> string             (* path param, "" if missing *)
+Well.query : request -> string -> string option      (* query param *)
+Well.form  : request -> string -> string             (* form field, "" if missing *)
+Well.form_params : request -> (string * string) list (* all form fields *)
+Well.file  : request -> string -> uploaded_file option (* single file upload *)
+Well.files : request -> string -> uploaded_file list   (* multiple files *)
+Well.all_files : request -> (string * uploaded_file) list
+Well.request_id : request -> string                  (* unique request ID *)
+Well.csrf_token : request -> string                  (* CSRF token for forms *)
+Well.current_user : request -> string option         (* user_id from session *)
+```
+
+### Static Files
+
+```ocaml
+Well.static "/static" "static"
+(* Serves files from "static/" dir at /static/* URL prefix *)
+(* Auto-detects MIME type from extension *)
+```
+
+### Examples
 
 ```ocaml
 (* Simple page *)
@@ -2875,7 +3084,7 @@ let open Html in
   <h1>(txt "About")</h1>
 </Layout>
 
-(* With path params *)
+(* JSON API with path params *)
 Well.get "/users/:id" @@ fun req ->
 let id = Well.param req "id" in
 Well.json (`Assoc [("id", `String id)])
@@ -2887,18 +3096,16 @@ let name = Well.form req "name" in
 Well.redirect "/items"
 
 (* Per-route middleware *)
-let auth = [Well.require_auth ()]
-;;
-Well.get ~middleware:auth "/admin" @@ fun req ->
-(* only logged-in users *)
+Well.get ~middleware:[Well.require_auth ()] "/admin" @@ fun req -> ...
+
+(* Streaming response *)
+Well.get "/export" @@ fun _req ->
+Well.stream ~content_type:"text/csv" (fun write ->
+  write "id,name\n";
+  List.iter (fun row -> write (format_csv row)) rows)
 ```
 
-Response types — all coerce automatically:
-- `Html.node` — `<div>...</div>` (text/html)
-- `` `Text "..." `` or `Well.text "..."` (text/plain)
-- `` `Assoc [...] `` or `Well.json (...)` (application/json)
-- `Well.redirect "/path"` (302)
-- Pipeline: `<div/> |> Well.status 201 |> Well.header "X-Custom" "val"`
+---
 
 ## Layout Component
 
@@ -2921,17 +3128,51 @@ let createElement ?title:(page_title = "") ?(children = []) () =
 
 Use in pages: `<Layout title="My Page"><h1>(txt "Hello")</h1></Layout>`
 
+---
+
 ## LiveView — Server-Side Reactive UI
 
-LiveView uses Elm architecture: model -> update -> view. All state lives on the server, updates via WebSocket.
+Elm architecture: model -> update -> view. All state on server, updates via WebSocket.
+
+### VIEW Module Type
+
+Every LiveView module must satisfy this interface:
+
+```ocaml
+module type VIEW = sig
+  type model
+  type msg
+
+  val persistence : persistence      (* Ephemeral | Session | User *)
+  val subscriptions : string list    (* MessageBus channels to auto-subscribe *)
+
+  val init : request -> Yojson.Safe.t -> model
+  val update : request -> model -> msg -> model
+  val handle_params : request -> model -> model  (* URL query param changes *)
+  val view : model -> Html.node
+  val temporary_assigns : model -> model  (* reset data after each render *)
+
+  (* Required — generated by [@@deriving yojson] *)
+  val model_to_yojson : model -> Yojson.Safe.t
+  val model_of_yojson : Yojson.Safe.t -> (model, string) result
+  val msg_of_yojson : Yojson.Safe.t -> (msg, string) result
+end
+```
+
+**Persistence modes**:
+- `Ephemeral` — fresh state per connection
+- `Session` — in-memory per session (survives reconnect, 5 min timeout)
+- `User` — SQLite per user (survives restart, syncs across devices)
+
+### Complete LiveView Example
 
 ```ocaml
 (* counter_live.mlx *)
 type model = { count: int } [@@deriving yojson]
 type msg = Increment | Decrement | Reset [@@deriving yojson]
 
-let persistence = Well.LiveView.Ephemeral  (* or Session, User *)
-let subscriptions = []  (* MessageBus channels — required field *)
+let persistence = Well.LiveView.Ephemeral
+let subscriptions = []
 
 let init _req _props = { count = 0 }
 
@@ -2952,41 +3193,44 @@ let view model =
   </div>
 ```
 
-Register in `lib/app.ml`:
-```ocaml
-Well.live "/counter" (module Counter_live);
-```
+### Registration & Embedding
 
-Embed in a page:
 ```ocaml
+(* Register in lib/app.ml — creates both WS endpoint and GET route *)
+Well.live "/counter" (module Counter_live)
+
+(* Embed in a page *)
 <Well.LiveView name="counter" />
 (* with props: *)
 <Well.LiveView name="counter" initial="10" step="5" />
 ```
 
-Key LiveView patterns:
-- `dynamic "key" value` — marks text that changes (diffing optimization)
-- `each ~id:"list-id" items ~key:fn render_fn` — keyed list rendering
-- `data_lv_click="MsgName"` — click sends msg to server
-- `data_lv_submit="MsgName"` — form submit
-- `data_lv_change="MsgName"` — input change (sends `[MsgName, input_value]`)
-- `data_lv_debounce="300"` — debounce input (ms)
-- `data_lv_navigate="/path"` — client-side navigation
-- `data_lv_hook="HookName"` — attach JS hook
+### LiveView Attributes
 
-Variant encoding (ppx_deriving_yojson):
-- `Increment` -> `["Increment"]` (JSON array)
-- `SetValue of int` -> `["SetValue", 42]`
-- Click handler sends array format: `data_lv_click="Increment"` sends `["Increment"]`
-- Change handler sends: `data_lv_change="Search"` sends `["Search", "<input value>"]`
+| Attribute | Description | Wire format |
+|-----------|-------------|-------------|
+| `data_lv_click="Msg"` | Click sends msg | `["Msg"]` |
+| `data_lv_click="Msg"` with payload | Click with data | `["Msg", data]` |
+| `data_lv_submit="Msg"` | Form submit | `["Msg", {field: value, ...}]` |
+| `data_lv_change="Msg"` | Input change | `["Msg", input_value]` |
+| `data_lv_debounce="300"` | Debounce (ms) | — |
+| `data_lv_throttle="300"` | Throttle (ms) | — |
+| `data_lv_navigate="/path"` | Live navigation (pushState) | — |
+| `data_lv_patch="/path?q=x"` | Update query params only | — |
+| `data_lv_hook="HookName"` | Attach JS hook | — |
 
-### LiveView View Constraints (CRITICAL)
+**Variant encoding** (ppx_deriving_yojson):
+- `Increment` → `["Increment"]` (JSON array, NOT string)
+- `SetValue of int` → `["SetValue", 42]`
+- `` `Incremented (s, n) `` → `["Incremented", "s", 42]`
+
+### View Constraints (CRITICAL)
 
 The `view` function's DOM structure must be **stable across renders**. The patching mechanism only handles:
-- `dynamic` — updates text content of marked elements
+- `dynamic` — updates text content of marked `<span>` elements
 - `each` list_ops — adds, removes, reorders keyed list items
 
-**It does NOT handle structural DOM changes.** If `if/else` in the view changes which elements exist, the patch silently fails and the UI does not update.
+**It does NOT handle structural DOM changes.** If `if/else` in the view changes which elements exist, the patch silently fails.
 
 ```ocaml
 (* BAD — structural change breaks patching *)
@@ -3012,154 +3256,161 @@ let view model =
   </div>
 ```
 
-Rules for LiveView views:
-1. **Always render `each` containers** — even if the list is empty, the container stays in the DOM and list_ops clear it
+Rules:
+1. **Always render `each` containers** — even for empty lists
 2. **Use `dynamic` for conditional text** — not `if/else` that swaps elements
-3. **Keep DOM tree shape identical** between renders — same elements, same nesting, same order
-4. **Hide empty states with CSS** — use `:empty` or `display:none` when a `dynamic` value is empty, not structural conditionals
+3. **Keep DOM tree shape identical** between renders
+4. **Hide empty states with CSS** — `:empty` or `display:none`
+
+### LiveView with Subscriptions (Cross-View Communication)
+
+```ocaml
+(* activity_log_live.mlx — subscribes to events from other LiveViews *)
+type model = { entries: string list } [@@deriving yojson]
+type msg = Events.counter_event [@@deriving yojson]  (* reuse event type *)
+
+let subscriptions = [Well.topic_name Events.counter_event]
+
+let update _req model = function
+  | `Incremented (_, n) -> { entries = (Printf.sprintf "+%d" n) :: model.entries }
+  | `Reset -> { entries = "reset" :: model.entries }
+  | _ -> model
+```
+
+### Server Push to Hooks
+
+```ocaml
+(* Push event from server to a JS hook *)
+Well.LiveView.send_event "topic" "event_name" (`Assoc [("key", `String "val")])
+```
+
+### JS Hooks
+
+```javascript
+// In your JS — hooks run client-side
+Well.hooks.Chart = {
+  mounted() {
+    this.handleEvent("update", (data) => {
+      renderChart(this.el, data);
+    });
+  },
+  updated() { /* DOM was patched */ },
+  destroyed() { /* element removed */ }
+};
+```
+
+### LiveView Uploads
+
+```ocaml
+(* MLX: file input with hook *)
+<input type_="file" data_lv_hook="FileUpload" />
+
+(* Server side: consume uploaded file *)
+match Well.LiveView.consume_upload upload_id with
+| Some (filename, content_type, data) -> Well.write_file ("data/" ^ filename) data
+| None -> ()
+```
 
 ### LiveView Search/Filter Example
-
-A complete example of a search LiveView with `data_lv_change`:
 
 ```ocaml
 (* search_live.mlx *)
 type item = { id: int; name: string } [@@deriving yojson]
-
-type model = {
-  query: string;
-  results: item list;
-  empty_msg: string;
-} [@@deriving yojson]
-
+type model = { query: string; results: item list; empty_msg: string } [@@deriving yojson]
 type msg = Search of string [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral
 let subscriptions = []
 
-let search query =
-  let db = MyModel.get_db () in
-  if query = "" then MyModel.All.query db |> List.map to_item
-  else
-    let q = "%" ^ query ^ "%" in
-    MyModel.Search.query db ~q |> List.map to_item
-
 let make_model query =
   let results = search query in
-  { query; results;
-    empty_msg = if results = [] then "No results" else "" }
+  { query; results; empty_msg = if results = [] then "No results" else "" }
 
 let init _req _props = make_model ""
-
-let update _req _model = function
-  | Search q -> make_model q
-
+let update _req _model = function Search q -> make_model q
 let handle_params _req model = model
 let temporary_assigns model = model
 
 let view model =
   let open Html in
   <div>
-    <input
-      type_="text"
-      placeholder="Search..."
-      value=model.query
-      data_lv_change="Search"
-      data_lv_debounce="300" />
+    <input type_="text" placeholder="Search..."
+      value=model.query data_lv_change="Search" data_lv_debounce="300" />
     <p>(dynamic "empty_msg" model.empty_msg)</p>
-    <div>
-      (each ~id:"results" model.results
-        ~key:(fun r -> string_of_int r.id)
-        (fun r ->
-          <div>
-            <span>(dynamic "name" r.name)</span>
-          </div>
-        ))
-    </div>
+    <div>(each ~id:"results" model.results
+      ~key:(fun r -> string_of_int r.id)
+      (fun r -> <div><span>(dynamic "name" r.name)</span></div>))</div>
   </div>
 ```
 
-## Typed Pub/Sub (Well.MessageBus)
-
-Define events in `events.ml` with typed topics:
-
-```ocaml
-(* events.ml *)
-type counter_event = [`Incremented of string * int | `Decremented of string * int | `Reset]
-[@@deriving yojson, topic]
-```
-
-Publish from any LiveView or handler:
-
-```ocaml
-Well.publish Events.counter_event (`Incremented ("increment", m.count))
-```
-
-Subscribe in a LiveView via `subscriptions`:
-
-```ocaml
-let subscriptions = [Well.topic_name Events.counter_event]
-type msg = Events.counter_event [@@deriving yojson]
-```
-
-### Keyed Topics (channel:key) — Request/Reply Pattern
-
-For dynamic channels with UUIDs (e.g. command sourcing), use keyed topics.
-The topic's channel becomes a prefix, the key is appended after `:`.
-
-```ocaml
-(* events.ml — define command and response topics *)
-type order_cmd = { items: string list } [@@deriving yojson, topic ~name:"order:cmd"]
-type order_result = { order_id: string } [@@deriving yojson, topic ~name:"order:result"]
-```
-
-**Manager** subscribes to all `order:cmd:*`:
-```ocaml
-Well.subscribe_keyed Events.order_cmd (fun kev ->
-  let cmd = kev.event.value in   (* typed: order_cmd *)
-  let key = kev.key in           (* the UUID suffix *)
-  let result = process cmd in
-  Well.publish_keyed ~ephemeral:true Events.order_result ~key result)
-```
-
-**HTTP endpoint** sends command, awaits typed response:
-```ocaml
-Well.post "/orders" @@ fun req ->
-let cmd = parse_body req in
-let key = generate_uuid () in
-let result = Well.request ~cmd:Events.order_cmd ~reply:Events.order_result
-               ~key cmd in
-Well.json (order_result_to_yojson result)
-```
-
-`Well.request` blocks the current fiber (not thread), default timeout 5s, raises `Well.Request_timeout`.
-
-**Replay safety**: `~live_only:true` subscriptions are skipped during replay, and all `publish` calls during replay are automatically ephemeral:
-```ocaml
-(* Always runs — cross-Manager state update *)
-Well.subscribe_keyed Events.order_cmd (fun kev -> process kev.event.value)
-
-(* Only runs live — external side effect *)
-Well.subscribe ~live_only:true Events.order_event (fun evt ->
-  External_api.sync evt.value)
-```
+---
 
 ## Type-Safe SQL (well.ppx)
 
-Define models and queries — compiler validates SQL at build time.
+Write normal SQL. Compiler validates it at build time using registered table schemas. No database connection needed at compile time.
+
+### Define Models
 
 ```ocaml
-(* notes.ml *)
 type note = {
   id : int;
   title : string;
   body : string;
+  active : bool;
+  score : float option;  (* nullable column *)
 } [@@deriving table ~name:"notes"]
+```
 
+`[@@deriving table]` generates:
+- `CREATE TABLE IF NOT EXISTS` SQL
+- Schema registration for compile-time validation
+- Auto-migration: `Well.Db.open_db ()` creates tables + adds new columns
+
+Type mapping: `int`→INTEGER, `float`→REAL, `string`→TEXT, `bool`→INTEGER, `'a option`→nullable
+
+### Define Queries
+
+```ocaml
 let%query all_notes = "SELECT id, title, body FROM notes ORDER BY id DESC"
 let%query insert_note = "INSERT INTO notes (title, body) VALUES (:title, :body)"
 let%query find_note = "SELECT id, title, body FROM notes WHERE id = :id"
 let%query delete_note = "DELETE FROM notes WHERE id = :id"
+let%query search_notes = "SELECT id, title FROM notes WHERE title LIKE :q"
+let%query update_note = "UPDATE notes SET title = :title, body = :body WHERE id = :id"
+```
+
+**Generated code**:
+
+For SELECT → module with `type row` + `query`:
+```ocaml
+module All_notes : sig
+  type row = { id: int; title: string; body: string }
+  val sql : string
+  val query : Sqlite3.db -> row list
+end
+
+module Find_note : sig
+  type row = { id: int; title: string; body: string }
+  val sql : string
+  val query : Sqlite3.db -> id:string -> row list  (* :param → ~param labeled arg *)
+end
+```
+
+For INSERT/UPDATE/DELETE → module with `exec`:
+```ocaml
+module Insert_note : sig
+  val sql : string
+  val exec : Sqlite3.db -> title:string -> body:string -> unit
+end
+```
+
+### Database Access Pattern
+
+```ocaml
+(* notes.ml — standard pattern *)
+type note = { id: int; title: string; body: string } [@@deriving table ~name:"notes"]
+let%query all = "SELECT id, title, body FROM notes ORDER BY id DESC"
+let%query insert = "INSERT INTO notes (title, body) VALUES (:title, :body)"
 
 let db = lazy (Well.Db.open_db ())
 let get_db () = Lazy.force db
@@ -3168,22 +3419,462 @@ let get_db () = Lazy.force db
 Usage:
 ```ocaml
 let db = Notes.get_db () in
-let notes = Notes.All_notes.query db in
-Notes.Insert_note.exec db ~title:"Hello" ~body:"World";
+let notes = Notes.All.query db in
+Notes.Insert.exec db ~title:"Hello" ~body:"World";
 ```
 
-Parameter syntax: `:name` in SQL -> `~name` labeled arg in generated code.
-- SELECT -> generates `Module.query db ~param1 ~param2` returning `row list`
-- INSERT/UPDATE/DELETE -> generates `Module.exec db ~param1 ~param2` returning `unit`
+### Well.Db Module
 
-Auto-migration: `Well.Db.open_db ()` automatically creates tables and adds new columns.
+```ocaml
+Well.Db.open_db : ?filename:string -> unit -> Sqlite3.db
+(* Opens SQLite in data/ dir, runs auto_migrate. Default filename: "app.sqlite" *)
+
+Well.Db.with_test_db : (Sqlite3.db -> 'a) -> 'a
+(* Opens :memory: SQLite, runs auto_migrate, perfect for tests *)
+
+Well.Db.transaction : Sqlite3.db -> (Sqlite3.db -> 'a) -> 'a
+Well.Db.transaction_result : Sqlite3.db -> (Sqlite3.db -> ('a, string) result) -> ('a, string) result
+
+Well.Db.table_exists : Sqlite3.db -> string -> bool
+Well.Db.diff : Sqlite3.db -> diff_entry list  (* pending migrations *)
+Well.Db.auto_migrate : Sqlite3.db -> unit      (* run manually if needed *)
+Well.Db.backup : string -> unit                (* backup db file *)
+Well.Db.rollback : string -> unit              (* restore from .bak *)
+
+Well.Db.data_dir : string ref  (* default "data", set before open_db *)
+```
+
+---
+
+## Typed Pub/Sub (Well.MessageBus)
+
+Single unified pub/sub system. SQLite-backed (persistent by default), in-memory (ephemeral).
+
+### Typed Topics
+
+```ocaml
+(* types *)
+type 'a topic = { t_channel: string; to_yojson: ...; of_yojson: ... }
+type 'a event = { id: int; value: 'a; created_at: float }
+type 'a keyed_event = { key: string; event: 'a event }
+```
+
+### Define Topics with PPX
+
+```ocaml
+(* events.ml *)
+type counter_event = [`Incremented of string * int | `Decremented of string * int | `Reset]
+[@@deriving yojson, topic]
+(* Generates: val counter_event : counter_event topic *)
+(* Channel name defaults to type name: "counter_event" *)
+
+type echo_cmd = { text: string } [@@deriving yojson, topic ~name:"echo:cmd"]
+(* Custom channel name: "echo:cmd" *)
+```
+
+**Requires** `[@@deriving yojson]` on same type (explicit, not auto-added).
+
+### Core Pub/Sub API
+
+```ocaml
+Well.topic : string -> ('a -> Yojson.Safe.t) -> (Yojson.Safe.t -> ('a, string) result) -> 'a topic
+Well.topic_name : 'a topic -> string
+
+Well.publish : ?ephemeral:bool -> 'a topic -> 'a -> unit
+(* Default: persistent (stored in SQLite). ephemeral: in-memory only *)
+
+Well.subscribe : ?live_only:bool -> 'a topic -> ('a event -> unit) -> int
+(* Returns subscription id. live_only: skipped during replay *)
+
+Well.replay : ?since_id:int -> 'a topic -> ('a event -> unit) -> unit
+(* Replays stored events from SQLite *)
+
+Well.is_replaying : unit -> bool
+Well.prune : int -> unit  (* delete old events *)
+```
+
+### Keyed Topics (channel:key)
+
+For dynamic channels with UUIDs (e.g. command sourcing):
+
+```ocaml
+Well.publish_keyed : ?ephemeral:bool -> 'a topic -> key:string -> 'a -> unit
+(* Publishes to "channel:key" *)
+
+Well.subscribe_keyed : ?live_only:bool -> 'a topic -> ('a keyed_event -> unit) -> int
+(* Subscribes to "channel:*", callback receives { key; event } *)
+```
+
+### Request/Reply Pattern
+
+```ocaml
+Well.request : cmd:'a topic -> reply:'b topic -> key:string -> ?timeout:float -> 'a -> 'b
+(* Blocks fiber (not thread), default timeout 5s, raises Well.Request_timeout *)
+```
+
+Example:
+```ocaml
+(* events.ml *)
+type order_cmd = { items: string list } [@@deriving yojson, topic ~name:"order:cmd"]
+type order_result = { order_id: string } [@@deriving yojson, topic ~name:"order:result"]
+
+(* Manager subscribes to all commands *)
+Well.subscribe_keyed Events.order_cmd (fun kev ->
+  let cmd = kev.event.value in
+  let result = process cmd in
+  Well.publish_keyed ~ephemeral:true Events.order_result ~key:kev.key result)
+
+(* HTTP endpoint sends command, awaits response *)
+Well.post "/orders" @@ fun req ->
+let key = generate_uuid () in
+let result = Well.request ~cmd:Events.order_cmd ~reply:Events.order_result
+               ~key { items = ["x"] } in
+Well.json (order_result_to_yojson result)
+```
+
+### Replay Safety
+
+```ocaml
+(* Always runs — cross-Manager state update *)
+Well.subscribe_keyed Events.order_cmd (fun kev -> process kev.event.value)
+
+(* Only runs live — external side effect (skipped during replay) *)
+Well.subscribe ~live_only:true Events.order_event (fun evt ->
+  External_api.sync evt.value)
+(* All publish calls during replay are automatically ephemeral *)
+```
+
+### LiveView Subscriptions
+
+```ocaml
+(* In LiveView module — auto-subscribes to channels *)
+let subscriptions = [Well.topic_name Events.counter_event]
+type msg = Events.counter_event [@@deriving yojson]
+(* Events arrive as msg in update function *)
+```
+
+### Low-Level MessageBus (Untyped)
+
+```ocaml
+Well.MessageBus.publish : ?ephemeral:bool -> string -> Yojson.Safe.t -> int
+Well.MessageBus.subscribe : ?live_only:bool -> string -> (event -> unit) -> int
+(* Supports wildcard: "orders/*" matches "orders/new", "orders/cancel" *)
+Well.MessageBus.unsubscribe : int -> unit
+Well.MessageBus.once : string -> (event -> unit) -> int  (* auto-unsubscribe after first *)
+Well.MessageBus.replay : ?since_id:int -> string -> (event -> unit) -> unit
+```
+
+---
+
+## Channels — Authorized WS Gateway
+
+Client-facing WebSocket pub/sub with authorization. Runs on `/ws`.
+
+```ocaml
+Well.Channel.channel : string -> (request -> string -> (join_result, string) result) -> unit
+
+(* Example: authorize room access *)
+Well.Channel.channel "room:*" (fun req topic ->
+  match Well.current_user req with
+  | Some _ -> Ok { subscribe = [topic] }
+  | None -> Error "unauthorized")
+```
+
+Client-side (TypeScript):
+```javascript
+const ch = well.channel("room:general");
+ch.on("message", (payload) => console.log(payload));
+ch.push("send", { text: "hello" });
+ch.leave();
+```
+
+WS protocol: `join/leave/push` (C→S), `ok/error/event` (S→C).
+
+---
+
+## Middleware
+
+### Built-in Middleware
+
+```ocaml
+Well.use : middleware -> unit  (* register global middleware *)
+
+(* Available middleware *)
+Well.error_handler : middleware    (* catches exceptions, returns 500 *)
+Well.logger : middleware           (* request logging *)
+Well.csrf : middleware             (* CSRF token validation *)
+Well.session_middleware : middleware (* session cookie management — auto-registered *)
+
+Well.rate_limit : max_requests:int -> window_ms:int -> unit -> middleware
+Well.cors : ?origins:string list -> ?methods:string list -> ?headers:string list
+         -> ?max_age:int -> unit -> middleware
+Well.require_auth : ?login_path:string -> unit -> middleware  (* redirects to login *)
+Well.basic_auth : check:(string -> string -> bool) -> ?realm:string -> unit -> middleware
+Well.allowed_hosts : hosts:string list -> unit -> middleware
+Well.secure_headers : ?csp:string -> ?frame_options:string -> ?content_type_options:string
+                   -> ?referrer_policy:string -> ?hsts:string -> unit -> middleware
+```
+
+### Custom Middleware
+
+```ocaml
+Well.use (fun next req ->
+  (* before handler *)
+  let resp = next req in
+  (* after handler *)
+  resp)
+```
+
+### Per-Route and Scoped Middleware
+
+```ocaml
+(* Per-route *)
+Well.get ~middleware:[Well.require_auth ()] "/admin" @@ fun req -> ...
+
+(* Scoped *)
+Well.scope ~middleware:[Well.require_auth ()] "/admin" (fun () ->
+  Well.get "/dashboard" @@ fun req -> ...;
+  Well.get "/settings" @@ fun req -> ...
+)
+```
+
+---
+
+## Sessions
+
+SQLite-backed, thread-safe session store.
+
+```ocaml
+Well.session_get : request -> string -> string option
+Well.session_set : request -> string -> string -> unit
+Well.session_delete : request -> string -> unit
+Well.session_clear : request -> unit
+Well.session_regenerate : request -> (request * (response -> response))
+(* Returns new request + response transformer that sets new cookie *)
+```
+
+### Flash Messages
+
+```ocaml
+Well.put_flash : request -> string -> string -> unit
+Well.get_flash : request -> string -> string option
+
+(* Usage *)
+Well.put_flash req "success" "Item created!";
+let msg = Well.get_flash req "success"  (* string option *)
+```
+
+---
+
+## Request Context (Well.Context)
+
+Type-safe, per-request context via functor. Each context type gets a unique slot.
+
+```ocaml
+module type CONTEXT = sig
+  type t
+  val empty : t
+end
+
+module Ctx = Well.Context(struct
+  type t = string
+  let empty = ""
+end)
+
+(* In middleware: set *)
+let middleware : Well.middleware = fun next req ->
+  next (Ctx.set "value" req)
+
+(* In handler: get *)
+let value = Ctx.get req
+```
+
+---
+
+## Auth (Well.Auth) — Password-Based Authentication
+
+PBKDF2-SHA256, 100k iterations. Stored in `data/auth.sqlite`.
+
+```ocaml
+type user = { id: int; email: string; created_at: string }
+
+(* User management *)
+Well.Auth.register : email:string -> password:string -> (user, string) result
+Well.Auth.login : email:string -> password:string -> (user, string) result
+Well.Auth.get_user : int -> user option
+
+(* Session integration *)
+Well.Auth.login_and_set_session : request -> email:string -> password:string -> (user, string) result
+Well.Auth.logout : request -> unit
+
+(* Grants — flat permission system *)
+Well.Auth.grant : user_id:int -> string -> unit
+Well.Auth.revoke : user_id:int -> string -> unit
+Well.Auth.has_grant : user_id:int -> string -> bool
+Well.Auth.user_grants : user_id:int -> string list
+
+(* Handler wrapper — checks grant, raises Auth_denied *)
+Well.Auth.require_grant : string -> (request -> 'a) -> (request -> 'a)
+```
+
+Example:
+```ocaml
+(* Login page *)
+Well.post "/login" @@ fun req ->
+let email = Well.form req "email" in
+let password = Well.form req "password" in
+match Well.Auth.login_and_set_session req ~email ~password with
+| Ok _user -> Well.redirect "/"
+| Error msg -> render_login_page ~error:msg
+
+(* Logout *)
+Well.post "/logout" @@ fun req ->
+  Well.Auth.logout req;
+  Well.redirect "/login"
+
+(* Protected route with grant check *)
+Well.get "/admin" @@ Well.Auth.require_grant "admin" (fun req -> ...)
+
+(* Check current user in handler *)
+let user_id = Well.current_user req  (* reads "user_id" from session *)
+```
+
+---
+
+## Form Validation (Well.Form)
+
+Applicative form validation with chainable validators.
+
+```ocaml
+type 'a t = { field: string; value: 'a option; errors: (string * string) list }
+
+Well.Form.get : (string * string) list -> string -> string t
+Well.Form.trim : string t -> string t
+Well.Form.required : 'a t -> 'a t
+Well.Form.min_length : int -> string t -> string t
+Well.Form.max_length : int -> string t -> string t
+Well.Form.format_ : string -> string t -> string t  (* regex pattern *)
+Well.Form.number : string t -> int t
+Well.Form.decimal : string t -> float t
+Well.Form.custom : ('a -> string option) -> 'a t -> 'a t
+Well.Form.validate : 'a t -> ('a, (string * string) list) result
+
+(* Applicative operators *)
+val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
+val ( and+ ) : 'a t -> 'b t -> ('a * 'b) t
+```
+
+Example:
+```ocaml
+let open Well.Form in
+let params = Well.form_params req in
+let result =
+  let+ title = get params "title" |> trim |> required |> min_length 3
+  and+ email = get params "email" |> trim |> required |> format_ ".*@.*\\..*"
+  and+ age = get params "age" |> required |> number in
+  (title, email, age)
+  |> validate
+in
+match result with
+| Ok (title, email, age) -> (* process *)
+| Error errors ->
+  (* errors: (string * string) list — [(field_name, error_message); ...] *)
+  (* Use Html.field_error errors "title" to render error messages *)
+```
+
+---
+
+## Mailer (Well.Mailer)
+
+Multi-adapter email system.
+
+```ocaml
+type adapter =
+  | Log                                              (* prints to stdout *)
+  | SMTP of { host: string; port: int; username: string; password: string }
+  | Resend of { api_key: string }
+  | Zeptomail of { api_url: string; token: string }
+  | SES of { region: string; access_key_id: string; secret_access_key: string }
+
+type mail = { to_: (string * string) list; subject: string; html: string; text: string }
+
+Well.Mailer.setup : { from_email: string; from_name: string; adapter: adapter } -> unit
+Well.Mailer.send : mail -> (unit, string) result
+```
+
+Example:
+```ocaml
+Well.Mailer.setup { from_email = "noreply@example.com"; from_name = "MyApp"; adapter = Log };
+
+match Well.Mailer.send {
+  to_ = [("User", "user@example.com")];
+  subject = "Welcome!";
+  html = "<h1>Hello</h1>";
+  text = "Hello";
+} with
+| Ok () -> ()
+| Error msg -> Well.log ~level:"error" "Mail error: %s" msg
+```
+
+---
+
+## HTTP Client (Well.fetch)
+
+```ocaml
+Well.fetch : ?method_:string -> ?headers:(string*string) list -> ?body:string
+          -> string -> fetch_response
+
+(* fetch_response = { status: int; headers: (string * string) list; body: string } *)
+
+(* GET *)
+let resp = Well.fetch "https://api.example.com/data" in
+Printf.printf "Status: %d\n" resp.status
+
+(* POST with JSON body *)
+let resp = Well.fetch ~method_:"POST"
+  ~headers:[("Content-Type", "application/json")]
+  ~body:{|{"key":"value"}|}
+  "https://api.example.com/data" in
+```
+
+---
+
+## S3 Storage (Well.S3)
+
+AWS S3 client with Signature V4 authentication.
+
+```ocaml
+Well.S3.connect : ?endpoint_url:string -> ?region:string -> ?access_key_id:string
+               -> ?secret_access_key:string -> ?bucket:string -> unit -> S3.t
+(* Reads from env: AWS_ENDPOINT_URL, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET *)
+
+Well.S3.put : S3.t -> key:string -> data:string -> (unit, string) result
+Well.S3.get : S3.t -> key:string -> (string, string) result
+Well.S3.delete : S3.t -> key:string -> (unit, string) result
+Well.S3.list : S3.t -> prefix:string -> (string list, string) result
+Well.S3.head : S3.t -> key:string -> (int, string) result  (* returns size *)
+Well.S3.presigned_url : S3.t -> method_:string -> key:string -> ?expires_in_secs:int -> unit -> string
+Well.S3.create_bucket : S3.t -> (unit, string) result
+```
+
+Example:
+```ocaml
+let s3 = Well.S3.connect ~bucket:"my-bucket" () in
+match Well.S3.put s3 ~key:"photos/cat.jpg" ~data:image_data with
+| Ok () -> ()
+| Error msg -> failwith msg;
+
+let url = Well.S3.presigned_url s3 ~method_:"GET" ~key:"photos/cat.jpg" ~expires_in_secs:3600 ()
+```
+
+---
 
 ## Service Contracts (TOML)
 
-Define service interfaces in TOML, generate OCaml + TypeScript:
+Define service interfaces in TOML, generate OCaml + TypeScript + Go + Dart.
 
 ```toml
-# TaskAccess.toml
+# contract/TaskAccess.toml
 [service.rpc]
 list = "ListReq -> TaskList"
 create = "CreateReq -> Task"
@@ -3224,74 +3915,305 @@ let spec = Task_access.make_spec (module Impl)
 Register in `lib/app.ml`:
 ```ocaml
 Well.Service.register Task_access_impl.spec;
-Well.Service.expose "TaskAccess";  (* creates HTTP routes *)
+Well.Service.expose "TaskAccess";  (* creates /rpc/TaskAccess/* HTTP routes *)
 ```
 
-## Middleware
+### Service Module
 
 ```ocaml
-(* lib/app.ml *)
-Well.use Well.error_handler;
-Well.use Well.logger;
-Well.use Well.csrf;
-Well.use (Well.rate_limit ~max_requests:60 ~window_ms:60_000 ());
+Well.Service.register : ?restart:restart -> spec -> unit
+(* restart: Permanent (always restart) | Transient (restart on error) | Temporary (no restart) *)
 
-(* Custom middleware *)
-Well.use (fun next req ->
-  (* before *)
-  let resp = next req in
-  (* after *)
-  resp);
+Well.Service.expose : string -> unit  (* expose as HTTP RPC *)
+Well.Service.list_services : unit -> (string * string list) list
+Well.Service.health : unit -> (string * string) list
+Well.Service.cast : (unit -> unit) -> unit  (* fire-and-forget async *)
 ```
 
-## Request Context (Well.Context)
+---
+
+## WebSocket (Raw)
+
+For custom WebSocket handlers (not LiveView or Channel).
 
 ```ocaml
-module Ctx = Well.Context(struct
-  type t = string
-  let empty = ""
-end)
-
-(* In middleware: set *)
-let middleware : Well.middleware = fun next req ->
-  next (Ctx.set "value" req)
-
-(* In handler: get *)
-let value = Ctx.get req
+Well.ws "/ws/custom" (fun req ws ->
+  (* ws : Websocket.t *)
+  match Websocket.receive ws with
+  | Some msg ->
+    Websocket.send ws ("echo: " ^ msg);
+    Websocket.send_json ws (`Assoc [("type", `String "ack")])
+  | None -> ()  (* connection closed *)
+)
 ```
-
-## Auth / Sessions
 
 ```ocaml
-(* Login *)
-Well.session_set req "user_id" username;
-
-(* Logout *)
-Well.session_delete req "user_id";
-
-(* Check current user *)
-let user = Well.current_user req  (* string option *)
-
-(* Require auth middleware — session-based, redirects to login *)
-let auth = [Well.require_auth ()]
-Well.get ~middleware:auth "/protected" @@ fun req -> ...
-
-(* Basic auth middleware — HTTP Basic Authentication *)
-let api_auth = [Well.basic_auth ~check:(fun user pass ->
-  user = "admin" && pass = "secret") ()]
-Well.get ~middleware:api_auth "/api/data" @@ fun req -> ...
-
-(* Basic auth with custom realm *)
-let admin = [Well.basic_auth ~check:check_credentials ~realm:"Admin Panel" ()]
+Websocket.receive : t -> string option
+Websocket.receive_json : t -> Yojson.Safe.t option
+Websocket.send : t -> string -> unit
+Websocket.send_json : t -> Yojson.Safe.t -> unit
+Websocket.close : t -> unit
+Websocket.is_open : t -> bool
 ```
+
+---
+
+## File I/O
+
+```ocaml
+Well.write_file : string -> string -> unit
+Well.read_file : string -> string
+Well.file_exists : string -> bool
+Well.mkdir : string -> unit
+Well.list_dir : string -> string list
+Well.ext_to_mime : string -> string  (* "jpg" → "image/jpeg" *)
+```
+
+---
+
+## Logging
+
+```ocaml
+Well.log : ?level:string -> ?ctx:(string*string) list -> ('a, unit, string) format -> 'a
+
+Well.log "Server started on port %d" port;
+Well.log ~level:"error" "Failed: %s" msg;
+Well.log ~level:"debug" ~ctx:[("user_id", uid)] "Action performed";
+```
+
+Levels: `debug`, `info` (default), `warn`, `error`. Logs to stdout + `data/well.log` with rotation (10MB, 5 files).
+
+---
+
+## Configuration
+
+```ocaml
+Well.max_body_size : int -> unit       (* max request body *)
+Well.keep_alive_timeout : float -> unit
+Well.request_timeout : float -> unit
+Well.ws_rate_limit : float -> unit
+Well.ws_max_frame_size : int -> unit   (* default 10MB *)
+Well.max_upload_size : int -> unit
+Well.dev_mode : bool -> unit           (* enables dev error pages *)
+Well.on_error : (exn -> request -> response) -> unit  (* custom error handler *)
+```
+
+---
+
+## Server
+
+```ocaml
+Well.run : ?port:int -> ?workers:int -> ?cert:string -> ?key:string
+        -> ?domain:string -> ?acme_staging:bool -> ?disable_cap:bool -> unit -> unit
+(* Default: port 4000, listens 0.0.0.0. Blocks forever. *)
+(* ~cert/~key: PEM files for manual TLS *)
+(* ~domain: enables Let's Encrypt auto-TLS (mutually exclusive with cert/key) *)
+(* ~acme_staging: use LE staging for testing *)
+(* ~disable_cap: disable Cap admin panel *)
+
+Well.with_test_server : ?port:int -> ?disable_cap:bool -> (int -> 'a) -> 'a
+(* Starts server on random port, passes port to function *)
+```
+
+### Auto-TLS (Let's Encrypt)
+
+```ocaml
+Well.run ~domain:"myapp.example.com" ~port:443 ()
+(* Automatically provisions certificate via HTTP-01 challenge *)
+(* Stores certs in data/certs/ *)
+```
+
+---
+
+## Testing
+
+### Test Framework (Well_test)
+
+```ocaml
+open Well_test
+
+describe : string -> (unit -> unit) -> unit
+it : string -> (unit -> unit) -> unit   (* alias: test *)
+skip : string -> (unit -> unit) -> unit
+
+before_each : (unit -> unit) -> unit
+after_each : (unit -> unit) -> unit
+before_all : (unit -> unit) -> unit
+after_all : (unit -> unit) -> unit
+
+expect : 'a -> expectation
+not_ : expectation -> expectation
+
+(* Matchers *)
+to_equal_string : string -> expectation -> unit
+to_equal_int : int -> expectation -> unit
+to_equal_float : ?epsilon:float -> float -> expectation -> unit
+to_equal_bool : bool -> expectation -> unit
+to_be_true / to_be_false : expectation -> unit
+to_be_some / to_be_none : expectation -> unit
+to_be_greater_than / to_be_less_than : int -> expectation -> unit
+to_contain : string -> expectation -> unit       (* substring *)
+to_match : string -> expectation -> unit         (* regex *)
+to_have_length : int -> expectation -> unit      (* list *)
+to_raise : expectation -> unit
+to_raise_with : string -> expectation -> unit
+to_match_snapshot : expectation -> unit          (* snapshot testing *)
+
+run : ?filter:string option -> ?ci_mode:bool -> ?source_file:string -> unit -> run_result
+exit_with_result : run_result -> unit
+```
+
+### Database Tests
+
+```ocaml
+it "creates a note" (fun () ->
+  Well.Db.with_test_db (fun db ->
+    Notes.Insert.exec db ~title:"Test" ~body:"Body";
+    let notes = Notes.All.query db in
+    expect (List.length notes) |> to_equal_int 1
+  )
+);
+```
+
+### Integration Tests
+
+```ocaml
+it "serves homepage" (fun () ->
+  Well.with_test_server (fun port ->
+    let url = Printf.sprintf "http://localhost:%d/" port in
+    let resp = Well.fetch url in
+    expect resp.body |> to_contain "Welcome"
+  )
+);
+```
+
+### Snapshot Testing
+
+```ocaml
+it "renders correctly" (fun () ->
+  let html = element_to_string (render_page ()) in
+  expect html |> to_match_snapshot
+);
+(* Snapshots stored in __snapshots__/*.snap alongside test file *)
+(* Update: WELL_UPDATE_SNAPSHOTS=1 or well test -u *)
+(* IMPORTANT: run ~source_file:__FILE__ () — needed for snapshot location *)
+```
+
+---
+
+## RPC Context
+
+For service-to-service calls with user context:
+
+```ocaml
+type rpc_ctx = {
+  session_id: string; request_id: string;
+  user_id: string option; user_name: string option; locale: string
+}
+
+Well.rpc_ctx : request -> rpc_ctx
+Well.rpc_ctx_to_wire : rpc_ctx -> Yojson.Safe.t  (* JSON array format *)
+Well.rpc_ctx_of_wire : Yojson.Safe.t -> rpc_ctx
+```
+
+---
+
+## Telemetry (Well.Telemetry)
+
+```ocaml
+Well.Telemetry.snapshot_counters : unit -> counter_snapshot
+(* { total_requests; errors_5xx; avg_latency_us; ws_messages; bus_events } *)
+
+Well.Telemetry.requests_per_sec : unit -> float
+Well.Telemetry.cpu_percent : unit -> float
+Well.Telemetry.rss_kb : unit -> int
+Well.Telemetry.system_snapshot : unit -> system_snapshot
+```
+
+---
+
+## URL Encoding
+
+```ocaml
+Well.url_encode : string -> string  (* "hello world" → "hello%20world" *)
+Well.url_decode : string -> string
+```
+
+---
+
+## CLI Commands
+
+```bash
+well init <name>              # Scaffold new project
+well test [-w] [-f pat] [-u]  # Run tests (watch, filter, update snapshots)
+well docs [--open] [-o dir]   # Generate HTML documentation from (** *) comments
+well contract build [dir]     # Generate code from TOML contracts
+well db diff                  # Show pending schema migrations
+well db rollback [path]       # Restore from .bak backup
+well repl [-s socket] [-e expr]  # Interactive service query shell
+```
+
+### REPL Syntax
+
+```
+Service.method param:value      # Call RPC
+let x = Service.method ...      # Bind result
+x.field                         # Field access
+expr | map .field               # Pipeline: map, filter, count, first, sort
+"hello {x.name}"                # String interpolation
+```
+
+---
+
+## Client-Side TypeScript (well.ts)
+
+Compiled by bun to `well.js`. Auto-initializes as `window.well`.
+
+### LiveView (automatic)
+
+Discovers `<live-view>` elements, manages WebSocket connection on `/live`.
+Event delegation: `data-lv-click`, `data-lv-submit`, `data-lv-change`, etc.
+
+### Channel API
+
+```javascript
+const ch = well.channel("room:general");
+ch.on("message", (payload) => { /* handle */ });
+ch.push("send", { text: "hello" });
+ch.leave();
+```
+
+### JS Hooks
+
+```javascript
+Well.hooks.MyHook = {
+  mounted() {
+    // this.el — DOM element
+    // this.pushEvent("event", payload) — send to server
+    // this.handleEvent("event", (data) => { ... }) — receive from server
+  },
+  updated() { /* after DOM patch */ },
+  destroyed() { /* cleanup */ }
+};
+```
+
+### File Upload Hook (built-in)
+
+```html
+<input type="file" data-lv-hook="FileUpload" />
+```
+Automatically uploads via base64 chunks over WebSocket.
+
+---
 
 ## Forms & File Upload
 
 ```ocaml
 (* URL-encoded form data *)
 let title = Well.form req "title" in
+let all_params = Well.form_params req in
 
-(* CSRF token in forms *)
+(* CSRF token in forms — REQUIRED for POST *)
 <form action="/submit" method_="POST">
   (csrf_input (Well.csrf_token req))
   <input type_="text" name_="title" />
@@ -3299,148 +4221,45 @@ let title = Well.form req "title" in
 </form>
 
 (* Textarea — children must be node, not bare string *)
-<textarea name_="body" placeholder="Write...">(txt "")</textarea>
-(* with value: *) <textarea name_="body">(txt some_variable)</textarea>
+<textarea name_="body">(txt "")</textarea>
+<textarea name_="body">(txt some_variable)</textarea>
 
-(* File upload *)
+(* File upload — multipart *)
 Well.post "/upload" @@ fun req ->
 match Well.file req "file" with
 | None -> Well.redirect "/upload"
 | Some f ->
     Well.write_file ("data/uploads/" ^ f.filename) f.data;
     Well.redirect "/upload"
+
+(* Multiple files *)
+let all = Well.files req "files" in  (* uploaded_file list *)
+let everything = Well.all_files req in  (* (string * uploaded_file) list *)
 ```
 
-## MessageBus & Channels
+---
+
+## Route Introspection
 
 ```ocaml
-(* ── Typed topics (fixed channel) ── *)
-Well.publish Events.counter_event (`Incremented ("increment", 42))
-Well.subscribe Events.counter_event (fun evt -> ignore evt.value)
-
-(* ── Keyed topics (channel:key — dynamic) ── *)
-Well.publish_keyed Events.order_cmd ~key:"abc-123" { items = ["x"] }
-Well.subscribe_keyed Events.order_cmd (fun kev ->
-  let _uuid = kev.key in          (* "abc-123" *)
-  let _cmd = kev.event.value in)  (* typed order_cmd *)
-
-(* ── Request/reply (publish + await response) ── *)
-let result = Well.request ~cmd:Events.order_cmd ~reply:Events.order_result
-               ~key:"abc-123" { items = ["x"] }
-(* Blocks fiber, 5s timeout, raises Well.Request_timeout *)
-
-(* ── Replay safety ── *)
-Well.subscribe ~live_only:true Events.x (fun _ -> send_email ())
-(* live_only subscribers are skipped during replay *)
-(* All publish calls during replay are automatically ephemeral *)
-
-(* ── Low-level MessageBus (untyped) ── *)
-Well.MessageBus.publish "orders/new" (`Assoc [("id", `Int 42)]);
-Well.MessageBus.publish ~ephemeral:true "typing/user1" `Null;
-Well.MessageBus.subscribe "orders/*" (fun event ->
-  Printf.printf "Got: %s\n" event.channel);
-
-(* ── Channel — authorized WS gateway ── *)
-Well.channel "room:*" (fun req topic ->
-  match Well.current_user req with
-  | Some _ -> Ok { subscribe = [topic] }
-  | None -> Error "unauthorized");
+Well.list_routes : unit -> (string * string * string) list
+(* Returns [(method, path, kind)] where kind = "handler" | "liveview" | "websocket" | "cap" *)
 ```
 
-## S3 Storage
+---
 
-Environment variables: `AWS_ENDPOINT_URL`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`.
+## Cap Admin Panel
+
+Built-in admin dashboard at `/cap`. Password-protected.
 
 ```ocaml
-(* Connect — reads env vars, with optional overrides *)
-let s3 = Well.S3.connect ()
-(* Or with explicit config: *)
-let s3 = Well.S3.connect
-  ~endpoint_url:"https://s3.amazonaws.com"
-  ~region:"eu-central-1"
-  ~bucket:"my-bucket" ()
-
-(* Upload — auto-detects MIME from extension *)
-let () = match Well.S3.put s3 ~key:"photos/cat.jpg" image_data with
-  | Ok () -> ()
-  | Error msg -> failwith msg
-
-(* Upload with explicit content type *)
-let () = match Well.S3.put s3 ~key:"data/export" ~content_type:"application/csv" csv with
-  | Ok () -> ()
-  | Error msg -> failwith msg
-
-(* Download *)
-let data = match Well.S3.get s3 ~key:"photos/cat.jpg" with
-  | Ok body -> body
-  | Error msg -> failwith msg
-
-(* Delete *)
-let () = match Well.S3.delete s3 ~key:"photos/cat.jpg" with
-  | Ok () -> ()
-  | Error msg -> failwith msg
-
-(* Copy *)
-let () = match Well.S3.copy s3 ~src:"photos/cat.jpg" ~dst:"backup/cat.jpg" with
-  | Ok () -> ()
-  | Error msg -> failwith msg
-
-(* Head — returns (status, headers) *)
-let () = match Well.S3.head s3 ~key:"photos/cat.jpg" with
-  | Ok (_status, headers) ->
-    let size = List.assoc_opt "content-length" headers in
-    ignore size
-  | Error msg -> failwith msg
-
-(* Presigned URL — default 24h expiry *)
-let url = Well.S3.presigned_url s3 ~key:"photos/cat.jpg" ()
-let url = Well.S3.presigned_url s3 ~key:"photos/cat.jpg" ~expires_in:3600 ()
-
-(* Create bucket on startup *)
-let () = match Well.S3.create_bucket s3 with
-  | Ok () -> ()
-  | Error msg -> failwith msg
+Well.Cap_hook.cap_password := "admin123";
+(* Set before Well.run. Disable with Well.run ~disable_cap:true () *)
 ```
 
-## Testing
+Features: system stats, request telemetry, log viewer with filtering, route list, WebSocket connections.
 
-```ocaml
-open Well_test
-
-let () =
-  describe "Notes" (fun () ->
-    it "creates a note" (fun () ->
-      Well.Db.with_test_db (fun db ->
-        Notes.Insert_note.exec db ~title:"Test" ~body:"Body";
-        let notes = Notes.All_notes.query db in
-        expect (List.length notes) |> to_equal_int 1
-      )
-    );
-  );
-  run ~source_file:__FILE__ () |> exit_with_result
-```
-
-Integration test with real HTTP:
-```ocaml
-it "serves homepage" (fun () ->
-  Well.with_test_server (fun port ->
-    let url = Printf.sprintf "http://localhost:%d/" port in
-    let body = Well_test.Http.get url in
-    expect body |> to_contain "Welcome"
-  )
-);
-```
-
-## CLI Commands
-
-```bash
-well init <name>        # Scaffold new project
-well test [-w] [-f pat] # Run tests (watch, filter)
-well docs [--open]      # Generate HTML documentation
-well contract build .   # Generate from TOML contracts
-well db diff            # Show pending migrations
-well repl               # Interactive service shell
-```
+---
 
 ## Companion Skills
 
@@ -3451,15 +4270,19 @@ When working on this project, use these companion skills for specialized decisio
 
 Services must hide internal functions using `open struct ... end`. Only the contract-defined interface should be public.
 
+---
+
 ## Common Patterns Checklist
 
 When adding a new feature, you typically need:
 
 1. **Static page**: Create `lib/client/pages/feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
-2. **With data**: Create `lib/feature_access/feature_access.ml` with model type + `[@@deriving table]` + `let%query` + `let db = lazy (Well.Db.open_db ())`
-3. **LiveView**: Create `lib/client/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + `init`/`update`/`view`, register with `Well.live "/path" (module Feature_live)` in `lib/app.ml`
-4. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module in `lib/feature_access/`, register in `lib/app.ml`
-5. **Tests**: Add to `test/` with `Well.Db.with_test_db` or `Well.with_test_server`
+2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let db = lazy (Well.Db.open_db ())`
+3. **LiveView**: Create `.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields, register with `Well.live "/path" (module Feature_live)` in `lib/app.ml`
+4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or LiveViews
+5. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module, register + expose in `lib/app.ml`
+6. **Auth-protected**: Add `~middleware:[Well.require_auth ()]` or wrap handler with `Well.Auth.require_grant`
+7. **Tests**: Add to `test/` with `Well.Db.with_test_db` for DB tests or `Well.with_test_server` for integration tests
 |well_skill}
 
 let idesign_skill_md = {idesign|---
@@ -4864,6 +5687,7 @@ let project_files name =
     { path = "lib/client/pages/tasks_page.mlx"; content = tasks_page name };
     { path = "lib/client/pages/upload_page.mlx"; content = upload_page name };
     { path = "lib/client/pages/login_page.mlx"; content = login_page name };
+    { path = "lib/client/pages/signup_page.mlx"; content = signup_page name };
     (* lib/client/live/ *)
     { path = "lib/client/live/counter_live.mlx"; content = counter_live name };
     { path = "lib/client/live/activity_log_live.mlx"; content = activity_log_live name };

@@ -1,0 +1,3 @@
+(test
+ (name production_test)
+ (libraries well well.html str eio_main eio))

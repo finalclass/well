@@ -1,0 +1,3 @@
+(test
+ (name auth_test)
+ (libraries well str eio_main eio))

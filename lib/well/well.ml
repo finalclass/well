@@ -539,6 +539,12 @@ let session_delete req key =
 let session_clear req =
   Session_store.clear ~session_id:req.session_id
 
+(* Wire Auth session forward refs *)
+let () =
+  Auth._session_get_ref := (fun sid key -> Session_store.get ~session_id:sid ~key);
+  Auth._session_set_ref := (fun sid key value -> Session_store.set ~session_id:sid ~key ~value);
+  Auth._session_delete_ref := (fun sid key -> Session_store.delete ~session_id:sid ~key)
+
 let _session_regenerate_hook : (string -> string -> unit) ref = ref (fun _ _ -> ())
 
 let session_regenerate req =
@@ -618,7 +624,7 @@ let rpc_ctx (req : request) : rpc_ctx =
 
 (* ── Flash API ───────────────────────────────────────────────────── *)
 
-let put_flash req kind message =
+let put_flash (req : request) kind message =
   Session_store.set ~session_id:req.session_id
     ~key:(_flash_prefix ^ kind) ~value:message
 
@@ -1476,7 +1482,10 @@ td{padding:0.25rem 0.75rem;border:1px solid #e5e7eb;font-family:monospace;font-s
 
 let error_handler : middleware = fun next req ->
   try next req
-  with exn ->
+  with
+  | Auth.Auth_denied (code, msg) ->
+    `Text msg |> status code
+  | exn ->
     let bt = Printexc.get_raw_backtrace () in
     Log.log ~level:"error" ~ctx:(req_ctx req) "%s %s ERROR: %s\n%s" req.meth req.path
       (Printexc.to_string exn) (Printexc.raw_backtrace_to_string bt);
@@ -2044,8 +2053,7 @@ let handle_connection flow _addr =
         in
         match match_route effective_meth req.path with
         | Some (route, params) ->
-            (try route.handler { req with params }
-             with exn -> safe_500 exn "handler")
+            route.handler { req with params }
         | None ->
             (match try_serve_static req.meth req.path req.headers with
              | Some r when r.r_status = -1 ->
@@ -2101,7 +2109,10 @@ let handle_connection flow _addr =
         { meth; path; headers = hdrs; body; params = [];
           query = query_params; session_id = ""; _context = [] }
       in
-      let resp = pipeline req in
+      let resp =
+        try pipeline req
+        with exn -> safe_500 exn "handler"
+      in
       Domain.DLS.set _current_request_id None;
       Telemetry.incr_requests ();
       let dt_us = int_of_float ((Unix.gettimeofday () -. t0) *. 1e6) in
@@ -2327,6 +2338,13 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
       let r = !_fetch_impl ~method_ ~headers ~body url in
       (r.status, r.headers, r.body));
   S3._mime_ref := ext_to_mime;
+  (* Wire Mailer forward refs *)
+  Mailer._fetch_ref :=
+    (fun ~method_ ~headers ~body url ->
+      let r = !_fetch_impl ~method_ ~headers ~body url in
+      (r.status, r.headers, r.body));
+  Mailer._set_net net;
+  Mailer._tls_config_fn := (fun () -> fetch_tls_config ());
   let cwd = Eio.Stdenv.cwd env in
   _write_file_impl :=
     (fun path data ->
@@ -2574,6 +2592,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     Log.log "shutting down...";
     Eio.Time.sleep clock 0.5;
     Session_store.close ();
+    Auth.close ();
     Liveview_store.close ();
     Message_bus.close ();
     Log.log "stopped.";
@@ -2634,6 +2653,13 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
       let r = !_fetch_impl ~method_ ~headers ~body url in
       (r.status, r.headers, r.body));
   S3._mime_ref := ext_to_mime;
+  (* Wire Mailer forward refs for test server *)
+  Mailer._fetch_ref :=
+    (fun ~method_ ~headers ~body url ->
+      let r = !_fetch_impl ~method_ ~headers ~body url in
+      (r.status, r.headers, r.body));
+  Mailer._set_net net;
+  Mailer._tls_config_fn := (fun () -> fetch_tls_config ());
   let cwd = Eio.Stdenv.cwd env in
   _write_file_impl :=
     (fun path data ->
@@ -2832,8 +2858,22 @@ module LiveView = Liveview
 module Service = Service
 module MessageBus = Message_bus
 module Channel = Channel
+module Auth = Auth
+module Mailer = Mailer
 module S3 = S3
 module Telemetry = Telemetry
+
+(* ── URL encoding ──────────────────────────────────────────────── *)
+
+let url_encode str =
+  let buf = Buffer.create (String.length str * 3) in
+  String.iter (fun c ->
+    match c with
+    | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' | '-' | '~' | '.' ->
+      Buffer.add_char buf c
+    | _ -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c))
+  ) str;
+  Buffer.contents buf
 
 (* ── Typed pub/sub ────────────────────────────────────────────────── *)
 
