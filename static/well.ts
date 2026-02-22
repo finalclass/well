@@ -30,7 +30,7 @@ export class Well {
   private liveWs: WebSocket | null = null;
   private liveReconnectDelay = 500;
   private readonly maxReconnectDelay = 10000;
-  private readonly liveViews = new Map<string, { el: Element; endpoint: string; props: Record<string, unknown> }>();
+  private readonly liveViews = new Map<string, { el: Element; endpoint: string; props: Record<string, unknown>; cachedHtml: string }>();
 
   // ── Channel state ──
   private channelWs: WebSocket | null = null;
@@ -150,6 +150,141 @@ export class Well {
     });
   }
 
+  // ── Morphdom ───────────────────────────────────────────────────────
+
+  private morph(container: Element, newHtml: string) {
+    const template = document.createElement("template");
+    template.innerHTML = newHtml;
+    const newRoot = template.content;
+    this.morphChildren(container, newRoot);
+  }
+
+  private morphChildren(oldParent: Element | DocumentFragment, newParent: Element | DocumentFragment) {
+    const oldChildren = Array.from(oldParent.childNodes);
+    const newChildren = Array.from(newParent.childNodes);
+
+    // Build key maps for elements
+    const oldKeyed = new Map<string, Element>();
+    for (const child of oldChildren) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const el = child as Element;
+        const key = el.getAttribute("data-lv-key") ?? el.getAttribute("id");
+        if (key) oldKeyed.set(key, el);
+      }
+    }
+
+    let oldIdx = 0;
+    for (let newIdx = 0; newIdx < newChildren.length; newIdx++) {
+      const newChild = newChildren[newIdx];
+
+      if (newChild.nodeType === Node.TEXT_NODE) {
+        if (oldIdx < oldChildren.length && oldChildren[oldIdx].nodeType === Node.TEXT_NODE) {
+          if (oldChildren[oldIdx].textContent !== newChild.textContent) {
+            oldChildren[oldIdx].textContent = newChild.textContent;
+          }
+          oldIdx++;
+        } else {
+          oldParent.insertBefore(document.createTextNode(newChild.textContent ?? ""), oldChildren[oldIdx] ?? null);
+        }
+        continue;
+      }
+
+      if (newChild.nodeType !== Node.ELEMENT_NODE) {
+        oldIdx++;
+        continue;
+      }
+
+      const newEl = newChild as Element;
+      const newKey = newEl.getAttribute("data-lv-key") ?? newEl.getAttribute("id");
+
+      // Try to find matching old element
+      let match: Element | null = null;
+
+      if (newKey && oldKeyed.has(newKey)) {
+        match = oldKeyed.get(newKey)!;
+        oldKeyed.delete(newKey);
+        // Move to correct position if needed
+        const ref = oldChildren[oldIdx] ?? null;
+        if (match !== ref) {
+          oldParent.insertBefore(match, ref);
+        } else {
+          oldIdx++;
+        }
+      } else if (oldIdx < oldChildren.length) {
+        const oldChild = oldChildren[oldIdx];
+        if (oldChild.nodeType === Node.ELEMENT_NODE) {
+          const oldEl = oldChild as Element;
+          const oldKey = oldEl.getAttribute("data-lv-key") ?? oldEl.getAttribute("id");
+          if (!oldKey && oldEl.tagName === newEl.tagName) {
+            match = oldEl;
+            oldIdx++;
+          }
+        }
+        if (!match) {
+          // Insert new element
+          oldParent.insertBefore(newEl.cloneNode(true), oldChildren[oldIdx] ?? null);
+          continue;
+        }
+      }
+
+      if (!match) {
+        oldParent.appendChild(newEl.cloneNode(true));
+        continue;
+      }
+
+      // Skip ignored elements
+      if (match.hasAttribute("data-lv-ignore")) continue;
+
+      // Sync attributes
+      this.syncAttrs(match, newEl);
+
+      // Preserve focus state for form elements
+      const active = document.activeElement;
+      if (match === active && this.isFormInput(match)) {
+        // Don't recurse into focused inputs — preserve value
+      } else if (this.isFormInput(match) && this.isFormInput(newEl)) {
+        // Sync value for non-focused form elements
+        (match as HTMLInputElement).value = (newEl as HTMLInputElement).value;
+      } else {
+        // Recurse into children
+        this.morphChildren(match, newEl);
+      }
+    }
+
+    // Remove leftover old children
+    const currentChildren = Array.from(oldParent.childNodes);
+    for (let i = newChildren.length; i < currentChildren.length; i++) {
+      // Recalculate because DOM may have shifted
+    }
+    while (oldParent.childNodes.length > newChildren.length) {
+      const last = oldParent.lastChild;
+      if (last) oldParent.removeChild(last);
+      else break;
+    }
+  }
+
+  private syncAttrs(oldEl: Element, newEl: Element) {
+    // Remove attrs not in new
+    const oldAttrs = Array.from(oldEl.attributes);
+    for (const attr of oldAttrs) {
+      if (!newEl.hasAttribute(attr.name)) {
+        oldEl.removeAttribute(attr.name);
+      }
+    }
+    // Set/update attrs from new
+    const newAttrs = Array.from(newEl.attributes);
+    for (const attr of newAttrs) {
+      if (oldEl.getAttribute(attr.name) !== attr.value) {
+        oldEl.setAttribute(attr.name, attr.value);
+      }
+    }
+  }
+
+  private isFormInput(el: Element): boolean {
+    const tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  }
+
   // ── LiveView helpers ─────────────────────────────────────────────
 
   private findLiveView(el: Element): string | null {
@@ -211,9 +346,26 @@ export class Well {
         case "full":
         case "restored":
           if (lv) {
-            lv.el.innerHTML = msg.html as string;
+            const html = msg.html as string;
+            lv.cachedHtml = html;
+            lv.el.innerHTML = html;
             lv.el.classList.remove("lv-loading");
             this.mountHooks(lv.el);
+          }
+          break;
+
+        case "morph":
+          if (!lv) break;
+          {
+            const patches = msg.patches as [number, number, string][];
+            let html = lv.cachedHtml;
+            for (let i = patches.length - 1; i >= 0; i--) {
+              const [offset, len, content] = patches[i];
+              html = html.substring(0, offset) + content + html.substring(offset + len);
+            }
+            lv.cachedHtml = html;
+            this.morph(lv.el, html);
+            this.updateHooks(lv.el);
           }
           break;
 
@@ -571,7 +723,7 @@ export class Well {
         const topic = el.getAttribute("data-topic") ?? endpoint;
         let props: Record<string, unknown> = {};
         try { props = JSON.parse(el.getAttribute("data-props") ?? "{}"); } catch { /* ignore */ }
-        this.liveViews.set(topic, { el, endpoint, props });
+        this.liveViews.set(topic, { el, endpoint, props, cachedHtml: "" });
       });
       this.connectLive();
     });

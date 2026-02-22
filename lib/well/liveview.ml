@@ -33,15 +33,6 @@ module type VIEW = sig
   val msg_of_yojson : Yojson.Safe.t -> (msg, string) result
 end
 
-(* ── Keyed list diffing types ──────────────────────────────────────── *)
-
-type list_ops_entry = {
-  order : string list;
-  inserts : (string * string) list;
-}
-
-type list_state = (string * Html.keyed_item list) list
-
 (* ── Session store ─────────────────────────────────────────────────── *)
 
 type session_state = {
@@ -117,99 +108,9 @@ let cleanup_sessions () =
   in
   List.iter (Hashtbl.remove sessions) to_remove
 
-(* ── Dynamics extraction and diffing ──────────────────────────────── *)
+(* ── Patch type ────────────────────────────────────────────────────── *)
 
-let collect_dynamics html =
-  (* Find data-lv="id"> then extract everything until matching close tag.
-     Supports both plain text and nested HTML content. *)
-  let attr_pat = Str.regexp {|data-lv="\([^"]*\)"|} in
-  let len = String.length html in
-  let rec find_all pos acc =
-    try
-      let _ = Str.search_forward attr_pat html pos in
-      let id = Str.matched_group 1 html in
-      let after_attr = Str.match_end () in
-      (* Find the > that closes this tag *)
-      match String.index_from_opt html after_attr '>' with
-      | None -> find_all after_attr acc
-      | Some gt_pos ->
-          let content_start = gt_pos + 1 in
-          (* Determine the tag name by scanning backwards from data-lv for < *)
-          let tag_name =
-            let rec scan i =
-              if i < 0 then "div"
-              else if html.[i] = '<' then begin
-                let j = i + 1 in
-                let k = ref j in
-                while !k < len && html.[!k] <> ' ' && html.[!k] <> '>'
-                      && html.[!k] <> '/' do incr k done;
-                String.sub html j (!k - j)
-              end else scan (i - 1)
-            in
-            scan (Str.match_beginning () - 1)
-          in
-          let close_tag = "</" ^ tag_name ^ ">" in
-          let close_len = String.length close_tag in
-          (* Find matching close tag at depth 0 *)
-          let open_tag = "<" ^ tag_name in
-          let open_len = String.length open_tag in
-          let rec find_close i depth =
-            if i + close_len > len then len
-            else if String.sub html i close_len = close_tag then begin
-              if depth = 0 then i
-              else find_close (i + 1) (depth - 1)
-            end else if i + open_len < len
-                     && String.sub html i open_len = open_tag
-                     && (html.[i + open_len] = ' ' || html.[i + open_len] = '>'
-                         || html.[i + open_len] = '/') then
-              find_close (i + 1) (depth + 1)
-            else find_close (i + 1) depth
-          in
-          let close_pos = find_close content_start 0 in
-          let value = String.sub html content_start (close_pos - content_start) in
-          find_all (close_pos + close_len) ((id, value) :: acc)
-    with Not_found -> List.rev acc
-  in
-  find_all 0 []
-
-let diff_dynamics old_dynamics new_dynamics =
-  List.filter_map
-    (fun (id, new_value) ->
-      match List.assoc_opt id old_dynamics with
-      | Some old_value when old_value = new_value -> None
-      | _ -> Some (id, new_value))
-    new_dynamics
-
-(* ── List diffing ──────────────────────────────────────────────────── *)
-
-let diff_lists old_lists new_lists =
-  List.filter_map
-    (fun (list_id, new_items) ->
-      let old_items =
-        match List.assoc_opt list_id old_lists with
-        | Some items -> items
-        | None -> []
-      in
-      let old_keys =
-        List.map (fun (ki : Html.keyed_item) -> ki.key) old_items
-      in
-      let new_keys =
-        List.map (fun (ki : Html.keyed_item) -> ki.key) new_items
-      in
-      let old_html_map =
-        List.map (fun (ki : Html.keyed_item) -> (ki.key, ki.html)) old_items
-      in
-      let inserts =
-        List.filter_map
-          (fun (ki : Html.keyed_item) ->
-            match List.assoc_opt ki.key old_html_map with
-            | Some old_html when old_html = ki.html -> None
-            | _ -> Some (ki.key, ki.html))
-          new_items
-      in
-      if old_keys = new_keys && inserts = [] then None
-      else Some (list_id, { order = new_keys; inserts }))
-    new_lists
+type patch = { offset : int; len : int; content : string }
 
 (* ── JSON encoding ─────────────────────────────────────────────────── *)
 
@@ -222,36 +123,11 @@ let encode_full topic html =
 let encode_restored topic html =
   encode_msg topic "restored" [ ("html", `String html) ]
 
-let encode_patch_with_lists topic changes list_ops =
-  let base =
-    [
-      ( "changes",
-        `Assoc (List.map (fun (id, v) -> (id, `String v)) changes) );
-    ]
-  in
-  let with_lists =
-    if list_ops = [] then base
-    else
-      let ops_json =
-        `Assoc
-          (List.map
-             (fun (list_id, ops) ->
-               ( list_id,
-                 `Assoc
-                   [
-                     ( "order",
-                       `List (List.map (fun k -> `String k) ops.order) );
-                     ( "inserts",
-                       `Assoc
-                         (List.map
-                            (fun (k, html) -> (k, `String html))
-                            ops.inserts) );
-                   ] ))
-             list_ops)
-      in
-      ("list_ops", ops_json) :: base
-  in
-  encode_msg topic "patch" with_lists
+let encode_morph topic patches =
+  let patches_json = `List (List.map (fun p ->
+    `List [`Int p.offset; `Int p.len; `String p.content]
+  ) patches) in
+  encode_msg topic "morph" [ ("patches", patches_json) ]
 
 let encode_event topic event payload =
   encode_msg topic "event" [("event", `String event); ("payload", payload)]
@@ -302,17 +178,96 @@ type handler_msg =
   | WsClosed
   | InfoMsg of Message_bus.event  (* from MessageBus *)
 
-(* ── View instance ─────────────────────────────────────────────────── *)
+(* ── Patch diffing ─────────────────────────────────────────────────── *)
 
-type handle_result = {
-  changes : (string * string) list;
-  list_ops : (string * list_ops_entry) list;
-}
+(* Compute minimal string patches between prev and next HTML.
+   Returns list of (offset, old_len, new_content) sorted by offset. *)
+let compute_patches prev next =
+  let prev_len = String.length prev in
+  let next_len = String.length next in
+  (* Find common prefix *)
+  let max_prefix = min prev_len next_len in
+  let prefix = ref 0 in
+  while !prefix < max_prefix && prev.[!prefix] = next.[!prefix] do
+    incr prefix
+  done;
+  if !prefix = prev_len && !prefix = next_len then
+    []  (* identical *)
+  else begin
+    (* Find common suffix (don't overlap with prefix) *)
+    let suffix = ref 0 in
+    while !suffix < prev_len - !prefix
+          && !suffix < next_len - !prefix
+          && prev.[prev_len - 1 - !suffix] = next.[next_len - 1 - !suffix]
+    do
+      incr suffix
+    done;
+    let p = !prefix in
+    let s = !suffix in
+    let prev_mid = String.sub prev p (prev_len - p - s) in
+    let next_mid = String.sub next p (next_len - p - s) in
+    (* Try to split on longest common substring within the middles *)
+    let rec split_patches base_offset prev_m next_m depth =
+      let pm_len = String.length prev_m in
+      let nm_len = String.length next_m in
+      if pm_len = 0 && nm_len = 0 then []
+      else if depth > 5 || pm_len = 0 || nm_len = 0 then
+        (* Base case: single patch for the whole region *)
+        [{ offset = base_offset; len = pm_len; content = next_m }]
+      else begin
+        (* Find longest common substring *)
+        let best_pi = ref 0 in
+        let best_ni = ref 0 in
+        let best_len = ref 0 in
+        (* Scan for common substrings — minimum length 8 to avoid spurious matches *)
+        for pi = 0 to pm_len - 1 do
+          for ni = 0 to nm_len - 1 do
+            if prev_m.[pi] = next_m.[ni] then begin
+              let l = ref 1 in
+              while pi + !l < pm_len && ni + !l < nm_len
+                    && prev_m.[pi + !l] = next_m.[ni + !l] do
+                incr l
+              done;
+              if !l > !best_len then begin
+                best_len := !l;
+                best_pi := pi;
+                best_ni := ni
+              end
+            end
+          done
+        done;
+        if !best_len < 8 then
+          (* No good common substring — emit single patch *)
+          [{ offset = base_offset; len = pm_len; content = next_m }]
+        else begin
+          let bp = !best_pi in
+          let bn = !best_ni in
+          let bl = !best_len in
+          let left =
+            split_patches base_offset
+              (String.sub prev_m 0 bp)
+              (String.sub next_m 0 bn)
+              (depth + 1)
+          in
+          let right =
+            split_patches (base_offset + bp + bl)
+              (String.sub prev_m (bp + bl) (pm_len - bp - bl))
+              (String.sub next_m (bn + bl) (nm_len - bn - bl))
+              (depth + 1)
+          in
+          left @ right
+        end
+      end
+    in
+    split_patches p prev_mid next_mid 0
+  end
+
+(* ── View instance ─────────────────────────────────────────────────── *)
 
 type view_instance = {
   get_html : unit -> string;
-  handle_msg : Yojson.Safe.t -> handle_result option;
-  handle_params : Types.request -> handle_result option;
+  handle_msg : Yojson.Safe.t -> patch list option;
+  handle_params : Types.request -> patch list option;
   get_model_json : unit -> Yojson.Safe.t;
   load_model : Yojson.Safe.t -> unit;
 }
@@ -466,16 +421,14 @@ let handler (req : Types.request) (ws : Websocket.t) =
               | None -> ())
          | _ -> ());
         (match ts.ts_instance.handle_msg msg_json with
-         | Some { changes; list_ops } ->
-             let patch_msg =
-               encode_patch_with_lists topic changes list_ops
-             in
-             Websocket.send_json ws patch_msg;
+         | Some patches ->
+             let morph_msg = encode_morph topic patches in
+             Websocket.send_json ws morph_msg;
              save_state ts.ts_persistence session_id ts.ts_topic
                ts.ts_endpoint (ts.ts_instance.get_model_json ());
              (match ts.ts_persistence with
               | User ->
-                  broadcast_to_user session_id topic ws patch_msg
+                  broadcast_to_user session_id topic ws morph_msg
               | _ -> ())
          | None -> ())
     | None -> ()
@@ -485,11 +438,8 @@ let handler (req : Types.request) (ws : Websocket.t) =
     | Some ts ->
         let nav_req = { req with query = query_params } in
         (match ts.ts_instance.handle_params nav_req with
-         | Some { changes; list_ops } ->
-             let patch_msg =
-               encode_patch_with_lists topic changes list_ops
-             in
-             Websocket.send_json ws patch_msg;
+         | Some patches ->
+             Websocket.send_json ws (encode_morph topic patches);
              save_state ts.ts_persistence session_id ts.ts_topic
                ts.ts_endpoint (ts.ts_instance.get_model_json ())
          | None -> ())
@@ -670,11 +620,8 @@ let handler (req : Types.request) (ws : Websocket.t) =
                     | None -> ())
                | _ -> ());
               match ts.ts_instance.handle_msg msg_json with
-              | Some { changes; list_ops } ->
-                  let patch_msg =
-                    encode_patch_with_lists topic changes list_ops
-                  in
-                  Websocket.send_json ws patch_msg;
+              | Some patches ->
+                  Websocket.send_json ws (encode_morph topic patches);
                   save_state ts.ts_persistence session_id ts.ts_topic
                     ts.ts_endpoint (ts.ts_instance.get_model_json ())
               | None -> ())
@@ -701,8 +648,8 @@ let register
     let state = ref (View.handle_params req initial_model) in
     let initial_html = View.view !state |> Html.element_to_string in
     state := View.temporary_assigns !state;
-    let dynamics = ref (collect_dynamics initial_html) in
-    let lists : list_state ref = ref (Html.collect_and_clear_lists ()) in
+    let _ = Html.collect_and_clear_lists () in
+    let prev_html = ref initial_html in
     let get_html () =
       let html = View.view !state |> Html.element_to_string in
       state := View.temporary_assigns !state;
@@ -712,15 +659,12 @@ let register
     let render_and_diff () =
       let new_html = View.view !state |> Html.element_to_string in
       state := View.temporary_assigns !state;
-      let new_dynamics = collect_dynamics new_html in
-      let new_lists = Html.collect_and_clear_lists () in
-      let changes = diff_dynamics !dynamics new_dynamics in
-      let lops = diff_lists !lists new_lists in
-      dynamics := new_dynamics;
-      lists := new_lists;
-      if changes <> [] || lops <> [] then
-        Some { changes; list_ops = lops }
-      else None
+      let _ = Html.collect_and_clear_lists () in
+      if new_html <> !prev_html then begin
+        let patches = compute_patches !prev_html new_html in
+        prev_html := new_html;
+        Some patches
+      end else None
     in
     let handle_msg msg_json =
       match View.msg_of_yojson msg_json with

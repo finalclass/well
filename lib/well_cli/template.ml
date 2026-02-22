@@ -602,7 +602,7 @@ let view model =
   let open Html in
   <div class_="counter">
     <div class_="counter-display">
-      (dynamic "count" (string_of_int model.count))
+      (txt (string_of_int model.count))
     </div>
     <div class_="counter-controls">
       <button data_lv_click="Decrement" class_="counter-btn">
@@ -616,7 +616,7 @@ let view model =
       </button>
     </div>
     <div class_="counter-step">
-      (txt "Step: ") (dynamic "step" (string_of_int model.step))
+      (txt "Step: ") (txt (string_of_int model.step))
     </div>
   </div>
 |}
@@ -678,7 +678,7 @@ let view model =
   <div class_="activity-log">
     <h2>(txt "Activity Log")</h2>
     <p class_="activity-hint">
-      (dynamic "count" (string_of_int (List.length model.entries)))
+      (txt (string_of_int (List.length model.entries)))
       (txt " events captured")
     </p>
     (each ~id:"log-entries" ~tag_name:"ul" model.entries
@@ -746,7 +746,7 @@ export class Well {
   private liveWs: WebSocket | null = null;
   private liveReconnectDelay = 500;
   private readonly maxReconnectDelay = 10000;
-  private readonly liveViews = new Map<string, { el: Element; endpoint: string; props: Record<string, unknown> }>();
+  private readonly liveViews = new Map<string, { el: Element; endpoint: string; props: Record<string, unknown>; cachedHtml: string }>();
 
   // ── Channel state ──
   private channelWs: WebSocket | null = null;
@@ -866,6 +866,125 @@ export class Well {
     });
   }
 
+  // ── Morphdom ───────────────────────────────────────────────────────
+
+  private morph(container: Element, newHtml: string) {
+    const template = document.createElement("template");
+    template.innerHTML = newHtml;
+    const newRoot = template.content;
+    this.morphChildren(container, newRoot);
+  }
+
+  private morphChildren(oldParent: Element | DocumentFragment, newParent: Element | DocumentFragment) {
+    const oldChildren = Array.from(oldParent.childNodes);
+    const newChildren = Array.from(newParent.childNodes);
+
+    const oldKeyed = new Map<string, Element>();
+    for (const child of oldChildren) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const el = child as Element;
+        const key = el.getAttribute("data-lv-key") ?? el.getAttribute("id");
+        if (key) oldKeyed.set(key, el);
+      }
+    }
+
+    let oldIdx = 0;
+    for (let newIdx = 0; newIdx < newChildren.length; newIdx++) {
+      const newChild = newChildren[newIdx];
+
+      if (newChild.nodeType === Node.TEXT_NODE) {
+        if (oldIdx < oldChildren.length && oldChildren[oldIdx].nodeType === Node.TEXT_NODE) {
+          if (oldChildren[oldIdx].textContent !== newChild.textContent) {
+            oldChildren[oldIdx].textContent = newChild.textContent;
+          }
+          oldIdx++;
+        } else {
+          oldParent.insertBefore(document.createTextNode(newChild.textContent ?? ""), oldChildren[oldIdx] ?? null);
+        }
+        continue;
+      }
+
+      if (newChild.nodeType !== Node.ELEMENT_NODE) {
+        oldIdx++;
+        continue;
+      }
+
+      const newEl = newChild as Element;
+      const newKey = newEl.getAttribute("data-lv-key") ?? newEl.getAttribute("id");
+
+      let match: Element | null = null;
+
+      if (newKey && oldKeyed.has(newKey)) {
+        match = oldKeyed.get(newKey)!;
+        oldKeyed.delete(newKey);
+        const ref = oldChildren[oldIdx] ?? null;
+        if (match !== ref) {
+          oldParent.insertBefore(match, ref);
+        } else {
+          oldIdx++;
+        }
+      } else if (oldIdx < oldChildren.length) {
+        const oldChild = oldChildren[oldIdx];
+        if (oldChild.nodeType === Node.ELEMENT_NODE) {
+          const oldEl = oldChild as Element;
+          const oldKey = oldEl.getAttribute("data-lv-key") ?? oldEl.getAttribute("id");
+          if (!oldKey && oldEl.tagName === newEl.tagName) {
+            match = oldEl;
+            oldIdx++;
+          }
+        }
+        if (!match) {
+          oldParent.insertBefore(newEl.cloneNode(true), oldChildren[oldIdx] ?? null);
+          continue;
+        }
+      }
+
+      if (!match) {
+        oldParent.appendChild(newEl.cloneNode(true));
+        continue;
+      }
+
+      if (match.hasAttribute("data-lv-ignore")) continue;
+
+      this.syncAttrs(match, newEl);
+
+      const active = document.activeElement;
+      if (match === active && this.isFormInput(match)) {
+        // Preserve focused input value
+      } else if (this.isFormInput(match) && this.isFormInput(newEl)) {
+        (match as HTMLInputElement).value = (newEl as HTMLInputElement).value;
+      } else {
+        this.morphChildren(match, newEl);
+      }
+    }
+
+    while (oldParent.childNodes.length > newChildren.length) {
+      const last = oldParent.lastChild;
+      if (last) oldParent.removeChild(last);
+      else break;
+    }
+  }
+
+  private syncAttrs(oldEl: Element, newEl: Element) {
+    const oldAttrs = Array.from(oldEl.attributes);
+    for (const attr of oldAttrs) {
+      if (!newEl.hasAttribute(attr.name)) {
+        oldEl.removeAttribute(attr.name);
+      }
+    }
+    const newAttrs = Array.from(newEl.attributes);
+    for (const attr of newAttrs) {
+      if (oldEl.getAttribute(attr.name) !== attr.value) {
+        oldEl.setAttribute(attr.name, attr.value);
+      }
+    }
+  }
+
+  private isFormInput(el: Element): boolean {
+    const tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  }
+
   // ── LiveView helpers ─────────────────────────────────────────────
 
   private findLiveView(el: Element): string | null {
@@ -927,9 +1046,26 @@ export class Well {
         case "full":
         case "restored":
           if (lv) {
-            lv.el.innerHTML = msg.html as string;
+            const html = msg.html as string;
+            lv.cachedHtml = html;
+            lv.el.innerHTML = html;
             lv.el.classList.remove("lv-loading");
             this.mountHooks(lv.el);
+          }
+          break;
+
+        case "morph":
+          if (!lv) break;
+          {
+            const patches = msg.patches as [number, number, string][];
+            let html = lv.cachedHtml;
+            for (let i = patches.length - 1; i >= 0; i--) {
+              const [offset, len, content] = patches[i];
+              html = html.substring(0, offset) + content + html.substring(offset + len);
+            }
+            lv.cachedHtml = html;
+            this.morph(lv.el, html);
+            this.updateHooks(lv.el);
           }
           break;
 
@@ -1060,7 +1196,7 @@ export class Well {
       const topic = el.getAttribute("data-topic") ?? endpoint;
       let props: Record<string, unknown> = {};
       try { props = JSON.parse(el.getAttribute("data-props") ?? "{}"); } catch { /* ignore */ }
-      this.liveViews.set(topic, { el, endpoint, props });
+      this.liveViews.set(topic, { el, endpoint, props, cachedHtml: "" });
     });
 
     if (this.liveWs?.readyState === WebSocket.OPEN) {
@@ -1280,7 +1416,7 @@ export class Well {
         const topic = el.getAttribute("data-topic") ?? endpoint;
         let props: Record<string, unknown> = {};
         try { props = JSON.parse(el.getAttribute("data-props") ?? "{}"); } catch { /* ignore */ }
-        this.liveViews.set(topic, { el, endpoint, props });
+        this.liveViews.set(topic, { el, endpoint, props, cachedHtml: "" });
       });
       this.connectLive();
     });
@@ -2981,10 +3117,6 @@ val field_error : (string * string) list -> string -> node
 ### LiveView Rendering Helpers
 
 ```ocaml
-val dynamic : string -> string -> node
-(* dynamic "count" "42" → <span data-lv="count">42</span> *)
-(* Marks text that changes — patching mechanism updates only these *)
-
 val each : id:string -> ?tag_name:string -> 'a list -> key:('a -> string) -> ('a -> node) -> node
 (* Keyed list rendering with automatic diffing *)
 (* each ~id:"items" items ~key:(fun i -> string_of_int i.id) (fun i -> <div>...</div>) *)
@@ -3235,7 +3367,7 @@ let temporary_assigns model = model
 let view model =
   let open Html in
   <div>
-    <span>(dynamic "count" (string_of_int model.count))</span>
+    <span>(txt (string_of_int model.count))</span>
     <button data_lv_click="Increment">(txt "+")</button>
     <button data_lv_click="Decrement">(txt "-")</button>
   </div>
@@ -3272,43 +3404,32 @@ Well.live "/counter" (module Counter_live)
 - `SetValue of int` → `["SetValue", 42]`
 - `` `Incremented (s, n) `` → `["Incremented", "s", 42]`
 
-### View Constraints (CRITICAL)
+### View Rendering
 
-The `view` function's DOM structure must be **stable across renders**. The patching mechanism only handles:
-- `dynamic` — updates text content of marked `<span>` elements
-- `each` list_ops — adds, removes, reorders keyed list items
-
-**It does NOT handle structural DOM changes.** If `if/else` in the view changes which elements exist, the patch silently fails.
+The `view` function returns HTML that is morphed into the DOM on each update.
+No annotation required — structural changes (if/else, conditional elements) are
+handled automatically by the client-side morphdom algorithm.
 
 ```ocaml
-(* BAD — structural change breaks patching *)
-let view model =
-  let open Html in
-  (if model.items = [] then
-    <div class_="empty">(txt "Nothing here")</div>
-  else
-    <div class_="list">
-      (each ~id:"items" model.items ~key:... (fun item -> ...))
-    </div>)
-
-(* GOOD — stable structure, conditional text via dynamic *)
+(* Conditional rendering — works fine *)
 let view model =
   let open Html in
   <div>
-    <p>(dynamic "status" (if model.items = [] then "Nothing here" else ""))</p>
-    <div class_="list">
-      (each ~id:"items" model.items
-        ~key:(fun item -> string_of_int item.id)
-        (fun item -> ...))
-    </div>
+    (if model.items = [] then
+      <p>(txt "Nothing here")</p>
+    else
+      <div class_="list">
+        (each ~id:"items" model.items
+          ~key:(fun item -> string_of_int item.id)
+          (fun item -> ...))
+      </div>)
   </div>
 ```
 
-Rules:
-1. **Always render `each` containers** — even for empty lists
-2. **Use `dynamic` for conditional text** — not `if/else` that swaps elements
-3. **Keep DOM tree shape identical** between renders
-4. **Hide empty states with CSS** — `:empty` or `display:none`
+Tips:
+1. Use `data-lv-key` or `id` on list items for stable element matching
+2. Use `data-lv-ignore` to skip morphing on specific elements
+3. Focused form inputs preserve their value during morphing
 
 ### LiveView with Subscriptions (Cross-View Communication)
 
@@ -3384,10 +3505,10 @@ let view model =
   <div>
     <input type_="text" placeholder="Search..."
       value=model.query data_lv_change="Search" data_lv_debounce="300" />
-    <p>(dynamic "empty_msg" model.empty_msg)</p>
+    <p>(txt model.empty_msg)</p>
     <div>(each ~id:"results" model.results
       ~key:(fun r -> string_of_int r.id)
-      (fun r -> <div><span>(dynamic "name" r.name)</span></div>))</div>
+      (fun r -> <div><span>(txt r.name)</span></div>))</div>
   </div>
 ```
 
@@ -4340,14 +4461,11 @@ Well.list_routes : unit -> (string * string * string) list
 
 ## Cap Admin Panel
 
-Built-in admin dashboard at `/cap`. Password-protected.
+Built-in admin dashboard at `/_well/`. Default login: `cap` / `admin`.
 
-```ocaml
-Well.Cap_hook.cap_password := "admin123";
-(* Set before Well.run. Disable with Well.run ~disable_cap:true () *)
-```
+Disable with `Well.run ~disable_cap:true ()`.
 
-Features: system stats, request telemetry, log viewer with filtering, route list, WebSocket connections.
+Features: system stats, request telemetry, log viewer with filtering, route list, WebSocket connections, user management.
 
 ---
 
@@ -5726,7 +5844,6 @@ RestartSec=3
 
 # Environment
 Environment=PORT=4000
-Environment=WELL_CAP_PASS=
 # Environment=WELL_DOMAIN=example.com
 
 # Hardening
