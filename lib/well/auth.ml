@@ -366,6 +366,134 @@ let require_grant grant_name (handler : Types.request -> _) (req : Types.request
       else
         raise (Auth_denied (403, "Forbidden"))
 
+(* ── CRUD ─────────────────────────────────────────────────────── *)
+
+let list_users ?(search = "") () =
+  with_lock @@ fun () ->
+  let db = get_db () in
+  let stmt =
+    if search = "" then
+      Sqlite3.prepare db
+        "SELECT id, email, created_at FROM users ORDER BY id"
+    else
+      let s = Sqlite3.prepare db
+        "SELECT id, email, created_at FROM users WHERE email LIKE ? ORDER BY id" in
+      let _ = Sqlite3.bind s 1 (Sqlite3.Data.TEXT ("%" ^ search ^ "%")) in
+      s
+  in
+  let results = ref [] in
+  while Sqlite3.step stmt = Sqlite3.Rc.ROW do
+    let id = Sqlite3.column_int stmt 0 in
+    let email = Sqlite3.column_text stmt 1 in
+    let created_at = Sqlite3.column_text stmt 2 in
+    results := { id; email; created_at } :: !results
+  done;
+  let _ = Sqlite3.finalize stmt in
+  List.rev !results
+
+let delete_user id =
+  with_lock @@ fun () ->
+  let db = get_db () in
+  let stmt = Sqlite3.prepare db "DELETE FROM grants WHERE user_id = ?" in
+  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int id)) in
+  let _ = Sqlite3.step stmt in
+  let _ = Sqlite3.finalize stmt in
+  let stmt2 = Sqlite3.prepare db "DELETE FROM users WHERE id = ?" in
+  let _ = Sqlite3.bind stmt2 1 (Sqlite3.Data.INT (Int64.of_int id)) in
+  let _ = Sqlite3.step stmt2 in
+  let _ = Sqlite3.finalize stmt2 in
+  ()
+
+let update_email id new_email =
+  let new_email = normalize_email new_email in
+  if not (validate_email new_email) then
+    Error "Invalid email address"
+  else
+    with_lock @@ fun () ->
+    let db = get_db () in
+    let stmt = Sqlite3.prepare db "UPDATE users SET email = ? WHERE id = ?" in
+    let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT new_email) in
+    let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.INT (Int64.of_int id)) in
+    match Sqlite3.step stmt with
+    | Sqlite3.Rc.DONE ->
+      let _ = Sqlite3.finalize stmt in
+      Ok ()
+    | _ ->
+      let _ = Sqlite3.finalize stmt in
+      Error "Email already taken"
+
+let set_password id password =
+  if String.length password < 8 then
+    Error "Password must be at least 8 characters"
+  else if String.length password > max_password_length then
+    Error "Password is too long"
+  else
+    with_lock @@ fun () ->
+    let db = get_db () in
+    let password_hash = hash_password password in
+    let stmt = Sqlite3.prepare db "UPDATE users SET password_hash = ? WHERE id = ?" in
+    let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT password_hash) in
+    let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.INT (Int64.of_int id)) in
+    let _ = Sqlite3.step stmt in
+    let _ = Sqlite3.finalize stmt in
+    Ok ()
+
+let create_seed_user ~login ~password =
+  with_lock @@ fun () ->
+  let db = get_db () in
+  if String.length password < 1 then Error "Password required"
+  else
+    let password_hash = hash_password password in
+    let stmt = Sqlite3.prepare db
+      "INSERT INTO users (email, password_hash) VALUES (?, ?)" in
+    let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT login) in
+    let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT password_hash) in
+    match Sqlite3.step stmt with
+    | Sqlite3.Rc.DONE ->
+      let _ = Sqlite3.finalize stmt in
+      let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
+      Ok { id; email = login; created_at = "" }
+    | _ ->
+      let _ = Sqlite3.finalize stmt in
+      Error "User already exists"
+
+let has_any_grant name =
+  with_lock @@ fun () ->
+  let db = get_db () in
+  let stmt = Sqlite3.prepare db
+    "SELECT 1 FROM grants WHERE grant_name = ? LIMIT 1" in
+  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT name) in
+  let found = Sqlite3.step stmt = Sqlite3.Rc.ROW in
+  let _ = Sqlite3.finalize stmt in
+  found
+
+let count_grant_holders name =
+  with_lock @@ fun () ->
+  let db = get_db () in
+  let stmt = Sqlite3.prepare db
+    "SELECT COUNT(*) FROM grants WHERE grant_name = ?" in
+  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT name) in
+  let n =
+    if Sqlite3.step stmt = Sqlite3.Rc.ROW then Sqlite3.column_int stmt 0
+    else 0
+  in
+  let _ = Sqlite3.finalize stmt in
+  n
+
+let all_grants () =
+  with_lock @@ fun () ->
+  let db = get_db () in
+  let stmt = Sqlite3.prepare db
+    "SELECT user_id, grant_name FROM grants ORDER BY user_id, grant_name" in
+  let results = ref [] in
+  while Sqlite3.step stmt = Sqlite3.Rc.ROW do
+    let user_id = Sqlite3.column_int stmt 0 in
+    let name = Sqlite3.column_text stmt 1 in
+    results := (user_id, name) :: !results
+  done;
+  let _ = Sqlite3.finalize stmt in
+  List.rev !results
+
 (* ── Lifecycle ─────────────────────────────────────────────────── *)
 
 let close () =

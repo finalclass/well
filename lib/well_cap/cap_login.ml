@@ -1,7 +1,7 @@
-let login_page ?(error = false) () =
+let login_page ?(error = "") () =
   let error_html =
-    if error then
-      {|<div class="login-error">Invalid password</div>|}
+    if error <> "" then
+      Printf.sprintf {|<div class="login-error">%s</div>|} (Html.escape_html error)
     else ""
   in
   Printf.sprintf
@@ -17,12 +17,15 @@ let login_page ?(error = false) () =
 <div class="login-wrap">
   <div class="login-card">
     <h1>well.cap</h1>
-    <p class="sub">Enter the cap password to continue</p>
+    <p class="sub">Sign in to continue</p>
     %s
     <form method="post" action="/_well/login">
+      <label for="email">Login</label>
+      <input type="text" id="email" name="email"
+             class="input" placeholder="Email or username" autofocus />
       <label for="password">Password</label>
       <input type="password" id="password" name="password"
-             class="input" placeholder="WELL_CAP_PASS" autofocus />
+             class="input" placeholder="Password" />
       <button type="submit" class="btn btn-accent">Sign in</button>
     </form>
   </div>

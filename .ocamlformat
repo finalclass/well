@@ -1,0 +1,12 @@
+profile = ocamlformat
+break-cases = all
+type-decl = sparse
+margin = 80
+break-infix = fit-or-vertical
+break-fun-sig = fit-or-vertical
+break-fun-decl = fit-or-vertical
+if-then-else = keyword-first
+wrap-fun-args = false
+break-infix-before-func = false
+sequence-blank-line = preserve-one
+break-sequences=true

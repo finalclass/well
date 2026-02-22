@@ -8,6 +8,7 @@ let nav_items = [
   ("/_well/logs", "Logs", {|&#9776;|});
   ("/_well/telemetry", "Telemetry", {|&#9201;|});
   ("/_well/repl", "REPL", {|&#9002;|});
+  ("/_well/users", "Users", {|&#9823;|});
 ]
 
 let cap_layout ~active_path ~title ~content =

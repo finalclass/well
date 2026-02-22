@@ -112,11 +112,6 @@ let () =
     );
 
     describe "LiveView helpers" (fun () ->
-      it "dynamic wraps in span with data-lv" (fun () ->
-        let (`Html s) = Html.dynamic "count" "42" in
-        expect s |> to_contain {|data-lv="count"|};
-        expect s |> to_contain "42"
-      );
       it "field_error renders error span" (fun () ->
         let errors = [("name", "required")] in
         let (`Html s) = Html.field_error errors "name" in

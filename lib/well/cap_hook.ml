@@ -22,10 +22,6 @@ let _register_cap_post :
 (* Cap init — filled by well_cap at module load time *)
 let _cap_init : (unit -> unit) ref = ref (fun () -> ())
 
-(* ── Cap password ────────────────────────────────────────────────── *)
-
-let cap_password = ref ""
-
 (* ── Start time (set by well_cap init) ──────────────────────────── *)
 
 let start_time = ref 0.0

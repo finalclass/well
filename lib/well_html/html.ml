@@ -151,11 +151,6 @@ let field_error errors field_name : node =
 
 let element_to_string (`Html s : node) : string = s
 
-let dynamic id value : node =
-  `Html
-    (Printf.sprintf {|<span data-lv="%s">%s</span>|}
-       (escape_html id) (escape_html value))
-
 (* ── Keyed list support ──────────────────────────────────────────── *)
 
 type keyed_item = { key : string; html : string }
