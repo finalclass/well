@@ -269,3 +269,31 @@ let rollback path =
     Log.log "rolled back %s from backup" path
   end else
     Log.log ~level:"error" "no backup found: %s" bak
+
+(* ── well.sqlite — shared framework database ─────────────────────── *)
+
+let _well_db : Sqlite3.db option ref = ref None
+let _well_mu = Mutex.create ()
+
+let well_db () =
+  Mutex.lock _well_mu;
+  Fun.protect ~finally:(fun () -> Mutex.unlock _well_mu) (fun () ->
+    match !_well_db with
+    | Some d -> d
+    | None ->
+      let dir = !data_dir in
+      (try Unix.mkdir dir 0o755
+       with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+      let path = Filename.concat dir "well.sqlite" in
+      let d = Sqlite3.db_open path in
+      ignore (Sqlite3.exec d "PRAGMA journal_mode=WAL");
+      ignore (Sqlite3.exec d "PRAGMA synchronous=NORMAL");
+      _well_db := Some d;
+      d)
+
+let close_well_db () =
+  Mutex.lock _well_mu;
+  Fun.protect ~finally:(fun () -> Mutex.unlock _well_mu) (fun () ->
+    match !_well_db with
+    | Some d -> ignore (Sqlite3.db_close d); _well_db := None
+    | None -> ())

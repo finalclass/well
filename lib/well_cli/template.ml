@@ -3862,7 +3862,7 @@ let value = Ctx.get req
 
 ## Auth (Well.Auth) — Password-Based Authentication
 
-PBKDF2-SHA256, 100k iterations. Stored in `data/auth.sqlite`.
+PBKDF2-SHA256, 100k iterations. Stored in `data/well.sqlite`.
 
 ```ocaml
 type user = { id: int; email: string; created_at: string }
@@ -3912,7 +3912,7 @@ let user_id = Well.current_user req  (* reads "user_id" from session *)
 
 ## OAuth (Well.OAuth) — Social Login
 
-OAuth 2.0 with PKCE for Google, GitHub, Microsoft, Facebook. Stored in `data/auth.sqlite` (oauth_identities table).
+OAuth 2.0 with PKCE for Google, GitHub, Microsoft, Facebook. Stored in `data/well.sqlite` (_well_oauth_identities table).
 
 ```ocaml
 type provider_config

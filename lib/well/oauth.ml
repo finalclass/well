@@ -166,7 +166,7 @@ let facebook ~client_id ~client_secret =
 let _base_url = ref ""
 let _providers : provider_config list ref = ref []
 
-(* ── DB — oauth_identities table in auth.sqlite ────────────────── *)
+(* ── DB — _well_oauth_identities table in well.sqlite ────────────────── *)
 
 let _table_created = Atomic.make false
 
@@ -174,7 +174,7 @@ let ensure_table () =
   if not (Atomic.get _table_created) then begin
     Auth.with_db (fun db ->
       let _ = Sqlite3.exec db
-        {|CREATE TABLE IF NOT EXISTS oauth_identities (
+        {|CREATE TABLE IF NOT EXISTS _well_oauth_identities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             provider TEXT NOT NULL,
@@ -196,7 +196,7 @@ let find_identity ~provider ~provider_uid =
   ensure_table ();
   Auth.with_db (fun db ->
     let stmt = Sqlite3.prepare db
-      "SELECT user_id, email, name, avatar_url FROM oauth_identities \
+      "SELECT user_id, email, name, avatar_url FROM _well_oauth_identities \
        WHERE provider = ? AND provider_uid = ?" in
     let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT provider) in
     let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT provider_uid) in
@@ -214,7 +214,7 @@ let create_identity ~user_id ~provider ~provider_uid ?email ?name ?avatar_url ()
   Auth.with_db (fun db ->
     (* ON CONFLICT: only update if same user_id — prevents identity theft *)
     let stmt = Sqlite3.prepare db
-      "INSERT INTO oauth_identities \
+      "INSERT INTO _well_oauth_identities \
        (user_id, provider, provider_uid, email, name, avatar_url) \
        VALUES (?, ?, ?, ?, ?, ?) \
        ON CONFLICT(provider, provider_uid) DO UPDATE SET \
@@ -239,7 +239,7 @@ let user_identities ~user_id =
   ensure_table ();
   Auth.with_db (fun db ->
     let stmt = Sqlite3.prepare db
-      "SELECT provider, provider_uid FROM oauth_identities \
+      "SELECT provider, provider_uid FROM _well_oauth_identities \
        WHERE user_id = ? ORDER BY provider" in
     let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int user_id)) in
     let results = ref [] in

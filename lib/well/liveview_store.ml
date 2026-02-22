@@ -1,35 +1,35 @@
-(* LiveView persistent storage — SQLite with WAL *)
+(* LiveView persistent storage — uses shared well.sqlite, thread-safe via Mutex *)
 
-let db : Sqlite3.db option ref = ref None
+let mu = Mutex.create ()
+let _tables_created = Atomic.make false
 
-let get_db () =
-  match !db with
-  | Some d -> d
-  | None ->
-      let path = "data/liveview.sqlite" in
-      (try Unix.mkdir "data" 0o755
-       with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-      let d = Sqlite3.db_open path in
-      let _ = Sqlite3.exec d "PRAGMA journal_mode=WAL" in
-      let _ = Sqlite3.exec d "PRAGMA synchronous=NORMAL" in
-      let _ =
-        Sqlite3.exec d
-          {|CREATE TABLE IF NOT EXISTS liveview_state (
-              user_id TEXT NOT NULL,
-              topic TEXT NOT NULL,
-              endpoint TEXT NOT NULL,
-              model_json TEXT NOT NULL,
-              updated_at REAL NOT NULL,
-              PRIMARY KEY (user_id, topic)
-            )|}
-      in
-      db := Some d;
-      d
+let ensure_table () =
+  if not (Atomic.get _tables_created) then begin
+    let db = Db.well_db () in
+    let _ =
+      Sqlite3.exec db
+        {|CREATE TABLE IF NOT EXISTS _well_liveview_state (
+            user_id TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            model_json TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (user_id, topic)
+          )|}
+    in
+    Atomic.set _tables_created true
+  end
+
+let with_lock f =
+  Mutex.lock mu;
+  Fun.protect ~finally:(fun () -> Mutex.unlock mu) f
 
 let save ~user_id ~topic ~endpoint ~model_json =
-  let db = get_db () in
+  with_lock @@ fun () ->
+  ensure_table ();
+  let db = Db.well_db () in
   let sql =
-    {|INSERT OR REPLACE INTO liveview_state
+    {|INSERT OR REPLACE INTO _well_liveview_state
       (user_id, topic, endpoint, model_json, updated_at)
       VALUES (?, ?, ?, ?, ?)|}
   in
@@ -47,9 +47,11 @@ let save ~user_id ~topic ~endpoint ~model_json =
   ()
 
 let load ~user_id ~topic =
-  let db = get_db () in
+  with_lock @@ fun () ->
+  ensure_table ();
+  let db = Db.well_db () in
   let sql =
-    "SELECT endpoint, model_json FROM liveview_state \
+    "SELECT endpoint, model_json FROM _well_liveview_state \
      WHERE user_id = ? AND topic = ?"
   in
   let stmt = Sqlite3.prepare db sql in
@@ -67,9 +69,11 @@ let load ~user_id ~topic =
       None
 
 let delete ~user_id ~topic =
-  let db = get_db () in
+  with_lock @@ fun () ->
+  ensure_table ();
+  let db = Db.well_db () in
   let sql =
-    "DELETE FROM liveview_state WHERE user_id = ? AND topic = ?"
+    "DELETE FROM _well_liveview_state WHERE user_id = ? AND topic = ?"
   in
   let stmt = Sqlite3.prepare db sql in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT user_id) in
@@ -79,11 +83,13 @@ let delete ~user_id ~topic =
   ()
 
 let cleanup ?(max_age_days = 30) () =
-  let db = get_db () in
+  with_lock @@ fun () ->
+  ensure_table ();
+  let db = Db.well_db () in
   let cutoff =
     Unix.gettimeofday () -. (float_of_int max_age_days *. 86400.0)
   in
-  let sql = "DELETE FROM liveview_state WHERE updated_at < ?" in
+  let sql = "DELETE FROM _well_liveview_state WHERE updated_at < ?" in
   let stmt = Sqlite3.prepare db sql in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.FLOAT cutoff) in
   let _ = Sqlite3.step stmt in
@@ -91,6 +97,4 @@ let cleanup ?(max_age_days = 30) () =
   ()
 
 let close () =
-  match !db with
-  | Some d -> ignore (Sqlite3.db_close d); db := None
-  | None -> ()
+  Atomic.set _tables_created false

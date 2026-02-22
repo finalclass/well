@@ -20,38 +20,31 @@ type user = {
   created_at : string;
 }
 
-(* ── Database ──────────────────────────────────────────────────── *)
+(* ── Database — uses shared well.sqlite ────────────────────────── *)
 
-let db : Sqlite3.db option ref = ref None
 let mu = Mutex.create ()
+let _tables_created = Atomic.make false
 
-let get_db () =
-  match !db with
-  | Some d -> d
-  | None ->
-    let path = "data/auth.sqlite" in
-    (try Unix.mkdir "data" 0o755
-     with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-    let d = Sqlite3.db_open path in
-    let _ = Sqlite3.exec d "PRAGMA journal_mode=WAL" in
-    let _ = Sqlite3.exec d "PRAGMA synchronous=NORMAL" in
-    let _ = Sqlite3.exec d
-      {|CREATE TABLE IF NOT EXISTS users (
+let ensure_tables () =
+  if not (Atomic.get _tables_created) then begin
+    let db = Db.well_db () in
+    let _ = Sqlite3.exec db
+      {|CREATE TABLE IF NOT EXISTS _well_users (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           email TEXT NOT NULL UNIQUE,
           password_hash TEXT NOT NULL,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
         )|} in
-    let _ = Sqlite3.exec d
-      {|CREATE TABLE IF NOT EXISTS grants (
+    let _ = Sqlite3.exec db
+      {|CREATE TABLE IF NOT EXISTS _well_grants (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL,
           grant_name TEXT NOT NULL,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
           UNIQUE(user_id, grant_name)
         )|} in
-    db := Some d;
-    d
+    Atomic.set _tables_created true
+  end
 
 let with_lock f =
   Mutex.lock mu;
@@ -174,10 +167,11 @@ let register ~email ~password =
     Error "Invalid email address"
   else
     with_lock @@ fun () ->
-    let db = get_db () in
+    ensure_tables ();
+    let db = Db.well_db () in
     let password_hash = hash_password password in
     let stmt = Sqlite3.prepare db
-      "INSERT INTO users (email, password_hash) VALUES (?, ?)" in
+      "INSERT INTO _well_users (email, password_hash) VALUES (?, ?)" in
     let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
     let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT password_hash) in
     match Sqlite3.step stmt with
@@ -185,7 +179,7 @@ let register ~email ~password =
       let _ = Sqlite3.finalize stmt in
       let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
       let sel = Sqlite3.prepare db
-        "SELECT created_at FROM users WHERE id = ?" in
+        "SELECT created_at FROM _well_users WHERE id = ?" in
       let _ = Sqlite3.bind sel 1 (Sqlite3.Data.INT (Int64.of_int id)) in
       let created_at = match Sqlite3.step sel with
         | Sqlite3.Rc.ROW -> Sqlite3.column_text sel 0
@@ -203,9 +197,10 @@ let login ~email ~password =
     Error "Invalid email or password"
   else
     with_lock @@ fun () ->
-    let db = get_db () in
+    ensure_tables ();
+    let db = Db.well_db () in
     let stmt = Sqlite3.prepare db
-      "SELECT id, email, password_hash, created_at FROM users WHERE email = ?" in
+      "SELECT id, email, password_hash, created_at FROM _well_users WHERE email = ?" in
     let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
     match Sqlite3.step stmt with
     | Sqlite3.Rc.ROW ->
@@ -226,9 +221,10 @@ let login ~email ~password =
 
 let get_user id =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "SELECT id, email, created_at FROM users WHERE id = ?" in
+    "SELECT id, email, created_at FROM _well_users WHERE id = ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int id)) in
   match Sqlite3.step stmt with
   | Sqlite3.Rc.ROW ->
@@ -255,14 +251,18 @@ let login_and_set_session (req : Types.request) ~email ~password =
 
 (* ── Helpers for OAuth ─────────────────────────────────────────── *)
 
-let with_db f = with_lock @@ fun () -> f (get_db ())
+let with_db f =
+  with_lock @@ fun () ->
+  ensure_tables ();
+  f (Db.well_db ())
 
 let find_user_by_email email =
   let email = normalize_email email in
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "SELECT id, email, created_at FROM users WHERE email = ?" in
+    "SELECT id, email, created_at FROM _well_users WHERE email = ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
   match Sqlite3.step stmt with
   | Sqlite3.Rc.ROW ->
@@ -281,16 +281,17 @@ let create_user_without_password ~email =
     Error "Invalid email address"
   else
     with_lock @@ fun () ->
-    let db = get_db () in
+    ensure_tables ();
+    let db = Db.well_db () in
     let stmt = Sqlite3.prepare db
-      "INSERT INTO users (email, password_hash) VALUES (?, '')" in
+      "INSERT INTO _well_users (email, password_hash) VALUES (?, '')" in
     let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
     match Sqlite3.step stmt with
     | Sqlite3.Rc.DONE ->
       let _ = Sqlite3.finalize stmt in
       let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
       let sel = Sqlite3.prepare db
-        "SELECT created_at FROM users WHERE id = ?" in
+        "SELECT created_at FROM _well_users WHERE id = ?" in
       let _ = Sqlite3.bind sel 1 (Sqlite3.Data.INT (Int64.of_int id)) in
       let created_at = match Sqlite3.step sel with
         | Sqlite3.Rc.ROW -> Sqlite3.column_text sel 0
@@ -305,9 +306,10 @@ let create_user_without_password ~email =
 
 let grant ~user_id name =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "INSERT OR IGNORE INTO grants (user_id, grant_name) VALUES (?, ?)" in
+    "INSERT OR IGNORE INTO _well_grants (user_id, grant_name) VALUES (?, ?)" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int user_id)) in
   let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT name) in
   let _ = Sqlite3.step stmt in
@@ -316,9 +318,10 @@ let grant ~user_id name =
 
 let revoke ~user_id name =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "DELETE FROM grants WHERE user_id = ? AND grant_name = ?" in
+    "DELETE FROM _well_grants WHERE user_id = ? AND grant_name = ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int user_id)) in
   let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT name) in
   let _ = Sqlite3.step stmt in
@@ -327,9 +330,10 @@ let revoke ~user_id name =
 
 let has_grant ~user_id name =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "SELECT 1 FROM grants WHERE user_id = ? AND grant_name = ?" in
+    "SELECT 1 FROM _well_grants WHERE user_id = ? AND grant_name = ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int user_id)) in
   let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT name) in
   let found = Sqlite3.step stmt = Sqlite3.Rc.ROW in
@@ -338,9 +342,10 @@ let has_grant ~user_id name =
 
 let user_grants ~user_id =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "SELECT grant_name FROM grants WHERE user_id = ? ORDER BY grant_name" in
+    "SELECT grant_name FROM _well_grants WHERE user_id = ? ORDER BY grant_name" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int user_id)) in
   let results = ref [] in
   while Sqlite3.step stmt = Sqlite3.Rc.ROW do
@@ -370,14 +375,15 @@ let require_grant grant_name (handler : Types.request -> _) (req : Types.request
 
 let list_users ?(search = "") () =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt =
     if search = "" then
       Sqlite3.prepare db
-        "SELECT id, email, created_at FROM users ORDER BY id"
+        "SELECT id, email, created_at FROM _well_users ORDER BY id"
     else
       let s = Sqlite3.prepare db
-        "SELECT id, email, created_at FROM users WHERE email LIKE ? ORDER BY id" in
+        "SELECT id, email, created_at FROM _well_users WHERE email LIKE ? ORDER BY id" in
       let _ = Sqlite3.bind s 1 (Sqlite3.Data.TEXT ("%" ^ search ^ "%")) in
       s
   in
@@ -393,12 +399,13 @@ let list_users ?(search = "") () =
 
 let delete_user id =
   with_lock @@ fun () ->
-  let db = get_db () in
-  let stmt = Sqlite3.prepare db "DELETE FROM grants WHERE user_id = ?" in
+  ensure_tables ();
+  let db = Db.well_db () in
+  let stmt = Sqlite3.prepare db "DELETE FROM _well_grants WHERE user_id = ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int id)) in
   let _ = Sqlite3.step stmt in
   let _ = Sqlite3.finalize stmt in
-  let stmt2 = Sqlite3.prepare db "DELETE FROM users WHERE id = ?" in
+  let stmt2 = Sqlite3.prepare db "DELETE FROM _well_users WHERE id = ?" in
   let _ = Sqlite3.bind stmt2 1 (Sqlite3.Data.INT (Int64.of_int id)) in
   let _ = Sqlite3.step stmt2 in
   let _ = Sqlite3.finalize stmt2 in
@@ -410,8 +417,9 @@ let update_email id new_email =
     Error "Invalid email address"
   else
     with_lock @@ fun () ->
-    let db = get_db () in
-    let stmt = Sqlite3.prepare db "UPDATE users SET email = ? WHERE id = ?" in
+    ensure_tables ();
+    let db = Db.well_db () in
+    let stmt = Sqlite3.prepare db "UPDATE _well_users SET email = ? WHERE id = ?" in
     let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT new_email) in
     let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.INT (Int64.of_int id)) in
     match Sqlite3.step stmt with
@@ -429,9 +437,10 @@ let set_password id password =
     Error "Password is too long"
   else
     with_lock @@ fun () ->
-    let db = get_db () in
+    ensure_tables ();
+    let db = Db.well_db () in
     let password_hash = hash_password password in
-    let stmt = Sqlite3.prepare db "UPDATE users SET password_hash = ? WHERE id = ?" in
+    let stmt = Sqlite3.prepare db "UPDATE _well_users SET password_hash = ? WHERE id = ?" in
     let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT password_hash) in
     let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.INT (Int64.of_int id)) in
     let _ = Sqlite3.step stmt in
@@ -440,12 +449,13 @@ let set_password id password =
 
 let create_seed_user ~login ~password =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   if String.length password < 1 then Error "Password required"
   else
     let password_hash = hash_password password in
     let stmt = Sqlite3.prepare db
-      "INSERT INTO users (email, password_hash) VALUES (?, ?)" in
+      "INSERT INTO _well_users (email, password_hash) VALUES (?, ?)" in
     let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT login) in
     let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT password_hash) in
     match Sqlite3.step stmt with
@@ -459,9 +469,10 @@ let create_seed_user ~login ~password =
 
 let has_any_grant name =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "SELECT 1 FROM grants WHERE grant_name = ? LIMIT 1" in
+    "SELECT 1 FROM _well_grants WHERE grant_name = ? LIMIT 1" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT name) in
   let found = Sqlite3.step stmt = Sqlite3.Rc.ROW in
   let _ = Sqlite3.finalize stmt in
@@ -469,9 +480,10 @@ let has_any_grant name =
 
 let count_grant_holders name =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "SELECT COUNT(*) FROM grants WHERE grant_name = ?" in
+    "SELECT COUNT(*) FROM _well_grants WHERE grant_name = ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT name) in
   let n =
     if Sqlite3.step stmt = Sqlite3.Rc.ROW then Sqlite3.column_int stmt 0
@@ -482,9 +494,10 @@ let count_grant_holders name =
 
 let all_grants () =
   with_lock @@ fun () ->
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let stmt = Sqlite3.prepare db
-    "SELECT user_id, grant_name FROM grants ORDER BY user_id, grant_name" in
+    "SELECT user_id, grant_name FROM _well_grants ORDER BY user_id, grant_name" in
   let results = ref [] in
   while Sqlite3.step stmt = Sqlite3.Rc.ROW do
     let user_id = Sqlite3.column_int stmt 0 in
@@ -497,7 +510,4 @@ let all_grants () =
 (* ── Lifecycle ─────────────────────────────────────────────────── *)
 
 let close () =
-  with_lock @@ fun () ->
-  match !db with
-  | Some d -> ignore (Sqlite3.db_close d); db := None
-  | None -> ()
+  Atomic.set _tables_created false

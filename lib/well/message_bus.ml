@@ -10,38 +10,31 @@ type event = {
   created_at : float;
 }
 
-(* ── SQLite singleton ──────────────────────────────────────────────── *)
+(* ── SQLite — uses shared well.sqlite ─────────────────────────────── *)
 
-let db : Sqlite3.db option ref = ref None
+let _tables_created = Atomic.make false
 
-let get_db () =
-  match !db with
-  | Some d -> d
-  | None ->
-      (try Unix.mkdir "data" 0o755
-       with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-      let path = "data/events.sqlite" in
-      let d = Sqlite3.db_open path in
-      let _ = Sqlite3.exec d "PRAGMA journal_mode=WAL" in
-      let _ = Sqlite3.exec d "PRAGMA synchronous=NORMAL" in
-      let _ =
-        Sqlite3.exec d
-          {|CREATE TABLE IF NOT EXISTS _well_events (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              channel TEXT NOT NULL,
-              payload TEXT NOT NULL,
-              created_at REAL NOT NULL
-            )|}
-      in
-      let _ =
-        Sqlite3.exec d
-          {|CREATE INDEX IF NOT EXISTS idx_well_events_channel
-            ON _well_events(channel)|}
-      in
-      db := Some d;
-      d
+let ensure_tables () =
+  if not (Atomic.get _tables_created) then begin
+    let db = Db.well_db () in
+    let _ =
+      Sqlite3.exec db
+        {|CREATE TABLE IF NOT EXISTS _well_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at REAL NOT NULL
+          )|}
+    in
+    let _ =
+      Sqlite3.exec db
+        {|CREATE INDEX IF NOT EXISTS idx_well_events_channel
+          ON _well_events(channel)|}
+    in
+    Atomic.set _tables_created true
+  end
 
-let init () = ignore (get_db ())
+let init () = ensure_tables ()
 
 (* ── Wildcard matching ─────────────────────────────────────────────── *)
 
@@ -113,7 +106,8 @@ let publish ?(ephemeral = false) channel payload =
     Telemetry.incr_bus_events ();
     0
   end else begin
-    let db = get_db () in
+    ensure_tables ();
+    let db = Db.well_db () in
     let sql =
       "INSERT INTO _well_events (channel, payload, created_at) VALUES (?, ?, ?)"
     in
@@ -136,12 +130,11 @@ let publish ?(ephemeral = false) channel payload =
 (* ── Replay ────────────────────────────────────────────────────────── *)
 
 let close () =
-  match !db with
-  | Some d -> ignore (Sqlite3.db_close d); db := None
-  | None -> ()
+  Atomic.set _tables_created false
 
 let replay ?(since_id = 0) pattern cb =
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let sql =
     "SELECT id, channel, payload, created_at FROM _well_events \
      WHERE id > ? ORDER BY id ASC"
@@ -179,7 +172,8 @@ let replay ?(since_id = 0) pattern cb =
 (* ── Prune ────────────────────────────────────────────────────────── *)
 
 let prune ~keep_since_id () =
-  let db = get_db () in
+  ensure_tables ();
+  let db = Db.well_db () in
   let sql = "DELETE FROM _well_events WHERE id <= ?" in
   let stmt = Sqlite3.prepare db sql in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int keep_since_id)) in

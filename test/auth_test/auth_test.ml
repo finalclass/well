@@ -442,10 +442,10 @@ let () =
     check "reuse: same user id" ((Result.get_ok reuse_result).id = link_user.id);
 
     Printf.printf "Auth tests: %d passed, %d failed\n%!" !pass !fail;
-    Well.Auth.close ();
+    Well.Db.close_well_db ();
     (* Clean up test database *)
-    (try Sys.remove "data/auth.sqlite" with _ -> ());
-    (try Sys.remove "data/auth.sqlite-wal" with _ -> ());
-    (try Sys.remove "data/auth.sqlite-shm" with _ -> ());
+    (try Sys.remove "data/well.sqlite" with _ -> ());
+    (try Sys.remove "data/well.sqlite-wal" with _ -> ());
+    (try Sys.remove "data/well.sqlite-shm" with _ -> ());
     exit (if !fail > 0 then 1 else 0)
   )

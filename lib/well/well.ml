@@ -2190,7 +2190,7 @@ let handle_connection flow _addr =
        !_with_ka_timeout !_request_timeout (fun () ->
          result := handle_one_request ())
      with
-     | Keep_alive_timeout ->
+     | Keep_alive_timeout | Eio__Time.Timeout ->
          let r = resolve (`Text "Request Timeout" |> status 408) in
          (try write_response flow r with _ -> ());
          result := `Close);
@@ -2242,7 +2242,7 @@ let handle_connection flow _addr =
        with _ -> (try do_close () with _ -> ()))
   | Eio.Io _ -> (try do_close () with _ -> ())
   | End_of_file -> (try do_close () with _ -> ())
-  | Eio.Cancel.Cancelled _ -> (try do_close () with _ -> ())
+  | Eio.Cancel.Cancelled _ | Eio__Time.Timeout -> (try do_close () with _ -> ())
   | exn ->
       Log.log ~level:"error" "connection error: %s"
         (Printexc.to_string exn);
@@ -2676,10 +2676,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     Eio.Promise.await shutdown_p;
     Log.log "shutting down...";
     Eio.Time.sleep clock 0.5;
-    Session_store.close ();
-    Auth.close ();
-    Liveview_store.close ();
-    Message_bus.close ();
+    Db.close_well_db ();
     Log.log "stopped.";
     Log.close ();
     (* Raise to exit switch — cancels accept loop + all connection fibers *)
