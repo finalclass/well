@@ -3383,14 +3383,52 @@ let view model =
 
 ### Registration & Embedding
 
-```ocaml
-(* Register in lib/app.ml — creates both WS endpoint and GET route *)
-Well.live "/counter" (module Counter_live)
+**Two steps to create a LiveView page:**
 
-(* Embed in a page *)
+**Step 1.** Register the LiveView module in `lib/app.ml`:
+```ocaml
+Well.live "/counter" (module Counter_live)
+```
+This registers `Counter_live` in the WS view registry under endpoint `"/live/counter"`.
+It does NOT create a GET route — you must create the page yourself.
+
+**Step 2.** Create a GET page that embeds the LiveView using MLX JSX:
+```ocaml
+(* lib/client/pages/counter_page.mlx *)
+Well.get "/counter" @@ fun _req ->
+  let open Html in
+  <Layout title="Counter">
+    <div>
+      <h1>(txt "Counter")</h1>
+      <Well.LiveView name="counter" />
+    </div>
+  </Layout>
+```
+
+`<Well.LiveView name="counter" />` renders a `<live-view data-liveview="/live/counter">` custom element.
+The `name` becomes the endpoint path: `"/live/" ^ name`.
+
+With props (passed to `init` as `Yojson.Safe.t`):
+```ocaml
+<Well.LiveView name="counter" props=[("initial", "10"); ("step", "5")] />
+```
+
+Multiple LiveViews on one page:
+```ocaml
 <Well.LiveView name="counter" />
-(* with props: *)
-<Well.LiveView name="counter" initial="10" step="5" />
+<Well.LiveView name="activity_log" />
+```
+
+**How it works under the hood:**
+1. `Well.live "/counter" (module M)` registers `M` under endpoint `"/live/counter"`
+2. `<Well.LiveView name="counter" />` renders `<live-view data-liveview="/live/counter">`
+3. Client JS discovers `<live-view>` elements on page load
+4. Client connects via WebSocket to `/live` and sends `join` for each endpoint
+5. Server sends initial HTML (`full`), then incremental binary patches on each `msg`
+
+**IMPORTANT**: `Well.live` does NOT create a GET route. You MUST create a page
+with `Well.get` and embed `<Well.LiveView name="..." />` inside it.
+The `name` must match the path from `Well.live` (without leading `/`).
 ```
 
 ### LiveView Attributes
@@ -3491,7 +3529,9 @@ match Well.LiveView.consume_upload upload_id with
 ### LiveView Search/Filter Example
 
 ```ocaml
-(* search_live.mlx *)
+(* lib/client/live/search_live.mlx — the LiveView module *)
+(* Then register: Well.live "/search" (module Search_live) in app.ml *)
+(* And create page: Well.get "/search" with <Well.LiveView name="search" /> *)
 type item = { id: int; name: string } [@@deriving yojson]
 type model = { query: string; results: item list; empty_msg: string } [@@deriving yojson]
 type msg = Search of string [@@deriving yojson]
@@ -4494,7 +4534,7 @@ When adding a new feature, you typically need:
 
 1. **Static page**: Create `lib/client/pages/feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
 2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let db = lazy (Well.Db.open_db ())`
-3. **LiveView**: Create `.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields, register with `Well.live "/path" (module Feature_live)` in `lib/app.ml`
+3. **LiveView**: Create `lib/client/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields. Register with `Well.live "/feature" (module Feature_live)` in `lib/app.ml`. Then create a GET page that embeds `<Well.LiveView name="feature" />`. Both steps are required — `Well.live` only registers the WS handler, not the page.
 4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or LiveViews
 5. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module, register + expose in `lib/app.ml`
 6. **Auth-protected**: Add `~middleware:[Well.require_auth ()]` or wrap handler with `Well.Auth.require_grant`
