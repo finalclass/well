@@ -111,7 +111,7 @@ let apply_middlewares middlewares handler =
 
 (* ── Route internals ───────────────────────────────────────────────── *)
 
-type segment = Static of string | Param of string
+type segment = Static of string | Param of string | Wildcard of string
 
 type route = {
   meth : string;
@@ -340,12 +340,19 @@ let split_path path =
   |> List.filter (fun s -> s <> "")
 
 let parse_segments parts =
-  List.map
-    (fun part ->
-      if String.length part > 0 && part.[0] = ':' then
-        Param (String.sub part 1 (String.length part - 1))
-      else Static part)
-    parts
+  let rec go = function
+    | [] -> []
+    | [ part ] when String.length part > 0 && part.[0] = '*' ->
+        [ Wildcard (String.sub part 1 (String.length part - 1)) ]
+    | part :: _ when String.length part > 0 && part.[0] = '*' ->
+        failwith ("Wildcard *" ^ String.sub part 1 (String.length part - 1) ^ " must be the last segment")
+    | part :: rest ->
+        (if String.length part > 0 && part.[0] = ':' then
+           Param (String.sub part 1 (String.length part - 1))
+         else Static part)
+        :: go rest
+  in
+  go parts
 
 (* ── Cap routes (bypass global middleware) ─────────────────────────── *)
 
@@ -367,6 +374,8 @@ let match_cap_route meth path =
             if p = s then go ps ss acc else None
         | p :: ps, Param name :: ss ->
             go ps ss ((name, p) :: acc)
+        | rest, [ Wildcard name ] ->
+            Some (List.rev ((name, String.concat "/" rest) :: acc))
         | _ -> None
       in
       go parts r.segments []
@@ -447,6 +456,8 @@ let match_ws_route path =
           if p = s then go ps ss acc else None
       | p :: ps, Param name :: ss ->
           go ps ss ((name, p) :: acc)
+      | rest, [ Wildcard name ] ->
+          Some (List.rev ((name, String.concat "/" rest) :: acc))
       | _ -> None
     in
     go parts r.ws_segments []
@@ -657,6 +668,8 @@ let match_route meth path =
             if p = s then go ps ss acc else None
         | p :: ps, Param name :: ss ->
             go ps ss ((name, p) :: acc)
+        | rest, [ Wildcard name ] ->
+            Some (List.rev ((name, String.concat "/" rest) :: acc))
         | _ -> None
       in
       go parts r.segments []
@@ -739,8 +752,8 @@ let extract_boundary content_type =
           with Not_found -> false)
   then None
   else
-    match Str.search_forward (Str.regexp {|boundary=\([^ ;]*\)|}) ct 0 with
-    | _ -> Some (Str.matched_group 1 ct)
+    match Str.search_forward (Str.regexp_case_fold {|boundary=\([^ ;]*\)|}) content_type 0 with
+    | _ -> Some (Str.matched_group 1 content_type)
     | exception Not_found -> None
 
 let is_multipart headers =
@@ -1581,6 +1594,16 @@ let _rate_limit_mu = Mutex.create ()
 let _rate_limit_counter = ref 0
 
 let rate_limit ~max_requests ~window_ms () : middleware = fun next req ->
+  (* Skip rate limiting for static file requests *)
+  let is_static =
+    List.exists (fun (mount : static_mount) ->
+      let plen = String.length mount.prefix in
+      String.length req.path >= plen
+      && String.sub req.path 0 plen = mount.prefix)
+      !static_mounts
+  in
+  if is_static then next req
+  else
   let now = Unix.gettimeofday () *. 1000.0 in
   let window = float_of_int window_ms in
   let client_key =
@@ -2879,7 +2902,7 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
 (* ── Route introspection ───────────────────────────────────────────── *)
 
 let list_routes () =
-  let seg_to_string = function Static s -> s | Param p -> ":" ^ p in
+  let seg_to_string = function Static s -> s | Param p -> ":" ^ p | Wildcard w -> "*" ^ w in
   let build_path segs = "/" ^ String.concat "/" (List.map seg_to_string segs) in
   let lv_endpoints =
     let acc = ref [] in

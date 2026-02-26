@@ -141,7 +141,7 @@ let app_ml _name =
   Well.use Well.error_handler;
   Well.use Well.logger;
   Well.use Well.csrf;
-  Well.use (Well.rate_limit ~max_requests:60 ~window_ms:60_000 ());
+  Well.use (Well.rate_limit ~max_requests:300 ~window_ms:60_000 ());
   Well.use Request_id.middleware;
 
   (* Per-route middleware: see notes_page.mlx for require_auth example *)
@@ -3192,6 +3192,9 @@ Well.ws   : string -> (request -> Websocket.t -> unit) -> unit
 ```
 
 Path params via `:param` segments: `"/users/:id"`.
+Wildcard `*name` as last segment catches the rest of the URL:
+`"/files/*path"` → `Well.param req "path"` = `"a/b/c"`.
+`*` must be the last segment (e.g. `"/api/*rest/foo"` is invalid).
 Routes matched in registration order. No match → 404. Handler exception → 500.
 
 ### Route Scoping
@@ -3274,6 +3277,11 @@ Well.post "/items" @@ fun req ->
 let name = Well.form req "name" in
 (* ... process ... *)
 Well.redirect "/items"
+
+(* Wildcard catch-all *)
+Well.get "/files/*path" @@ fun req ->
+let path = Well.param req "path" in  (* "docs/readme.txt" *)
+serve_file path
 
 (* Per-route middleware *)
 Well.get ~middleware:[Well.require_auth ()] "/admin" @@ fun req -> ...

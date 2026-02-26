@@ -125,6 +125,7 @@ val run : ?port:int -> ?cert:string -> ?key:string -> unit -> unit
 - Handler return type uses `:>` coercion — can return `Html.node`, `response`, or any subset
 
 Route paths support `:param` segments: `"/users/:id"` extracts `id` from the URL.
+Wildcard `*name` as last segment catches the rest: `"/files/*path"` → `param req "path"` = `"a/b/c"`.
 Routes are matched in registration order. No match → 404. Handler exception → 500.
 
 Dependencies: `eio`, `eio_main`, `yojson`, `tls-eio`, `mirage-crypto-rng.unix`
@@ -155,18 +156,59 @@ val txt : string -> node             (* escaped text node *)
 val raw : string -> node             (* raw/unescaped HTML *)
 val tag : string -> ... -> ?children:node list -> unit -> node
 val void_tag : string -> ... -> ?children:node list -> unit -> node
-
-(* Tag functions: html, head, title, body, div, span, p, h1-h4,
-   a, main, footer, header, nav, section, form, button, input,
-   label, ul, ol, li, meta *)
 ```
+
+Full HTML5 tag coverage. All elements are partial applications of `tag`/`void_tag`:
+
+**Document:** `html`, `head`, `title`, `body`, `base`
+**Sections:** `main`, `header`, `footer`, `nav`, `section`, `article`, `aside`, `address`
+**Headings:** `h1`–`h6`
+**Grouping:** `div`, `p`, `pre`, `blockquote`, `figure`, `figcaption`, `hr`, `br`, `wbr`
+**Lists:** `ul`, `ol`, `li`, `dl`, `dt`, `dd`
+**Inline text:** `span`, `a`, `strong`, `em`, `b`, `i`, `u`, `s`, `small`, `mark`,
+  `del`, `ins`, `sub`, `sup`, `abbr`, `time`, `cite`, `q`, `dfn`, `var`, `samp`,
+  `kbd`, `code`, `data`, `ruby`, `rt`, `rp`, `bdi`, `bdo`
+**Tables:** `table`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`, `caption`, `colgroup`, `col`
+**Forms:** `form`, `button`, `input`, `label`, `textarea`, `select`, `option`, `optgroup`,
+  `fieldset`, `legend`, `datalist`, `output`, `progress`, `meter`
+**Interactive:** `details`, `summary`, `dialog`
+**Media:** `img`, `video`, `audio`, `source`, `track`, `canvas`, `picture`, `iframe`,
+  `embed`, `object_`, `map`, `area`
+**Metadata/scripting:** `meta`, `link`, `script`, `noscript`, `template`, `slot`
+
+Void elements (`input`, `img`, `br`, `hr`, `meta`, `link`, `source`, `track`,
+`embed`, `col`, `area`, `wbr`, `base`) render self-closing `<tag />`.
 
 Tag functions return `node = [`Html of string]` — a concrete polymorphic variant
 that coerces to `Well.response` via `:>` in route handlers (automatic).
 
-Tag functions accept optional labeled args: `?id`, `?class_`, `?lang`, `?href`,
-`?data_lv_click`, `?data_lv_submit`, `?action`, `?method_`, `?type_`,
-`?placeholder`, `?value`, `?name_`, `?charset`, `?content`, `?children`.
+**Labeled attributes** (optional, on all elements):
+- Global: `id`, `class_`, `lang`, `title`, `style`, `role`, `tabindex`, `dir`
+- LiveView: `data_lv_click`, `data_lv_submit`, `data_lv_change`,
+  `data_lv_debounce`, `data_lv_throttle`, `data_lv_hook`, `data_lv_navigate`, `data_lv_patch`
+- Link: `href`, `target`, `rel`, `download`
+- Media: `src`, `alt`, `width`, `height`, `loading`, `srcset`, `sizes`,
+  `poster`, `preload`, `crossorigin`, `integrity`
+- Form: `action`, `method_`, `type_`, `placeholder`, `value`, `name_`, `enctype`,
+  `accept`, `for_`, `autocomplete`, `min`, `max`, `step`, `pattern`, `maxlength`,
+  `minlength`, `rows`, `cols`, `wrap`, `size`, `formaction`, `formmethod`
+- Meta: `charset`, `content`, `http_equiv`, `media`
+- Table: `colspan`, `rowspan`, `scope`
+- Other: `datetime`, `start`
+- Bool: `hidden`, `disabled`, `readonly`, `required`, `checked`, `selected`,
+  `multiple`, `autofocus`, `novalidate`, `open_`, `defer`, `async_`,
+  `autoplay`, `controls`, `loop`, `muted`, `draggable`, `reversed`
+
+**Escape hatch** for `aria-*`, `data-*`, and any unlisted attributes:
+- `?attrs:(string * string) list` — extra string attributes
+- `?bool_attrs:string list` — extra boolean attributes
+
+```ocaml
+<button
+  ~attrs:[("aria-label", "Close"); ("data-tooltip", "Dismiss")]
+  ~bool_attrs:["aria-expanded"]
+  data_lv_click="close">"X"</button>
+```
 
 No dependencies (no external libs).
 

@@ -35,35 +35,52 @@ let bool_attrs_to_string attrs =
 let cat (children : node list) =
   String.concat "" (List.map (fun (`Html s) -> s) children)
 
-let void_tag name ?(id = "") ?(class_ = "") ?(charset = "")
-    ?(content = "") ?(name_ = "") ?(lang = "") ?(rel = "") ?(href = "")
-    ?(enctype = "") ?(accept = "") ?(for_ = "") ?(multiple = false)
-    ?(children : node list = []) () : node =
-  ignore children;
-  let attrs =
-    [
-      ("id", id); ("class", class_); ("charset", charset);
-      ("content", content); ("name", name_); ("lang", lang);
-      ("rel", rel); ("href", href); ("enctype", enctype);
-      ("accept", accept); ("for", for_);
-    ]
-  in
-  let bools = [("multiple", multiple)] in
-  `Html (Printf.sprintf "<%s%s%s />" name (attrs_to_string attrs) (bool_attrs_to_string bools))
+(* ── Shared element constructor ───────────────────────────────────── *)
 
-let tag name ?(id = "") ?(class_ = "") ?(lang = "")
+let _el ~void name
+    (* Global attributes *)
+    ?(id = "") ?(class_ = "") ?(lang = "") ?(title = "") ?(style = "")
+    ?(role = "") ?(tabindex = "") ?(dir = "")
+    (* LiveView attributes *)
     ?(data_lv_click = "") ?(data_lv_submit = "") ?(data_lv_change = "")
     ?(data_lv_debounce = "") ?(data_lv_throttle = "")
     ?(data_lv_hook = "") ?(data_lv_navigate = "") ?(data_lv_patch = "")
-    ?(action = "") ?(method_ = "") ?(href = "")
-    ?(type_ = "") ?(placeholder = "") ?(value = "")
-    ?(name_ = "") ?(charset = "") ?(content = "")
-    ?(src = "") ?(enctype = "") ?(accept = "") ?(for_ = "")
-    ?(multiple = false)
+    (* Link / navigation *)
+    ?(href = "") ?(target = "") ?(rel = "") ?(download = "")
+    (* Media *)
+    ?(src = "") ?(alt = "") ?(width = "") ?(height = "")
+    ?(loading = "") ?(srcset = "") ?(sizes = "")
+    ?(poster = "") ?(preload = "") ?(crossorigin = "") ?(integrity = "")
+    (* Form *)
+    ?(action = "") ?(method_ = "") ?(type_ = "") ?(placeholder = "")
+    ?(value = "") ?(name_ = "") ?(enctype = "") ?(accept = "")
+    ?(for_ = "") ?(autocomplete = "") ?(min = "") ?(max = "")
+    ?(step = "") ?(pattern = "") ?(maxlength = "") ?(minlength = "")
+    ?(rows = "") ?(cols = "") ?(wrap = "") ?(size = "")
+    ?(formaction = "") ?(formmethod = "")
+    (* Meta *)
+    ?(charset = "") ?(content = "") ?(http_equiv = "") ?(media = "")
+    (* Table *)
+    ?(colspan = "") ?(rowspan = "") ?(scope = "")
+    (* Time *)
+    ?(datetime = "")
+    (* List *)
+    ?(start = "")
+    (* Boolean attributes *)
+    ?(hidden = false) ?(disabled = false) ?(readonly = false)
+    ?(required = false) ?(checked = false) ?(selected = false)
+    ?(multiple = false) ?(autofocus = false) ?(novalidate = false)
+    ?(open_ = false) ?(defer = false) ?(async_ = false)
+    ?(autoplay = false) ?(controls = false) ?(loop = false) ?(muted = false)
+    ?(draggable = false) ?(reversed = false)
+    (* Escape hatch for aria-*, data-*, and any other attributes *)
+    ?(attrs : (string * string) list = [])
+    ?(bool_attrs : string list = [])
+    (* Children *)
     ?(children : node list = []) () : node =
-  let attrs =
-    [
-      ("id", id); ("class", class_); ("lang", lang);
+  let str_attrs =
+    [ ("id", id); ("class", class_); ("lang", lang); ("title", title);
+      ("style", style); ("role", role); ("tabindex", tabindex); ("dir", dir);
       ("data-lv-click", data_lv_click); ("data-lv-submit", data_lv_submit);
       ("data-lv-change", data_lv_change);
       ("data-lv-debounce", data_lv_debounce);
@@ -71,67 +88,188 @@ let tag name ?(id = "") ?(class_ = "") ?(lang = "")
       ("data-lv-hook", data_lv_hook);
       ("data-lv-navigate", data_lv_navigate);
       ("data-lv-patch", data_lv_patch);
-      ("action", action); ("method", method_); ("href", href);
-      ("type", type_); ("placeholder", placeholder); ("value", value);
-      ("name", name_); ("charset", charset); ("content", content);
-      ("src", src); ("enctype", enctype); ("accept", accept);
-      ("for", for_);
-    ]
+      ("href", href); ("target", target); ("rel", rel);
+      ("download", download);
+      ("src", src); ("alt", alt); ("width", width); ("height", height);
+      ("loading", loading); ("srcset", srcset); ("sizes", sizes);
+      ("poster", poster); ("preload", preload);
+      ("crossorigin", crossorigin); ("integrity", integrity);
+      ("action", action); ("method", method_); ("type", type_);
+      ("placeholder", placeholder); ("value", value); ("name", name_);
+      ("enctype", enctype); ("accept", accept); ("for", for_);
+      ("autocomplete", autocomplete); ("min", min); ("max", max);
+      ("step", step); ("pattern", pattern); ("maxlength", maxlength);
+      ("minlength", minlength); ("rows", rows); ("cols", cols);
+      ("wrap", wrap); ("size", size);
+      ("formaction", formaction); ("formmethod", formmethod);
+      ("charset", charset); ("content", content);
+      ("http-equiv", http_equiv); ("media", media);
+      ("colspan", colspan); ("rowspan", rowspan); ("scope", scope);
+      ("datetime", datetime); ("start", start);
+    ] @ attrs
   in
-  let bools = [("multiple", multiple)] in
-  `Html
-    (Printf.sprintf "<%s%s%s>%s</%s>" name (attrs_to_string attrs)
-       (bool_attrs_to_string bools) (cat children) name)
+  let bool_pairs =
+    [ ("hidden", hidden); ("disabled", disabled); ("readonly", readonly);
+      ("required", required); ("checked", checked); ("selected", selected);
+      ("multiple", multiple); ("autofocus", autofocus);
+      ("novalidate", novalidate);
+      ("open", open_); ("defer", defer); ("async", async_);
+      ("autoplay", autoplay); ("controls", controls); ("loop", loop);
+      ("muted", muted); ("draggable", draggable); ("reversed", reversed);
+    ] @ List.map (fun k -> (k, true)) bool_attrs
+  in
+  let attr_str =
+    attrs_to_string str_attrs ^ bool_attrs_to_string bool_pairs
+  in
+  if void then begin
+    ignore children;
+    `Html (Printf.sprintf "<%s%s />" name attr_str)
+  end else
+    `Html (Printf.sprintf "<%s%s>%s</%s>" name attr_str (cat children) name)
+
+let tag = _el ~void:false
+let void_tag = _el ~void:true
+
+(* ── Document ────────────────────────────────────────────────────── *)
 
 let html = tag "html"
 let head = tag "head"
 let title = tag "title"
 let body = tag "body"
-let div = tag "div"
-let span = tag "span"
-let p = tag "p"
+let base = void_tag "base"
+
+(* ── Sections ────────────────────────────────────────────────────── *)
+
+let main = tag "main"
+let header = tag "header"
+let footer = tag "footer"
+let nav = tag "nav"
+let section = tag "section"
+let article = tag "article"
+let aside = tag "aside"
+let address = tag "address"
+
+(* ── Headings ────────────────────────────────────────────────────── *)
+
 let h1 = tag "h1"
 let h2 = tag "h2"
 let h3 = tag "h3"
 let h4 = tag "h4"
-let a = tag "a"
-let main = tag "main"
-let footer = tag "footer"
-let header = tag "header"
-let nav = tag "nav"
-let section = tag "section"
-let form = tag "form"
-let button = tag "button"
-let input = tag "input"
-let label = tag "label"
+let h5 = tag "h5"
+let h6 = tag "h6"
+
+(* ── Grouping / block ────────────────────────────────────────────── *)
+
+let div = tag "div"
+let p = tag "p"
+let pre = tag "pre"
+let blockquote = tag "blockquote"
+let figure = tag "figure"
+let figcaption = tag "figcaption"
+let hr = void_tag "hr"
+let br = void_tag "br"
+let wbr = void_tag "wbr"
+
+(* ── Lists ───────────────────────────────────────────────────────── *)
+
 let ul = tag "ul"
 let ol = tag "ol"
 let li = tag "li"
+let dl = tag "dl"
+let dt = tag "dt"
+let dd = tag "dd"
+
+(* ── Inline text semantics ───────────────────────────────────────── *)
+
+let span = tag "span"
+let a = tag "a"
 let strong = tag "strong"
 let em = tag "em"
 let b = tag "b"
 let i = tag "i"
+let u = tag "u"
+let s = tag "s"
 let small = tag "small"
-let pre = tag "pre"
+let mark = tag "mark"
+let del = tag "del"
+let ins = tag "ins"
+let sub = tag "sub"
+let sup = tag "sup"
+let abbr = tag "abbr"
+let time = tag "time"
+let cite = tag "cite"
+let q = tag "q"
+let dfn = tag "dfn"
+let var = tag "var"
+let samp = tag "samp"
+let kbd = tag "kbd"
 let code = tag "code"
-let blockquote = tag "blockquote"
+let data = tag "data"
+let ruby = tag "ruby"
+let rt = tag "rt"
+let rp = tag "rp"
+let bdi = tag "bdi"
+let bdo = tag "bdo"
+
+(* ── Tables ──────────────────────────────────────────────────────── *)
+
 let table = tag "table"
 let thead = tag "thead"
 let tbody = tag "tbody"
+let tfoot = tag "tfoot"
 let tr = tag "tr"
 let th = tag "th"
 let td = tag "td"
+let caption = tag "caption"
+let colgroup = tag "colgroup"
+let col = void_tag "col"
+
+(* ── Forms ───────────────────────────────────────────────────────── *)
+
+let form = tag "form"
+let button = tag "button"
+let input = void_tag "input"
+let label = tag "label"
 let textarea = tag "textarea"
 let select = tag "select"
 let option = tag "option"
+let optgroup = tag "optgroup"
+let fieldset = tag "fieldset"
+let legend = tag "legend"
+let datalist = tag "datalist"
+let output = tag "output"
+let progress = tag "progress"
+let meter = tag "meter"
 
-let meta ?id ?class_ ?charset ?content ?name_ ?lang ?children () =
-  void_tag "meta" ?id ?class_ ?charset ?content ?name_ ?lang ?children ()
+(* ── Interactive ─────────────────────────────────────────────────── *)
 
-let link ?id ?class_ ?charset ?content ?name_ ?lang ?rel ?href ?children () =
-  void_tag "link" ?id ?class_ ?charset ?content ?name_ ?lang ?rel ?href ?children ()
+let details = tag "details"
+let summary = tag "summary"
+let dialog = tag "dialog"
 
+(* ── Media / embedded ────────────────────────────────────────────── *)
+
+let img = void_tag "img"
+let video = tag "video"
+let audio = tag "audio"
+let source = void_tag "source"
+let track = void_tag "track"
+let canvas = tag "canvas"
+let picture = tag "picture"
+let iframe = tag "iframe"
+let embed = void_tag "embed"
+let object_ = tag "object"
+let map = tag "map"
+let area = void_tag "area"
+
+(* ── Metadata / scripting ────────────────────────────────────────── *)
+
+let meta = void_tag "meta"
+let link = void_tag "link"
 let script = tag "script"
+let noscript = tag "noscript"
+let template = tag "template"
+let slot = tag "slot"
 
 let txt s : node = `Html (escape_html s)
 let raw s : node = `Html s
