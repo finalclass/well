@@ -10,7 +10,7 @@
 
 (package
  (name well)
- (version 0.0.1)
+ (version 1.1.0)
  (synopsis "Full-stack OCaml web framework")
  (depends
   (ocaml (>= 5.4))
