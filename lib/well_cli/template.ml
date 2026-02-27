@@ -16,7 +16,7 @@ let dune_project name =
 
 (package
  (name %s)
- (version 0.1.0)
+ (version 0.0.1)
  (allow_empty)
  (synopsis "A well web application")
  (depends
