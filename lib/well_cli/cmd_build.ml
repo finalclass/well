@@ -3,13 +3,17 @@
 let release_dir = "_release"
 let binary_path = "_build/default/bin/main.exe"
 
-let detect_name () =
+let read_dune_project () =
   if not (Sys.file_exists "dune-project") then (
     Printf.eprintf "Error: no dune-project found\n";
     exit 1);
   let ic = open_in "dune-project" in
   let content = really_input_string ic (in_channel_length ic) in
   close_in ic;
+  content
+
+let detect_name () =
+  let content = read_dune_project () in
   try
     let pos =
       Str.search_forward (Str.regexp_string "(package") content 0
@@ -20,6 +24,16 @@ let detect_name () =
          content pos);
     Str.matched_group 1 content
   with Not_found -> Filename.basename (Sys.getcwd ())
+
+let detect_version () =
+  let content = read_dune_project () in
+  try
+    ignore
+      (Str.search_forward
+         (Str.regexp {|(version \([^ )]+\))|})
+         content 0);
+    Some (Str.matched_group 1 content)
+  with Not_found -> None
 
 let has_tool name =
   Sys.command (Printf.sprintf "which %s >/dev/null 2>&1" name) = 0

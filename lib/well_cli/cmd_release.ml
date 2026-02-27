@@ -4,7 +4,12 @@ let run args =
   (* Build first *)
   Cmd_build.run args;
   let name = Cmd_build.detect_name () in
-  let archive = Printf.sprintf "%s.tar.gz" name in
+  let version = Cmd_build.detect_version () in
+  let archive =
+    match version with
+    | Some v -> Printf.sprintf "%s-v%s.tar.gz" name v
+    | None -> Printf.sprintf "%s.tar.gz" name
+  in
   (* Create archive *)
   Printf.printf "\nCreating archive...\n%!";
   let rc =
@@ -40,6 +45,6 @@ let cmd : Command.t =
     description =
       "Build and package a deployable .tar.gz archive.\n\
        Runs `well build` first, then creates a compressed archive.\n\n\
-       Output: <name>.tar.gz";
+       Output: <name>-v<version>.tar.gz (or <name>.tar.gz if no version)";
     run;
   }

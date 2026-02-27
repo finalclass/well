@@ -11,11 +11,12 @@ let dune_project name =
    (run mlx-pp %%{input-file}))))
 
 (pin
- (url "file:///home/sel/Documents/well")
+ (url "git+ssh://git@github.com/finalclass/well.git")
  (package (name well)))
 
 (package
  (name %s)
+ (version 0.1.0)
  (allow_empty)
  (synopsis "A well web application")
  (depends
