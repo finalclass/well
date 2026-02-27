@@ -648,6 +648,14 @@ export class Well {
     });
   }
 
+  // ── Public LiveView API ─────────────────────────────────────────
+
+  /** Send a message to a LiveView from external JS. */
+  pushLive(msg: unknown, topic?: string) {
+    const t = topic ?? this.liveViews.keys().next().value;
+    if (t) this.sendLiveMsg(t, msg);
+  }
+
   // ── Channel API ──────────────────────────────────────────────────
 
   channel(topic: string): WellChannel {

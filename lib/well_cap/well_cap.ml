@@ -1,5 +1,5 @@
 (* Well_cap — Cap admin panel initialization *)
-(* Registers LiveView endpoints, routes, and hooks for /_well/ *)
+(* Registers LiveView endpoints, routes, and hooks for /_cap/ *)
 
 let seed_cap_user () =
   if not (Well.Auth.has_any_grant "cap") then begin
@@ -20,23 +20,23 @@ let init () =
   Well.Cap_hook.start_time := Unix.gettimeofday ();
   seed_cap_user ();
   (* Register LiveView endpoints *)
-  Well.LiveView.register "/live/_well/" (module Overview_live);
-  Well.LiveView.register "/live/_well/routes" (module Routes_live);
-  Well.LiveView.register "/live/_well/connections" (module Connections_live);
-  Well.LiveView.register "/live/_well/db" (module Db_live);
-  Well.LiveView.register "/live/_well/services" (module Services_live);
-  Well.LiveView.register "/live/_well/messages" (module Messages_live);
-  Well.LiveView.register "/live/_well/logs" (module Logs_live);
-  Well.LiveView.register "/live/_well/telemetry" (module Telemetry_live);
-  Well.LiveView.register "/live/_well/repl" (module Repl_live);
-  Well.LiveView.register "/live/_well/users" (module Users_live);
+  Well.LiveView.register "/live/_cap/" (module Overview_live);
+  Well.LiveView.register "/live/_cap/routes" (module Routes_live);
+  Well.LiveView.register "/live/_cap/connections" (module Connections_live);
+  Well.LiveView.register "/live/_cap/db" (module Db_live);
+  Well.LiveView.register "/live/_cap/services" (module Services_live);
+  Well.LiveView.register "/live/_cap/messages" (module Messages_live);
+  Well.LiveView.register "/live/_cap/logs" (module Logs_live);
+  Well.LiveView.register "/live/_cap/telemetry" (module Telemetry_live);
+  Well.LiveView.register "/live/_cap/repl" (module Repl_live);
+  Well.LiveView.register "/live/_cap/users" (module Users_live);
   (* Serve embedded well.js — no auth needed for static asset *)
-  !(Well.Cap_hook._register_cap_get) "/_well/well.js" (fun _req ->
+  !(Well.Cap_hook._register_cap_get) "/_cap/well.js" (fun _req ->
     Well.Cap_hook.CRJs Cap_js.js);
   (* Login routes — no auth *)
-  !(Well.Cap_hook._register_cap_get) "/_well/login" (fun _req ->
+  !(Well.Cap_hook._register_cap_get) "/_cap/login" (fun _req ->
     Well.Cap_hook.CRHtml (Cap_login.login_page ()));
-  !(Well.Cap_hook._register_cap_post) "/_well/login" (fun req ->
+  !(Well.Cap_hook._register_cap_post) "/_cap/login" (fun req ->
     let pairs = String.split_on_char '&' req.body in
     let get_field name =
       List.fold_left (fun acc pair ->
@@ -57,7 +57,7 @@ let init () =
       match Well.Auth.login_and_set_session req ~email ~password with
       | Ok user ->
         if Well.Auth.has_grant ~user_id:user.id "cap" then
-          Well.Cap_hook.CRRedirect "/_well/"
+          Well.Cap_hook.CRRedirect "/_cap/"
         else begin
           Well.Auth.logout req;
           Well.Cap_hook.CRHtml (Cap_login.login_page
@@ -67,43 +67,43 @@ let init () =
         Well.Cap_hook.CRHtml (Cap_login.login_page
           ~error:"Invalid login or password" ()));
   (* Logout route *)
-  !(Well.Cap_hook._register_cap_get) "/_well/logout" (fun req ->
+  !(Well.Cap_hook._register_cap_get) "/_cap/logout" (fun req ->
     Well.Auth.logout req;
-    Well.Cap_hook.CRRedirect "/_well/login");
+    Well.Cap_hook.CRRedirect "/_cap/login");
   (* Cap page routes — with auth *)
   let authed handler req = Cap_auth.cap_auth_mw handler req in
-  !(Well.Cap_hook._register_cap_get) "/_well/" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/" ~title:"Overview"
-              ~endpoint:"/live/_well/")));
-  !(Well.Cap_hook._register_cap_get) "/_well/routes" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/routes" ~title:"Routes"
-              ~endpoint:"/live/_well/routes")));
-  !(Well.Cap_hook._register_cap_get) "/_well/connections" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/connections" ~title:"Connections"
-              ~endpoint:"/live/_well/connections")));
-  !(Well.Cap_hook._register_cap_get) "/_well/db" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/db" ~title:"Database"
-              ~endpoint:"/live/_well/db")));
-  !(Well.Cap_hook._register_cap_get) "/_well/services" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/services" ~title:"Services"
-              ~endpoint:"/live/_well/services")));
-  !(Well.Cap_hook._register_cap_get) "/_well/messages" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/messages" ~title:"Messages"
-              ~endpoint:"/live/_well/messages")));
-  !(Well.Cap_hook._register_cap_get) "/_well/logs" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/logs" ~title:"Logs"
-              ~endpoint:"/live/_well/logs")));
-  !(Well.Cap_hook._register_cap_get) "/_well/telemetry" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/telemetry" ~title:"Telemetry"
-              ~endpoint:"/live/_well/telemetry")));
-  !(Well.Cap_hook._register_cap_get) "/_well/repl" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/repl" ~title:"REPL"
-              ~endpoint:"/live/_well/repl")));
-  !(Well.Cap_hook._register_cap_get) "/_well/users" (authed (fun _req ->
-    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_well/users" ~title:"Users"
-              ~endpoint:"/live/_well/users")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/" ~title:"Overview"
+              ~endpoint:"/live/_cap/")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/routes" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/routes" ~title:"Routes"
+              ~endpoint:"/live/_cap/routes")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/connections" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/connections" ~title:"Connections"
+              ~endpoint:"/live/_cap/connections")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/db" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/db" ~title:"Database"
+              ~endpoint:"/live/_cap/db")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/services" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/services" ~title:"Services"
+              ~endpoint:"/live/_cap/services")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/messages" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/messages" ~title:"Messages"
+              ~endpoint:"/live/_cap/messages")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/logs" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/logs" ~title:"Logs"
+              ~endpoint:"/live/_cap/logs")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/telemetry" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/telemetry" ~title:"Telemetry"
+              ~endpoint:"/live/_cap/telemetry")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/repl" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/repl" ~title:"REPL"
+              ~endpoint:"/live/_cap/repl")));
+  !(Well.Cap_hook._register_cap_get) "/_cap/users" (authed (fun _req ->
+    Well.Cap_hook.CRHtml (Cap_page.cap_page ~path:"/_cap/users" ~title:"Users"
+              ~endpoint:"/live/_cap/users")));
   (* Logs pagination API *)
-  !(Well.Cap_hook._register_cap_get) "/_well/api/logs" (authed (fun req ->
+  !(Well.Cap_hook._register_cap_get) "/_cap/api/logs" (authed (fun req ->
     let before_id = match Well.query req "before" with
       | Some s -> (try int_of_string s with _ -> !(Well.Cap_hook.Log_buffer.count))
       | None -> !(Well.Cap_hook.Log_buffer.count)
@@ -122,7 +122,7 @@ let init () =
   Well.Log._hook := Some (fun ts level msg ctx ->
     let entry = Well.Cap_hook.Log_buffer.push ~level ~message:msg ~timestamp:ts ~ctx () in
     let ctx_json = `Assoc (List.map (fun (k, v) -> (k, `String v)) ctx) in
-    Well.LiveView.send_event "/live/_well/logs" "new_log"
+    Well.LiveView.send_event "/live/_cap/logs" "new_log"
       (`Assoc [
         ("id", `Int entry.id);
         ("level", `String level);
@@ -131,19 +131,19 @@ let init () =
         ("ctx", ctx_json);
       ]));
   (* Set up MessageBus subscriber for Messages LiveView *)
-  (* Filter out /_well/* channels to avoid infinite loop:
+  (* Filter out /_cap/* channels to avoid infinite loop:
      subscribe "*" catches ALL messages including our own publishes *)
   ignore (Well.MessageBus.subscribe "*" (fun event ->
-    if not (String.length event.Well.MessageBus.channel >= 12
-            && String.sub event.Well.MessageBus.channel 0 12 = "/live/_well/") then begin
+    if not (String.length event.Well.MessageBus.channel >= 11
+            && String.sub event.Well.MessageBus.channel 0 11 = "/live/_cap/") then begin
       let msg_json = `Assoc [
         ("channel", `String event.Well.MessageBus.channel);
         ("payload", `String (Yojson.Safe.to_string event.payload));
         ("timestamp", `Float event.created_at);
       ] in
-      ignore (Well.MessageBus.publish ~ephemeral:true "/live/_well/messages" msg_json)
+      ignore (Well.MessageBus.publish ~ephemeral:true "/live/_cap/messages" msg_json)
     end));
-  Printf.printf "[well] cap at /_well/\n%!"
+  Printf.printf "[well] cap at /_cap/\n%!"
 
 (* Register init at module load time — well.ml calls !Cap_hook._cap_init () *)
 let () = Well.Cap_hook._cap_init := init

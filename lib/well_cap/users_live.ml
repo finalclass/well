@@ -30,8 +30,6 @@ type msg =
 
 let persistence = Well.LiveView.Ephemeral
 
-let subscriptions = []
-
 let load_users ?(search = "") () =
   let users = Well.Auth.list_users ~search () in
   let all_g = Well.Auth.all_grants () in
@@ -46,14 +44,14 @@ let load_users ?(search = "") () =
     users
 
 let init _req _props =
-  { users= load_users ()
-  ; view= List
-  ; form_email= ""
-  ; form_password= ""
-  ; form_grant= ""
-  ; error= ""
-  ; success= ""
-  ; search= "" }
+  ({ users= load_users ()
+   ; view= List
+   ; form_email= ""
+   ; form_password= ""
+   ; form_grant= ""
+   ; error= ""
+   ; success= ""
+   ; search= "" }, [])
 
 let update _req model msg =
   let clear m = {m with error= ""; success= ""} in

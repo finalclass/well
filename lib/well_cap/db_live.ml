@@ -30,7 +30,6 @@ type msg =
   | RunSQL of string
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let get_db_for source =
   match source with
@@ -183,9 +182,9 @@ let init _req _props =
   let total_rows =
     if selected_table <> "" then count_table db_source selected_table else 0
   in
-  { db_source; tables; selected_table; rows; columns; total_rows;
-    page = 0; editing = None;
-    sql_input = ""; sql_result = ""; sql_error = "" }
+  ({ db_source; tables; selected_table; rows; columns; total_rows;
+     page = 0; editing = None;
+     sql_input = ""; sql_result = ""; sql_error = "" }, [])
 
 let reload_current model =
   let columns, rows, err =

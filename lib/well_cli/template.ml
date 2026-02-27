@@ -576,7 +576,6 @@ type msg =
 [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let init _req props =
   let open Yojson.Safe.Util in
@@ -586,7 +585,7 @@ let init _req props =
       try props |> member key |> to_string |> int_of_string with
       | _ -> default )
   in
-  {count= get_int "initial" 0; step= get_int "step" 1}
+  ({count= get_int "initial" 0; step= get_int "step" 1}, [])
 
 let update _req model = function
   | Increment ->
@@ -656,10 +655,9 @@ type msg = Events.counter_event
 [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = [Well.topic_name Events.counter_event]
 
 let init _req _props =
-  {entries= []; next_id= 1}
+  ({entries= []; next_id= 1}, [Well.topic_name Events.counter_event])
 
 let update _req model = function
   | `Incremented (action, value)
@@ -1325,6 +1323,14 @@ export class Well {
         window.location.reload();
       }
     });
+  }
+
+  // ── Public LiveView API ─────────────────────────────────────────
+
+  /** Send a message to a LiveView from external JS. */
+  pushLive(msg: unknown, topic?: string) {
+    const t = topic ?? this.liveViews.keys().next().value;
+    if (t) this.sendLiveMsg(t, msg);
   }
 
   // ── Channel API ──────────────────────────────────────────────────
@@ -3358,9 +3364,11 @@ module type VIEW = sig
   type msg
 
   val persistence : persistence      (* Ephemeral | Session | User *)
-  val subscriptions : string list    (* MessageBus channels to auto-subscribe *)
 
-  val init : request -> Yojson.Safe.t -> model
+  val init : request -> Yojson.Safe.t -> model * string list
+    (* Returns (initial_model, subscriptions).
+       Subscriptions are MessageBus channels to auto-subscribe.
+       Dynamic — can depend on init props (e.g. keyed topics). *)
   val update : request -> model -> msg -> model
   val handle_params : request -> model -> model  (* URL query param changes *)
   val view : model -> Html.node
@@ -3386,9 +3394,9 @@ type model = { count: int } [@@deriving yojson]
 type msg = Increment | Decrement | Reset [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
-let init _req _props = { count = 0 }
+let init _req _props = ({ count = 0 }, [])
+(* Returns (model, subscriptions). Empty list = no MessageBus subscriptions. *)
 
 let update _req model = function
   | Increment -> { count = model.count + 1 }
@@ -3557,7 +3565,9 @@ Tips:
 type model = { entries: string list } [@@deriving yojson]
 type msg = Events.counter_event [@@deriving yojson]  (* reuse event type *)
 
-let subscriptions = [Well.topic_name Events.counter_event]
+(* Subscriptions returned from init — can be dynamic based on props *)
+let init _req _props =
+  ({ entries = [] }, [Well.topic_name Events.counter_event])
 
 let update _req model = function
   | `Incremented (_, n) -> { entries = (Printf.sprintf "+%d" n) :: model.entries }
@@ -3587,6 +3597,16 @@ Well.hooks.Chart = {
 };
 ```
 
+### pushLive — Send Messages from External JS
+
+```javascript
+// Send a message to the first LiveView on the page
+well.pushLive(["SetPage", "index.html"]);
+
+// Send to a specific LiveView topic
+well.pushLive(["UpdateFilter", "active"], "/live/dashboard");
+```
+
 ### LiveView Uploads
 
 ```ocaml
@@ -3610,13 +3630,12 @@ type model = { query: string; results: item list; empty_msg: string } [@@derivin
 type msg = Search of string [@@deriving yojson]
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let make_model query =
   let results = search query in
   { query; results; empty_msg = if results = [] then "No results" else "" }
 
-let init _req _props = make_model ""
+let init _req _props = (make_model "", [])
 let update _req _model = function Search q -> make_model q
 let handle_params _req model = model
 let temporary_assigns model = model
@@ -3837,8 +3856,9 @@ Well.subscribe ~live_only:true Events.order_event (fun evt ->
 ### LiveView Subscriptions
 
 ```ocaml
-(* In LiveView module — auto-subscribes to channels *)
-let subscriptions = [Well.topic_name Events.counter_event]
+(* In LiveView module — subscriptions returned from init *)
+let init _req _props =
+  (initial_model, [Well.topic_name Events.counter_event])
 type msg = Events.counter_event [@@deriving yojson]
 (* Events arrive as msg in update function *)
 ```
@@ -4653,7 +4673,7 @@ Well.list_routes : unit -> (string * string * string) list
 
 ## Cap Admin Panel
 
-Built-in admin dashboard at `/_well/`. Default login: `cap` / `admin`.
+Built-in admin dashboard at `/_cap/`. Default login: `cap` / `admin`.
 
 Disable with `Well.run ~disable_cap:true ()`.
 

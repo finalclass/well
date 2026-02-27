@@ -1,4 +1,4 @@
-let version = "1.2.0"
+let version = "1.3.0"
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
@@ -2109,8 +2109,8 @@ let handle_connection flow _addr =
       let body = read_body reader hdrs in
       let is_cap_path =
         let p = path in
-        String.length p >= 7 && String.sub p 0 7 = "/_well/"
-        || p = "/_well"
+        String.length p >= 6 && String.sub p 0 6 = "/_cap/"
+        || p = "/_cap"
       in
       let safe_500 exn label =
         let msg = Printexc.to_string exn in

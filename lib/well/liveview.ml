@@ -21,8 +21,7 @@ module type VIEW = sig
   type msg
 
   val persistence : persistence
-  val subscriptions : string list
-  val init : Types.request -> Yojson.Safe.t -> model
+  val init : Types.request -> Yojson.Safe.t -> model * string list
   val update : Types.request -> model -> msg -> model
   val handle_params : Types.request -> model -> model
   val view : model -> Html.node
@@ -275,9 +274,8 @@ type view_instance = {
 (* ── Registry ──────────────────────────────────────────────────────── *)
 
 type view_entry = {
-  factory : Types.request -> Yojson.Safe.t -> view_instance;
+  factory : Types.request -> Yojson.Safe.t -> view_instance * string list;
   view_persistence : persistence;
-  view_subscriptions : string list;
 }
 
 let view_registry : (string, view_entry) Hashtbl.t = Hashtbl.create 16
@@ -315,6 +313,7 @@ type topic_state = {
   ts_topic : string;
   ts_persistence : persistence;
   ts_instance : view_instance;
+  ts_subscriptions : string list;
 }
 
 (* ── Multiplexed WebSocket handler ─────────────────────────────────── *)
@@ -362,11 +361,11 @@ let handler (req : Types.request) (ws : Websocket.t) =
   let handle_join topic endpoint init_args =
     Log.log "liveview: join topic=%s endpoint=%s" topic endpoint;
     match Hashtbl.find_opt view_registry endpoint with
-    | Some { factory; view_persistence; view_subscriptions } ->
+    | Some { factory; view_persistence } ->
         let saved_state =
           load_state view_persistence session_id topic endpoint
         in
-        let instance, msg_type =
+        let (instance, dynamic_subs), msg_type =
           match saved_state with
           | Some model_json -> (factory req model_json, "restored")
           | None -> (factory req init_args, "full")
@@ -376,10 +375,11 @@ let handler (req : Types.request) (ws : Websocket.t) =
           { ts_endpoint = endpoint;
             ts_topic = topic;
             ts_persistence = view_persistence;
-            ts_instance = instance };
+            ts_instance = instance;
+            ts_subscriptions = dynamic_subs };
         Hashtbl.replace conn_topics topic ();
-        (* Subscribe to MessageBus: own topic + VIEW subscriptions *)
-        let channels = topic :: view_subscriptions in
+        (* Subscribe to MessageBus: own topic + dynamic subscriptions from init *)
+        let channels = topic :: dynamic_subs in
         List.iter (fun ch ->
           let sub_id = Message_bus.subscribe ch (fun event ->
             Eio.Stream.add unified (InfoMsg event)
@@ -405,9 +405,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
          (* Unsubscribe from MessageBus *)
          let to_remove, remaining =
            List.partition (fun (ch, _) ->
-             ch = topic || List.mem ch
-               (match Hashtbl.find_opt view_registry ts.ts_endpoint with
-                | Some ve -> ve.view_subscriptions | None -> []))
+             ch = topic || List.mem ch ts.ts_subscriptions)
              !sub_ids
          in
          List.iter (fun (_, id) -> Message_bus.unsubscribe id) to_remove;
@@ -644,9 +642,9 @@ let register
     endpoint
     (module View : VIEW with type model = m and type msg = msg) =
   let factory (req : Types.request) (props_or_saved : Yojson.Safe.t) =
-    let initial_model =
+    let initial_model, dynamic_subs =
       match View.model_of_yojson props_or_saved with
-      | Ok model -> model
+      | Ok model -> (model, [])
       | Error _ -> View.init req props_or_saved
     in
     let state = ref (View.handle_params req initial_model) in
@@ -687,11 +685,11 @@ let register
       | Ok new_model -> state := new_model
       | Error _ -> ()
     in
-    { get_html; handle_msg; handle_params; get_model_json; load_model }
+    ({ get_html; handle_msg; handle_params; get_model_json; load_model },
+     dynamic_subs)
   in
   Hashtbl.replace view_registry endpoint
-    { factory; view_persistence = View.persistence;
-      view_subscriptions = View.subscriptions };
+    { factory; view_persistence = View.persistence };
   if not !_ws_registered then begin
     _ws_registered := true;
     !_register_ws_route "/live" handler
@@ -717,9 +715,9 @@ let render_initial
          | Some (_, model_json) ->
              (match View.model_of_yojson model_json with
               | Ok m -> m
-              | Error _ -> View.init req init_args)
-         | None -> View.init req init_args)
-    | _ -> View.init req init_args
+              | Error _ -> fst (View.init req init_args))
+         | None -> fst (View.init req init_args))
+    | _ -> fst (View.init req init_args)
   in
   let model = View.handle_params req model in
   let el = View.view model in

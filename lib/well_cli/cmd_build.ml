@@ -14,10 +14,15 @@ let read_dune_project () =
 
 let detect_name () =
   let content = read_dune_project () in
+  (* Find top-level (package — at start of file or start of line,
+     not inline like (pin ... (package (name well))) *)
+  let rec find_package pos =
+    let i = Str.search_forward (Str.regexp_string "(package") content pos in
+    if i = 0 || content.[i - 1] = '\n' then i
+    else find_package (i + 1)
+  in
   try
-    let pos =
-      Str.search_forward (Str.regexp_string "(package") content 0
-    in
+    let pos = find_package 0 in
     ignore
       (Str.search_forward
          (Str.regexp {|(name \([a-z0-9_]+\))|})

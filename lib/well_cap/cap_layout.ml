@@ -1,14 +1,14 @@
 let nav_items = [
-  ("/_well/", "Overview", {|&#9670;|});
-  ("/_well/routes", "Routes", {|&#9741;|});
-  ("/_well/connections", "Connections", {|&#9729;|});
-  ("/_well/db", "Database", {|&#9641;|});
-  ("/_well/services", "Services", {|&#9656;|});
-  ("/_well/messages", "Messages", {|&#9993;|});
-  ("/_well/logs", "Logs", {|&#9776;|});
-  ("/_well/telemetry", "Telemetry", {|&#9201;|});
-  ("/_well/repl", "REPL", {|&#9002;|});
-  ("/_well/users", "Users", {|&#9823;|});
+  ("/_cap/", "Overview", {|&#9670;|});
+  ("/_cap/routes", "Routes", {|&#9741;|});
+  ("/_cap/connections", "Connections", {|&#9729;|});
+  ("/_cap/db", "Database", {|&#9641;|});
+  ("/_cap/services", "Services", {|&#9656;|});
+  ("/_cap/messages", "Messages", {|&#9993;|});
+  ("/_cap/logs", "Logs", {|&#9776;|});
+  ("/_cap/telemetry", "Telemetry", {|&#9201;|});
+  ("/_cap/repl", "REPL", {|&#9002;|});
+  ("/_cap/users", "Users", {|&#9823;|});
 ]
 
 let cap_layout ~active_path ~title ~content =
@@ -39,7 +39,7 @@ let cap_layout ~active_path ~title ~content =
       <div class="version">v%s</div>
     </div>
     <nav class="sidebar-nav">%s</nav>
-    <div class="sidebar-footer"><a href="/_well/logout">logout</a></div>
+    <div class="sidebar-footer"><a href="/_cap/logout">logout</a></div>
   </aside>
   <div class="sidebar-backdrop" onclick="document.querySelector('.console-sidebar').classList.remove('open')"></div>
   <button class="menu-toggle" onclick="document.querySelector('.console-sidebar').classList.toggle('open')" aria-label="Menu">&#9776;</button>
@@ -48,7 +48,7 @@ let cap_layout ~active_path ~title ~content =
     %s
   </main>
 </div>
-<script type="module" src="/_well/well.js"></script>
+<script type="module" src="/_cap/well.js"></script>
 <script type="module">
 Well.hooks.LogViewer = {
   mounted() {
@@ -97,7 +97,7 @@ Well.hooks.LogViewer = {
     if (bid <= 0) { this._noMore = true; return; }
     this._loading = true;
     const ph = this.el.scrollHeight;
-    fetch("/_well/api/logs?before=" + bid + "&count=100")
+    fetch("/_cap/api/logs?before=" + bid + "&count=100")
       .then(r => r.json())
       .then(entries => {
         if (!entries.length) { this._noMore = true; this._loading = false; return; }

@@ -16,7 +16,6 @@ type msg =
   | CallRPC of string
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 (* ── RPC metadata helpers ─────────────────────────────────────────── *)
 
@@ -173,11 +172,11 @@ let get_rpc_names services svc_name =
 (* ── LiveView ─────────────────────────────────────────────────────── *)
 
 let init _req _props =
-  { services = Well.Service.describe_services ();
-    health = Well.Service.health ();
-    open_menu = "";
-    call_service = ""; call_rpc = "";
-    call_payload = "{}"; call_result = "" }
+  ({ services = Well.Service.describe_services ();
+     health = Well.Service.health ();
+     open_menu = "";
+     call_service = ""; call_rpc = "";
+     call_payload = "{}"; call_result = "" }, [])
 
 let update _req model msg =
   match msg with

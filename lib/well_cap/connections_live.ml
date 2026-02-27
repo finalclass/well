@@ -8,11 +8,10 @@ type model = {
 type msg = Refresh
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let init _req _props =
-  { sessions = Well.LiveView.list_sessions ();
-    ws_count = Well.LiveView.count_connections () }
+  ({ sessions = Well.LiveView.list_sessions ();
+     ws_count = Well.LiveView.count_connections () }, [])
 
 let update _req _model _msg =
   { sessions = Well.LiveView.list_sessions ();

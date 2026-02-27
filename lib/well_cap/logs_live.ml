@@ -14,7 +14,6 @@ type msg =
   | JumpTo of string   (* "YYYY-MM-DDTHH:MM" from datetime-local input *)
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let load_entries level search =
   Well.Cap_hook.Log_buffer.recent_filtered ~n:200 ~level ~search ()
@@ -32,8 +31,8 @@ let parse_datetime_local s =
   with _ -> None
 
 let init _req _props =
-  { entries = load_entries "all" "";
-    level_filter = "all"; search = ""; jump_target = -1 }
+  ({ entries = load_entries "all" "";
+     level_filter = "all"; search = ""; jump_target = -1 }, [])
 
 let update _req model msg =
   match msg with

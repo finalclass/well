@@ -8,4 +8,4 @@ let is_authed req =
 
 let cap_auth_mw handler req =
   if is_authed req then handler req
-  else Well.Cap_hook.CRRedirect "/_well/login"
+  else Well.Cap_hook.CRRedirect "/_cap/login"

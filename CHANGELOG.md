@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.0 — 2026-02-27
+
+### Breaking changes
+- Cap admin panel URL prefix changed from `/_well/` to `/_cap/`
+- LiveView `subscriptions` field removed — `init` now returns `(model, string list)` tuple with dynamic subscriptions
+
+### New features
+- `well.pushLive(msg, topic?)` — send messages to LiveView from external JS
+- Dynamic LiveView subscriptions (can depend on init props, e.g. keyed topics)
+
+### Fixes
+- `well build` — fix package name detection when dune-project has inline `(package` in pins
+
 ## v1.2.0 — 2026-02-27
 
 ### New features
@@ -32,7 +45,7 @@
 
 ### New features
 - `Well.Form` — applicative form validation with `let+`/`and+`
-- `Well.Console` — built-in admin panel at `/_well/`
+- `Well.Console` — built-in admin panel at `/_cap/`
 - Unified pub/sub system (typed MessageBus)
 
 ### Improvements

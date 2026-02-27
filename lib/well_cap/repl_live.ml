@@ -776,12 +776,11 @@ type model = {
 type msg = Eval of string | Clear | ToggleHelp
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let init _req _props =
   let schema = build_schema () in
   let schema_json = schema_to_json schema in
-  { history = []; vars = Hashtbl.create 16; schema; schema_json; show_help = false }
+  ({ history = []; vars = Hashtbl.create 16; schema; schema_json; show_help = false }, [])
 
 let update _req model msg =
   match msg with

@@ -7,10 +7,9 @@ type model = {
 type msg = Refresh
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let init _req _props =
-  { routes = Well.list_routes () }
+  ({ routes = Well.list_routes () }, [])
 
 let update _req _model _msg =
   { routes = Well.list_routes () }

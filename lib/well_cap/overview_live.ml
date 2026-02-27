@@ -15,7 +15,6 @@ type model = {
 type msg = Refresh
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let gather () =
   let tables = !(Well.Db.registered_tables) in
@@ -31,7 +30,7 @@ let gather () =
     lv_sessions = List.length (Well.LiveView.list_sessions ());
     ws_connections = Well.LiveView.count_connections (); }
 
-let init _req _props = gather ()
+let init _req _props = (gather (), [])
 
 let update _req _model _msg = gather ()
 

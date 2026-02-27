@@ -13,7 +13,6 @@ type model = {
 type msg = Tick
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 
 let gather () =
   let sys = Well.Telemetry.system_snapshot () in
@@ -29,7 +28,7 @@ let gather () =
     services_running = running;
     services_total = List.length health }
 
-let init _req _props = gather ()
+let init _req _props = (gather (), [])
 
 let update _req _model _msg = gather ()
 

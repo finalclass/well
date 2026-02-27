@@ -19,7 +19,7 @@ let login_page ?(error = "") () =
     <h1>well.cap</h1>
     <p class="sub">Sign in to continue</p>
     %s
-    <form method="post" action="/_well/login">
+    <form method="post" action="/_cap/login">
       <label for="email">Login</label>
       <input type="text" id="email" name="email"
              class="input" placeholder="Email or username" autofocus />

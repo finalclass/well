@@ -114,7 +114,7 @@ let run args =
     Printf.printf "Created new well project: %s\n\n" name;
     Printf.printf "  cd %s\n" name);
   Printf.printf "  dune exec bin/main.exe --watch\n";
-  Printf.printf "\n  Cap: http://localhost:4000/_well/ (login: cap / admin)\n";
+  Printf.printf "\n  Cap: http://localhost:4000/_cap/ (login: cap / admin)\n";
   Printf.printf "\nHappy hacking!\n"
 
 let cmd : Command.t =

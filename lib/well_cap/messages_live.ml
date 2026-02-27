@@ -9,11 +9,10 @@ type msg =
   | Clear
 
 let persistence = Well.LiveView.Ephemeral
-let subscriptions = []
 let max_messages = 200
 
 let init _req _props =
-  { messages = [] }
+  ({ messages = [] }, [])
 
 let update _req model msg =
   match msg with
