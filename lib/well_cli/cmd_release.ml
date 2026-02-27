@@ -29,7 +29,8 @@ let run args =
   Printf.printf "\nDeploy:\n";
   Printf.printf "  scp %s server:/srv/%s/\n" archive name;
   Printf.printf "  ssh server 'cd /srv/%s && tar xzf %s && ./bin/%s'\n" name
-    archive name
+    archive name;
+  Printf.printf "\nArchive contains bin/ and static/ only. data/ is not touched.\n"
 
 let cmd : Command.t =
   {

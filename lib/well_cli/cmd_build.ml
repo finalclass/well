@@ -107,8 +107,7 @@ let run _args =
          (Printf.sprintf "rm -rf %s" (Filename.quote release_dir)));
   ignore
     (Sys.command
-       (Printf.sprintf "mkdir -p %s/bin/lib %s/data" release_dir
-          release_dir));
+       (Printf.sprintf "mkdir -p %s/bin/lib" release_dir));
   (* 3. Copy binary *)
   let target = Printf.sprintf "%s/bin/%s" release_dir name in
   ignore
@@ -156,7 +155,6 @@ let run _args =
   Printf.printf "  bin/lib/           bundled .so\n";
   if Sys.file_exists "static" then
     Printf.printf "  static/            assets\n";
-  Printf.printf "  data/              runtime databases\n";
   Printf.printf "\nRun: cd %s && ./bin/%s\n" release_dir name
 
 let cmd : Command.t =
@@ -170,8 +168,8 @@ let cmd : Command.t =
        Creates _release/ directory:\n\
       \  bin/<name>       Relocatable binary\n\
       \  bin/lib/         Bundled .so libraries\n\
-      \  static/          Static assets (if present)\n\
-      \  data/            Runtime databases directory\n\n\
-       Run: cd _release && ./bin/<name>";
+      \  static/          Static assets (if present)\n\n\
+       Run: cd _release && ./bin/<name>\n\n\
+       Note: data/ is NOT included — the server keeps its own databases.";
     run;
   }
