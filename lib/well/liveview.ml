@@ -327,6 +327,7 @@ let save_all_topics topics session_id =
     topics
 
 let handler (req : Types.request) (ws : Websocket.t) =
+  Log.log "liveview: ws handler started for %s" req.path;
   let topics : (string, topic_state) Hashtbl.t = Hashtbl.create 8 in
   let session_id = req.session_id in
   let conn_topics : (string, unit) Hashtbl.t = Hashtbl.create 8 in
@@ -359,6 +360,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
     read_loop ()
   );
   let handle_join topic endpoint init_args =
+    Log.log "liveview: join topic=%s endpoint=%s" topic endpoint;
     match Hashtbl.find_opt view_registry endpoint with
     | Some { factory; view_persistence; view_subscriptions } ->
         let saved_state =
@@ -388,8 +390,10 @@ let handler (req : Types.request) (ws : Websocket.t) =
           if msg_type = "restored" then encode_restored topic html
           else encode_full topic html
         in
+        Log.log "liveview: sending %s for topic=%s" msg_type topic;
         Websocket.send_json ws msg
-    | None -> ()
+    | None ->
+        Log.log ~level:"warn" "liveview: no view registered for endpoint=%s" endpoint
   in
   let handle_leave topic =
     (match Hashtbl.find_opt topics topic with
@@ -744,6 +748,13 @@ let live_view ~endpoint ?(topic = "") ?(props = [])
 
 let live_view_script () : Html.node =
   `Html {|<script type="module" src="/static/well.js"></script>|}
+
+(* Inline script for <head> — pre-opens WS before iframes consume the
+   HTTP/1.1 connection pool (6 connections per origin).  Must be a
+   regular (non-module) script so it executes synchronously during
+   HTML parsing, before the browser starts fetching body resources. *)
+let live_preconnect_script () : Html.node =
+  `Html {|<script>!function(){var p=location.protocol==="https:"?"wss:":"ws:";window.__wellPreWs=new WebSocket(p+"//"+location.host+"/live")}()</script>|}
 
 (* MLX component: <LiveView name="counter" /> *)
 let createElement ~name ?(props : (string * string) list = [])

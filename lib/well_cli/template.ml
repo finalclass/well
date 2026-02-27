@@ -67,6 +67,8 @@ make dev          # start dev server with hot reload (dune exec -w)
 make build        # build
 make test         # run tests
 make check        # type-check only (faster)
+well build        # production build (patchelf + bundled .so)
+well release      # deployable .tar.gz archive
 ```
 
 The dev server runs at **http://localhost:4000**.
@@ -103,6 +105,8 @@ data/                              # SQLite databases (gitignored)
 
 let gitignore =
   {|_build/
+_release/
+*.tar.gz
 *.install
 .merlin
 _opam/
@@ -247,6 +251,7 @@ let layout name =
       <meta name_="viewport" content="width=device-width, initial-scale=1.0" />
       <title>(txt page_title)</title>
       <link rel="stylesheet" href="/static/app.css" />
+      (Well.LiveView.live_preconnect_script ())
     </head>
     <body>
       <main>(children |> cat |> raw)</main>
@@ -3084,25 +3089,44 @@ val element_to_string : node -> string
 
 All tag functions share the same optional labeled parameters:
 
+**String attributes** (default `""`):
+- **Global**: `?id`, `?class_`, `?lang`, `?title`, `?style`, `?role`, `?tabindex`, `?dir`
+- **LiveView**: `?data_lv_click`, `?data_lv_submit`, `?data_lv_change`, `?data_lv_debounce`, `?data_lv_throttle`, `?data_lv_hook`, `?data_lv_navigate`, `?data_lv_patch`
+- **Link**: `?href`, `?target`, `?rel`, `?download`
+- **Media**: `?src`, `?alt`, `?width`, `?height`, `?loading`, `?srcset`, `?sizes`, `?poster`, `?preload`, `?crossorigin`, `?integrity`
+- **Form**: `?action`, `?method_`, `?type_`, `?placeholder`, `?value`, `?name_`, `?enctype`, `?accept`, `?for_`, `?autocomplete`, `?min`, `?max`, `?step`, `?pattern`, `?maxlength`, `?minlength`, `?rows`, `?cols`, `?wrap`, `?size`, `?formaction`, `?formmethod`
+- **Meta**: `?charset`, `?content`, `?http_equiv`, `?media`
+- **Table**: `?colspan`, `?rowspan`, `?scope`
+- **Other**: `?datetime`, `?start`
+
+**Boolean attributes** (default `false`):
+`?hidden`, `?disabled`, `?readonly`, `?required`, `?checked`, `?selected`, `?multiple`, `?autofocus`, `?novalidate`, `?open_`, `?defer`, `?async_`, `?autoplay`, `?controls`, `?loop`, `?muted`, `?draggable`, `?reversed`
+
+**Escape hatch** for `aria-*`, `data-*`, and any unlisted attributes:
+- `?attrs:(string * string) list` — extra string attributes
+- `?bool_attrs:string list` — extra boolean attributes
+
+```ocaml
+<button
+  ~attrs:[("aria-label", "Close"); ("data-tooltip", "Dismiss")]
+  ~bool_attrs:["data-lv-ignore"; "aria-expanded"]
+  data_lv_click="close">"X"</button>
 ```
-?id  ?class_  ?lang
-?data_lv_click  ?data_lv_submit  ?data_lv_change
-?data_lv_debounce  ?data_lv_throttle  ?data_lv_hook
-?data_lv_navigate  ?data_lv_patch
-?action  ?method_  ?href  ?type_  ?name_  ?placeholder
-?value  ?charset  ?content  ?src  ?rel  ?enctype
-?accept  ?for_  ?multiple (bool — only boolean attr)
-?children:node list
-unit -> node
-```
 
-**Container tags**: `html`, `head`, `title`, `body`, `div`, `span`, `p`, `h1`-`h4`, `a`, `main`, `footer`, `header`, `nav`, `section`, `form`, `button`, `input`, `label`, `ul`, `ol`, `li`, `strong`, `em`, `b`, `i`, `small`, `pre`, `code`, `blockquote`, `table`, `thead`, `tbody`, `tr`, `th`, `td`, `textarea`, `select`, `option`, `script`
+**All tags** (full HTML5 coverage):
+- **Document**: `html`, `head`, `title`, `body`, `base`
+- **Sections**: `main`, `header`, `footer`, `nav`, `section`, `article`, `aside`, `address`
+- **Headings**: `h1`–`h6`
+- **Grouping**: `div`, `p`, `pre`, `blockquote`, `figure`, `figcaption`, `hr`, `br`, `wbr`
+- **Lists**: `ul`, `ol`, `li`, `dl`, `dt`, `dd`
+- **Inline**: `span`, `a`, `strong`, `em`, `b`, `i`, `u`, `s`, `small`, `mark`, `del`, `ins`, `sub`, `sup`, `abbr`, `time`, `cite`, `q`, `dfn`, `var`, `samp`, `kbd`, `code`, `data`, `ruby`, `rt`, `rp`, `bdi`, `bdo`
+- **Tables**: `table`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`, `caption`, `colgroup`, `col`
+- **Forms**: `form`, `button`, `input`, `label`, `textarea`, `select`, `option`, `optgroup`, `fieldset`, `legend`, `datalist`, `output`, `progress`, `meter`
+- **Interactive**: `details`, `summary`, `dialog`
+- **Media**: `img`, `video`, `audio`, `source`, `track`, `canvas`, `picture`, `iframe`, `embed`, `object_`, `map`, `area`
+- **Metadata**: `meta`, `link`, `script`, `noscript`, `template`, `slot`
 
-**Void tags** (self-closing): `meta`, `link`
-
-**Not available**: `img` (use `raw` if needed)
-
-**NOT supported** (do NOT use): `required`, `disabled`, `readonly`, `checked`, `selected`, `autofocus`, `autocomplete`, `min`, `max`, `step`, `rows`, `cols`, `width`, `height`, `target`, `alt`, `style`, `aria-*`, `role`, custom `data-*` (only `data-lv-*`)
+**Void elements** (self-closing): `input`, `img`, `br`, `hr`, `meta`, `link`, `source`, `track`, `embed`, `col`, `area`, `wbr`, `base`
 
 ### Form Helpers
 
@@ -3306,6 +3330,7 @@ let createElement ?title:(page_title = "") ?(children = []) () =
       <meta charset="utf-8" />
       <title>(txt page_title)</title>
       <link rel="stylesheet" href="/static/app.css" />
+      (Well.LiveView.live_preconnect_script ())
     </head>
     <body>
       <main>(children |> cat |> raw)</main>
@@ -3435,20 +3460,67 @@ The `name` must match the path from `Well.live` (without leading `/`).
 
 | Attribute | Description | Wire format |
 |-----------|-------------|-------------|
-| `data_lv_click="Msg"` | Click sends msg | `["Msg"]` |
-| `data_lv_click="Msg"` with payload | Click with data | `["Msg", data]` |
-| `data_lv_submit="Msg"` | Form submit | `["Msg", {field: value, ...}]` |
-| `data_lv_change="Msg"` | Input change | `["Msg", input_value]` |
+| `data_lv_click="Msg"` | Click sends msg (no args) | `["Msg"]` |
+| `data_lv_click={|["Msg","val"]|}` | Click with payload (JSON array in attr) | `["Msg", "val"]` |
+| `data_lv_submit="Msg"` | Form submit (fields as object) | `["Msg", {field: value, ...}]` |
+| `data_lv_change="Msg"` | Input change (single value) | `["Msg", input_value]` |
 | `data_lv_debounce="300"` | Debounce (ms) | — |
 | `data_lv_throttle="300"` | Throttle (ms) | — |
 | `data_lv_navigate="/path"` | Live navigation (pushState) | — |
 | `data_lv_patch="/path?q=x"` | Update query params only | — |
 | `data_lv_hook="HookName"` | Attach JS hook | — |
 
-**Variant encoding** (ppx_deriving_yojson):
+### Variant encoding (ppx_deriving_yojson)
+
 - `Increment` → `["Increment"]` (JSON array, NOT string)
 - `SetValue of int` → `["SetValue", 42]`
+- `SubmitForm of { name: string; email: string }` → `["SubmitForm", {"name": "...", "email": "..."}]`
 - `` `Incremented (s, n) `` → `["Incremented", "s", 42]`
+
+### Click with payload
+
+`data_lv_click` tries `JSON.parse` on the attribute value. If it parses as an array, it's sent as-is.
+Otherwise the string is wrapped in `["string"]`.
+
+```ocaml
+(* No payload — simple variant *)
+<button data_lv_click="Increment">(txt "+")</button>
+(* sends: ["Increment"] → decoded as: Increment *)
+
+(* With payload — encode JSON array in attribute *)
+<button data_lv_click=(Printf.sprintf {|["SetPage", "%s"]|} (Html.escape_html page))>
+  (txt page)
+</button>
+(* sends: ["SetPage", "cennik.html"] → decoded as: SetPage "cennik.html" *)
+
+(* Static payload — use raw JSON string *)
+<button data_lv_click={|["SelectTab", "settings"]|}>(txt "Settings")</button>
+```
+
+### Form submissions (`data_lv_submit`)
+
+The client collects all form inputs into a JSON object and sends `["MsgName", {"field1": "value1", ...}]`.
+Use **inline record variants** for form messages — ppx_deriving_yojson decodes them correctly:
+
+```ocaml
+(* CORRECT — inline record matches form JSON {"author":"...","body":"..."} *)
+type msg =
+  | Increment
+  | SubmitComment of { author: string; body: string }
+[@@deriving yojson]
+
+(* WRONG — tuple variant expects ["SubmitComment", "v1", "v2"] but form sends object *)
+type msg = SubmitComment of string * string [@@deriving yojson]
+```
+
+Input `name` attributes must match record field names:
+```ocaml
+<form data_lv_submit="SubmitComment">
+  <input type_="text" name_="author" placeholder="Name" />
+  <textarea name_="body">(txt "")</textarea>
+  <button type_="submit">(txt "Send")</button>
+</form>
+```
 
 ### View Rendering
 
@@ -4400,10 +4472,71 @@ Well.url_decode : string -> string
 
 ---
 
+## Deployment
+
+Well apps are single-binary deployments. The scaffold generates a `.service` file for systemd.
+
+### `well build` — Production build with bundled libraries
+
+```bash
+well build    # requires: patchelf (pacman -S patchelf / apt install patchelf)
+```
+
+1. Runs `dune build`
+2. Auto-discovers all shared libraries via `ldd`
+3. Copies binary + all `.so` to `_release/`
+4. Runs `patchelf` — sets interpreter to `bin/lib/ld-linux-*.so` and rpath to `$ORIGIN/lib`
+5. Copies `static/` if present, creates `data/` directory
+
+Output:
+```
+_release/
+  bin/myapp          # relocatable binary (patchelf'd)
+  bin/lib/           # all bundled .so (libc, libsqlite3, libgmp, libz, ...)
+  static/            # CSS, JS, assets
+  data/              # runtime databases (created empty)
+```
+
+Run locally: `cd _release && ./bin/myapp`
+
+### `well release` — Create deployable archive
+
+```bash
+well release    # runs well build, then creates .tar.gz
+```
+
+Creates `myapp.tar.gz` — a single archive ready to deploy:
+```bash
+scp myapp.tar.gz server:/srv/myapp/
+ssh server "cd /srv/myapp && tar xzf myapp.tar.gz && ./bin/myapp"
+```
+
+### Server setup
+
+**Directory structure on server:**
+```
+/srv/myapp/
+  bin/myapp              # relocatable binary (patchelf'd)
+  bin/lib/               # bundled .so
+  data/                  # SQLite databases (app.sqlite, well.sqlite)
+  data/certs/            # auto-TLS certificates (managed by Well)
+  static/                # CSS, JS, assets
+```
+
+The generated `.service` file uses `WorkingDirectory=/srv/myapp` and `ReadWritePaths=/srv/myapp/data`.
+
+**HTTPS**: Use `Well.run ~domain:"myapp.example.com" ~port:443 ()` — auto-provisions Let's Encrypt
+certificate via HTTP-01 challenge, stores certs in `data/certs/`, auto-renews. No nginx/reverse proxy needed.
+The server also listens on port 80 for ACME challenges and HTTP→HTTPS redirects.
+
+---
+
 ## CLI Commands
 
 ```bash
 well init <name>              # Scaffold new project
+well build                    # Production build (dune + patchelf + bundle .so → _release/)
+well release                  # Build + create .tar.gz archive for deployment
 well test [-w] [-f pat] [-u]  # Run tests (watch, filter, update snapshots)
 well docs [--open] [-o dir]   # Generate HTML documentation from (** *) comments
 well contract build [dir]     # Generate code from TOML contracts
@@ -4427,6 +4560,16 @@ expr | map .field               # Pipeline: map, filter, count, first, sort
 ## Client-Side TypeScript (well.ts)
 
 Compiled by bun to `well.js`. Auto-initializes as `window.well`.
+
+**Build**: `static/dune` has rules that run `bun build` with `(mode promote)` — output JS lands in source tree.
+Just run `dune build` (or `make build`) to rebuild TS. Add new `.ts` files by adding a `(rule ...)` to `static/dune`:
+```lisp
+(rule
+ (targets my-script.js)
+ (deps (source_tree ts))       ; if importing from ts/ subdirectory
+ (mode promote)
+ (action (run bun build ts/my-script.ts --outdir . --minify)))
+```
 
 ### LiveView (automatic)
 

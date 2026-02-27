@@ -2047,7 +2047,8 @@ let handle_connection flow _addr =
     Telemetry.decr_active_connections ();
     close_flow ()
   in
-  let handle_one_request () =
+  (* Parse incoming request line + headers (fast, no timeout needed) *)
+  let parse_incoming () =
     let meth, raw_path = parse_request_line reader in
     let hdrs = parse_headers reader in
     let query_params =
@@ -2059,46 +2060,51 @@ let handle_connection flow _addr =
       | Some i -> String.sub raw_path 0 i
       | None -> raw_path
     in
-    (* Check for WebSocket upgrade — bypasses middleware *)
     let is_upgrade =
       match List.assoc_opt "upgrade" hdrs with
       | Some v -> String.lowercase_ascii v = "websocket"
       | None -> false
     in
-    if is_upgrade then begin
-      let existing_session = parse_session_id hdrs in
-      let session_id =
-        match existing_session with
-        | Some sid -> sid
-        | None -> generate_session_id ()
-      in
-      Telemetry.incr_active_ws ();
-      (match match_ws_route path with
-       | Some (route, params) ->
-           (match Websocket.handshake hdrs flow reader with
-            | Ok ws ->
-                let body = read_body reader hdrs in
-                let req =
-                  { meth; path; headers = hdrs; body; params;
-                    query = query_params; session_id; _context = [] }
-                in
-                (try route.ws_handler req ws
-                 with
-                 | Eio.Cancel.Cancelled _ -> ()
-                 | exn ->
-                   Log.log ~level:"error" "ws handler error: %s"
-                     (Printexc.to_string exn));
-                Websocket.close ws
-            | Error msg ->
-                Log.log ~level:"error" "ws handshake error: %s" msg;
-                let r = resolve (`Text "Bad Request" |> status 400) in
-                write_response flow r)
-       | None ->
-           let r = resolve (`Text "Not Found" |> status 404) in
-           write_response flow r);
-      Telemetry.decr_active_ws ();
-      `Close  (* WS always closes after *)
-    end else begin
+    (meth, path, hdrs, query_params, is_upgrade)
+  in
+  (* WebSocket upgrade — runs WITHOUT request timeout (WS connections are long-lived) *)
+  let handle_ws_upgrade meth path hdrs query_params =
+    Log.log "ws upgrade: %s" path;
+    let existing_session = parse_session_id hdrs in
+    let session_id =
+      match existing_session with
+      | Some sid -> sid
+      | None -> generate_session_id ()
+    in
+    Telemetry.incr_active_ws ();
+    (match match_ws_route path with
+     | Some (route, params) ->
+         (match Websocket.handshake hdrs flow reader with
+          | Ok ws ->
+              let body = read_body reader hdrs in
+              let req =
+                { meth; path; headers = hdrs; body; params;
+                  query = query_params; session_id; _context = [] }
+              in
+              (try route.ws_handler req ws
+               with
+               | Eio.Cancel.Cancelled _ -> ()
+               | exn ->
+                 Log.log ~level:"error" "ws handler error: %s"
+                   (Printexc.to_string exn));
+              Websocket.close ws
+          | Error msg ->
+              Log.log ~level:"error" "ws handshake error: %s" msg;
+              let r = resolve (`Text "Bad Request" |> status 400) in
+              write_response flow r)
+     | None ->
+         let r = resolve (`Text "Not Found" |> status 404) in
+         write_response flow r);
+    Telemetry.decr_active_ws ();
+    `Close  (* WS always closes after *)
+  in
+  (* Regular HTTP request handler *)
+  let handle_http_request meth path hdrs query_params =
       let t0 = Unix.gettimeofday () in
       let body = read_body reader hdrs in
       let is_cap_path =
@@ -2205,13 +2211,13 @@ let handle_connection flow _addr =
           let ka = not wants_close in
           write_response ~keep_alive:ka ~head:(meth = "HEAD") flow resolved;
           if wants_close then `Close else `KeepAlive
-    end
   in
-  let timed_request () =
+  (* HTTP request with timeout — WS requests bypass this *)
+  let timed_http_request meth path hdrs query_params =
     let result = ref `Close in
     (try
        !_with_ka_timeout !_request_timeout (fun () ->
-         result := handle_one_request ())
+         result := handle_http_request meth path hdrs query_params)
      with
      | Keep_alive_timeout | Eio__Time.Timeout ->
          let r = resolve (`Text "Request Timeout" |> status 408) in
@@ -2219,13 +2225,21 @@ let handle_connection flow _addr =
          result := `Close);
     !result
   in
+  (* Dispatch: parse request, then handle WS (no timeout) or HTTP (with timeout) *)
+  let dispatch_request () =
+    let (meth, path, hdrs, query_params, is_upgrade) = parse_incoming () in
+    if is_upgrade then
+      handle_ws_upgrade meth path hdrs query_params
+    else
+      timed_http_request meth path hdrs query_params
+  in
   (* Keep-alive loop with max requests per connection *)
   let req_count = ref 0 in
   let max_reqs = !_max_requests_per_connection in
   let rec ka_loop first =
     if first then begin
       incr req_count;
-      match timed_request () with
+      match dispatch_request () with
       | `Close -> do_close ()
       | `KeepAlive ->
           if !req_count >= max_reqs then do_close ()
@@ -2240,7 +2254,7 @@ let handle_connection flow _addr =
       in
       if got_data then begin
         incr req_count;
-        match timed_request () with
+        match dispatch_request () with
         | `Close -> do_close ()
         | `KeepAlive ->
             if !req_count >= max_reqs then do_close ()

@@ -321,19 +321,37 @@ export class Well {
   private connectLive() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}${this.livePath}`;
-    this.liveWs = new WebSocket(url);
 
-    this.liveWs.onopen = () => {
+    // Reuse pre-opened WS from inline <head> script (avoids HTTP/1.1
+    // connection pool exhaustion when iframes load from same origin)
+    const preWs = (window as any).__wellPreWs as WebSocket | undefined;
+    delete (window as any).__wellPreWs;
+    if (preWs && (preWs.readyState === WebSocket.CONNECTING || preWs.readyState === WebSocket.OPEN)) {
+      this.liveWs = preWs;
+    } else {
+      this.liveWs = new WebSocket(url);
+    }
+
+    const onOpen = () => {
+      console.log("[well] WS open", performance.now().toFixed(0) + "ms");
       this.liveReconnectDelay = 500;
       const queryParams = this.parseQueryParams(location.search);
       this.liveViews.forEach((lv, topic) => {
         lv.el.classList.add("lv-loading");
         const joinProps = { ...lv.props, _query: queryParams };
+        console.log("[well] sending join for", topic);
         this.liveWs!.send(JSON.stringify({
           type: "join", topic, endpoint: lv.endpoint, props: joinProps,
         }));
       });
     };
+
+    // If pre-opened WS is already connected, fire onOpen immediately
+    if (this.liveWs.readyState === WebSocket.OPEN) {
+      onOpen();
+    } else {
+      this.liveWs.onopen = onOpen;
+    }
 
     this.liveWs.onmessage = (event: MessageEvent) => {
       let msg: Record<string, unknown>;
@@ -345,6 +363,7 @@ export class Well {
       switch (msg.type) {
         case "full":
         case "restored":
+          console.log("[well]", msg.type, "received for", topic, performance.now().toFixed(0) + "ms");
           if (lv) {
             const html = msg.html as string;
             lv.cachedHtml = html;
@@ -424,7 +443,8 @@ export class Well {
       }
     };
 
-    this.liveWs.onclose = () => {
+    this.liveWs.onclose = (ev) => {
+      console.log("[well] WS closed", ev.code, ev.reason, performance.now().toFixed(0) + "ms");
       this.liveViews.forEach((lv) => lv.el.classList.add("lv-loading"));
       setTimeout(() => {
         this.liveReconnectDelay = Math.min(this.liveReconnectDelay * 2, this.maxReconnectDelay);
@@ -714,8 +734,13 @@ export class Well {
       },
     };
 
-    // Discover LiveViews and connect
-    document.addEventListener("DOMContentLoaded", () => {
+    // Discover LiveViews and connect immediately.
+    // Module scripts (type="module") execute after HTML parsing, so the DOM
+    // is already complete — no need to wait for DOMContentLoaded.
+    // Connecting early avoids being blocked by iframe/resource connection pool
+    // exhaustion on the same origin.
+    const discoverAndConnect = () => {
+      console.log("[well] discover LiveViews", performance.now().toFixed(0) + "ms");
       const elements = document.querySelectorAll("live-view");
       if (elements.length === 0) return;
       elements.forEach((el) => {
@@ -725,8 +750,17 @@ export class Well {
         try { props = JSON.parse(el.getAttribute("data-props") ?? "{}"); } catch { /* ignore */ }
         this.liveViews.set(topic, { el, endpoint, props, cachedHtml: "" });
       });
+      console.log("[well] connectLive() called, liveViews:", this.liveViews.size);
       this.connectLive();
-    });
+    };
+
+    if (document.readyState === "loading") {
+      // Script loaded synchronously (non-module) — wait for DOM
+      document.addEventListener("DOMContentLoaded", discoverAndConnect);
+    } else {
+      // Module script or script at end of body — DOM already parsed
+      discoverAndConnect();
+    }
   }
 }
 
@@ -778,6 +812,7 @@ class ChannelInstance implements WellChannel {
 // ── Auto-initialize ────────────────────────────────────────────────
 // For script tag usage: automatically connect LiveViews
 
+console.log("[well] module loaded", performance.now().toFixed(0) + "ms");
 const well = new Well();
 well.connect();
 

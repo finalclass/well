@@ -46,28 +46,49 @@ Rules:
 - **All attribute values are strings** — use `value=(string_of_int n)` for numbers
 - **`_` suffix for OCaml keywords** — `class_`, `type_`, `method_`, `name_`, `for_`
 
-## HTML Attributes Reference
+## HTML Library — Complete Reference
 
-All HTML elements support these optional labeled parameters. There is no `empty` — there are no other attributes beyond this list.
+All tag functions share the same optional labeled parameters.
 
-### Available on ALL elements:
+### String attributes (default `""`):
+- **Global**: `?id`, `?class_`, `?lang`, `?title`, `?style`, `?role`, `?tabindex`, `?dir`
+- **LiveView**: `?data_lv_click`, `?data_lv_submit`, `?data_lv_change`, `?data_lv_debounce`, `?data_lv_throttle`, `?data_lv_hook`, `?data_lv_navigate`, `?data_lv_patch`
+- **Link**: `?href`, `?target`, `?rel`, `?download`
+- **Media**: `?src`, `?alt`, `?width`, `?height`, `?loading`, `?srcset`, `?sizes`, `?poster`, `?preload`, `?crossorigin`, `?integrity`
+- **Form**: `?action`, `?method_`, `?type_`, `?placeholder`, `?value`, `?name_`, `?enctype`, `?accept`, `?for_`, `?autocomplete`, `?min`, `?max`, `?step`, `?pattern`, `?maxlength`, `?minlength`, `?rows`, `?cols`, `?wrap`, `?size`, `?formaction`, `?formmethod`
+- **Meta**: `?charset`, `?content`, `?http_equiv`, `?media`
+- **Table**: `?colspan`, `?rowspan`, `?scope`
+- **Other**: `?datetime`, `?start`
+
+### Boolean attributes (default `false`):
+`?hidden`, `?disabled`, `?readonly`, `?required`, `?checked`, `?selected`, `?multiple`, `?autofocus`, `?novalidate`, `?open_`, `?defer`, `?async_`, `?autoplay`, `?controls`, `?loop`, `?muted`, `?draggable`, `?reversed`
+
+### Escape hatch — `~attrs` and `~bool_attrs`
+For `aria-*`, `data-*`, and any attribute not listed above:
+- `?attrs:(string * string) list` — extra string attributes
+- `?bool_attrs:string list` — extra boolean attributes
+
+```ocaml
+<button
+  ~attrs:[("aria-label", "Close"); ("data-tooltip", "Dismiss"); ("data-lv-ignore", "")]
+  ~bool_attrs:["aria-expanded"]
+  data_lv_click="close">"X"</button>
 ```
-?id  ?class_  ?lang
-?data_lv_click  ?data_lv_submit  ?data_lv_change
-?data_lv_debounce  ?data_lv_throttle  ?data_lv_hook
-?data_lv_navigate  ?data_lv_patch
-?action  ?method_  ?href  ?type_  ?name_  ?placeholder
-?value  ?charset  ?content  ?src  ?rel  ?enctype
-?accept  ?for_  ?multiple (bool — only boolean attr)
-```
 
-### NOT supported (do NOT use):
-`required`, `disabled`, `readonly`, `checked`, `selected`, `autofocus`, `autocomplete`, `min`, `max`, `step`, `rows`, `cols`, `width`, `height`, `target`, `alt`, `aria-*`, `role`, custom `data-*` (only `data-lv-*`)
+### Available elements (full HTML5 coverage):
+- **Document**: `html`, `head`, `title`, `body`, `base`
+- **Sections**: `main`, `header`, `footer`, `nav`, `section`, `article`, `aside`, `address`
+- **Headings**: `h1`–`h6`
+- **Grouping**: `div`, `p`, `pre`, `blockquote`, `figure`, `figcaption`, `hr`, `br`, `wbr`
+- **Lists**: `ul`, `ol`, `li`, `dl`, `dt`, `dd`
+- **Inline**: `span`, `a`, `strong`, `em`, `b`, `i`, `u`, `s`, `small`, `mark`, `del`, `ins`, `sub`, `sup`, `abbr`, `time`, `cite`, `q`, `dfn`, `var`, `samp`, `kbd`, `code`, `data`, `ruby`, `rt`, `rp`, `bdi`, `bdo`
+- **Tables**: `table`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`, `caption`, `colgroup`, `col`
+- **Forms**: `form`, `button`, `input`, `label`, `textarea`, `select`, `option`, `optgroup`, `fieldset`, `legend`, `datalist`, `output`, `progress`, `meter`
+- **Interactive**: `details`, `summary`, `dialog`
+- **Media**: `img`, `video`, `audio`, `source`, `track`, `canvas`, `picture`, `iframe`, `embed`, `object_`, `map`, `area`
+- **Metadata**: `meta`, `link`, `script`, `noscript`, `template`, `slot`
 
-### Available elements:
-- **Tags**: `html`, `head`, `title`, `body`, `div`, `span`, `p`, `h1`–`h4`, `a`, `main`, `footer`, `header`, `nav`, `section`, `form`, `button`, `input`, `label`, `ul`, `ol`, `li`, `strong`, `em`, `b`, `i`, `small`, `pre`, `code`, `blockquote`, `table`, `thead`, `tbody`, `tr`, `th`, `td`, `textarea`, `select`, `option`, `script`
-- **Void tags** (self-closing): `meta`, `link`
-- **Not available**: `img` (use `raw` if needed)
+**Void elements** (self-closing): `input`, `img`, `br`, `hr`, `meta`, `link`, `source`, `track`, `embed`, `col`, `area`, `wbr`, `base`
 
 ## Project Structure
 
@@ -191,18 +212,65 @@ Embed in a page:
 Key LiveView patterns:
 - `dynamic "key" value` — marks text that changes (diffing optimization)
 - `each ~id:"list-id" items ~key:fn render_fn` — keyed list rendering
-- `data_lv_click="MsgName"` — click sends msg to server
-- `data_lv_submit="MsgName"` — form submit
-- `data_lv_change="MsgName"` — input change (sends `[MsgName, input_value]`)
+- `data_lv_click="MsgName"` — click sends msg (no payload)
+- `data_lv_click={|["Msg","val"]|}` — click with payload (JSON array in attribute)
+- `data_lv_submit="MsgName"` — form submit (fields as object)
+- `data_lv_change="MsgName"` — input change (sends `["MsgName", input_value]`)
 - `data_lv_debounce="300"` — debounce input (ms)
 - `data_lv_navigate="/path"` — client-side navigation
 - `data_lv_hook="HookName"` — attach JS hook
 
-Variant encoding (ppx_deriving_yojson):
-- `Increment` -> `["Increment"]` (JSON array)
-- `SetValue of int` -> `["SetValue", 42]`
-- Click handler sends array format: `data_lv_click="Increment"` sends `["Increment"]`
-- Change handler sends: `data_lv_change="Search"` sends `["Search", "<input value>"]`
+### Variant encoding (ppx_deriving_yojson)
+
+- `Increment` → `["Increment"]` (JSON array, NOT string)
+- `SetValue of int` → `["SetValue", 42]`
+- `SubmitForm of { name: string; email: string }` → `["SubmitForm", {"name": "...", "email": "..."}]`
+- `` `Incremented (s, n) `` → `["Incremented", "s", 42]`
+
+### Click with payload
+
+`data_lv_click` tries `JSON.parse` on the attribute value. If it parses as an array, it's sent as-is.
+Otherwise the string is wrapped in `["string"]`.
+
+```ocaml
+(* No payload — simple variant *)
+<button data_lv_click="Increment">(txt "+")</button>
+(* sends: ["Increment"] *)
+
+(* With payload — encode JSON array in attribute *)
+<button data_lv_click=(Printf.sprintf {|["SetPage", "%s"]|} (Html.escape_html page))>
+  (txt page)
+</button>
+(* sends: ["SetPage", "cennik.html"] → decoded as: SetPage "cennik.html" *)
+
+(* Static payload *)
+<button data_lv_click={|["SelectTab", "settings"]|}>(txt "Settings")</button>
+```
+
+### Form submissions (`data_lv_submit`)
+
+The client collects all form inputs into a JSON object and sends `["MsgName", {"field1": "value1", ...}]`.
+Use **inline record variants** for form messages — ppx_deriving_yojson decodes them correctly:
+
+```ocaml
+(* CORRECT — inline record matches form JSON {"author":"...","body":"..."} *)
+type msg =
+  | Increment
+  | SubmitComment of { author: string; body: string }
+[@@deriving yojson]
+
+(* WRONG — tuple variant expects ["SubmitComment", "v1", "v2"] but form sends object *)
+type msg = SubmitComment of string * string [@@deriving yojson]
+```
+
+Input `name` attributes must match record field names:
+```ocaml
+<form data_lv_submit="SubmitComment">
+  <input type_="text" name_="author" placeholder="Name" />
+  <textarea name_="body">(txt "")</textarea>
+  <button type_="submit">(txt "Send")</button>
+</form>
+```
 
 ### LiveView View Constraints (CRITICAL)
 
@@ -596,10 +664,35 @@ it "serves homepage" (fun () ->
 );
 ```
 
+## Deployment
+
+Well apps are single-binary deployments. The scaffold generates a `.service` file for systemd.
+
+### `well build` — Production build with bundled libraries
+
+```bash
+well build    # requires: patchelf
+```
+
+Runs `dune build`, discovers all `.so` via `ldd`, copies binary + libs to `_release/`,
+runs `patchelf` (interpreter + rpath). Works on any Linux x86_64.
+
+### `well release` — Create deployable archive
+
+```bash
+well release    # runs well build, then creates .tar.gz
+```
+
+Deploy: `scp myapp.tar.gz server:/srv/myapp/ && ssh server "cd /srv/myapp && tar xzf myapp.tar.gz"`
+
+**HTTPS**: `Well.run ~domain:"myapp.example.com" ~port:443 ()` — auto Let's Encrypt, no nginx needed.
+
 ## CLI Commands
 
 ```bash
 well init <name>        # Scaffold new project
+well build              # Production build (patchelf + bundle .so → _release/)
+well release            # Build + .tar.gz archive
 well test [-w] [-f pat] # Run tests (watch, filter)
 well docs [--open]      # Generate HTML documentation
 well contract build .   # Generate from TOML contracts

@@ -42,6 +42,8 @@ let run argv =
       exit 1)
 
 let () = register Cmd_init.cmd
+let () = register Cmd_build.cmd
+let () = register Cmd_release.cmd
 let () = register Cmd_contract.cmd
 let () = register Cmd_db.cmd
 let () = register Cmd_docs.cmd
