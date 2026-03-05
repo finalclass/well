@@ -398,28 +398,47 @@ let provision ~staging domain =
   Hashtbl.clear _challenges;
   (cert_pem, domain_key)
 
+(* ── Load existing cert from disk (None if missing/broken) ─────── *)
+
+let load_existing domain =
+  let cp = cert_file domain in
+  let kp = key_file domain in
+  if Sys.file_exists cp && Sys.file_exists kp then
+    let cert_pem = read_pem cp in
+    let key_pem = read_pem kp in
+    match X509.Private_key.decode_pem key_pem with
+    | Ok domain_key -> Some (cert_pem, domain_key)
+    | Error _ -> None
+  else None
+
 (* ── Ensure certificate (load existing or provision new) ────────── *)
 
 let ensure_certificate ~staging domain =
-  let cp = cert_file domain in
-  let kp = key_file domain in
-  if Sys.file_exists cp && Sys.file_exists kp then begin
-    let cert_pem = read_pem cp in
-    let days = cert_days_remaining cert_pem in
+  let existing = load_existing domain in
+  let days = match existing with
+    | Some (cert_pem, _) -> cert_days_remaining cert_pem
+    | None -> -1
+  in
+  if days > 30 then begin
     Log.log "ACME: existing cert — %d days remaining" days;
-    if days > 30 then begin
-      let key_pem = read_pem kp in
-      match X509.Private_key.decode_pem key_pem with
-      | Ok domain_key -> (cert_pem, domain_key)
-      | Error (`Msg m) ->
-          Log.log ~level:"warn" "ACME: bad domain key (%s), re-provisioning" m;
-          provision ~staging domain
-    end else begin
-      Log.log "ACME: cert expiring soon, renewing";
-      provision ~staging domain
-    end
-  end else
-    provision ~staging domain
+    Option.get existing
+  end else begin
+    (if days >= 0 then
+       Log.log "ACME: existing cert — %d days remaining, renewing" days
+     else
+       Log.log "ACME: no existing cert, provisioning");
+    try provision ~staging domain
+    with exn ->
+      Log.log ~level:"error" "ACME: provisioning failed: %s"
+        (Printexc.to_string exn);
+      match existing with
+      | Some (cert_pem, domain_key) ->
+          Log.log ~level:"warn"
+            "ACME: using existing cert (%d days remaining) — \
+             renewal fiber will retry" days;
+          (cert_pem, domain_key)
+      | None -> raise exn
+  end
 
 (* ── Build TLS server config ────────────────────────────────────── *)
 
@@ -431,13 +450,15 @@ let build_tls_config cert_pem (domain_key : X509.Private_key.t) =
       | Ok cfg -> cfg
       | Error (`Msg m) -> failwith ("ACME: TLS config error: " ^ m)
 
-(* ── Renewal fiber (runs in background, checks daily) ───────────── *)
+(* ── Renewal fiber (runs in background) ──────────────────────────── *)
 
 let renewal_fiber ~staging domain =
   let day_seconds = 86400.0 in
+  let hour_seconds = 3600.0 in
+  let retry_delay = ref hour_seconds in  (* start at 1h, back off on failure *)
   try
     while true do
-      !_sleep_ref day_seconds;
+      !_sleep_ref !retry_delay;
       (try
         let cp = cert_file domain in
         if Sys.file_exists cp then begin
@@ -449,11 +470,24 @@ let renewal_fiber ~staging domain =
             let cert_pem, domain_key = provision ~staging domain in
             let cfg = build_tls_config cert_pem domain_key in
             _tls_config := Some cfg;
-            Log.log "ACME: TLS config hot-reloaded"
-          end
+            Log.log "ACME: TLS config hot-reloaded";
+            retry_delay := day_seconds  (* success — check daily *)
+          end else
+            retry_delay := day_seconds  (* cert OK — check daily *)
+        end else begin
+          (* No cert file — try to provision *)
+          Log.log "ACME: no cert file, provisioning";
+          let cert_pem, domain_key = provision ~staging domain in
+          let cfg = build_tls_config cert_pem domain_key in
+          _tls_config := Some cfg;
+          Log.log "ACME: TLS config hot-reloaded";
+          retry_delay := day_seconds
         end
       with exn ->
         Log.log ~level:"error" "ACME: renewal error: %s"
-          (Printexc.to_string exn))
+          (Printexc.to_string exn);
+        (* Back off: 1h → 2h → 4h → max 12h *)
+        retry_delay := Float.min (12.0 *. hour_seconds) (!retry_delay *. 2.0);
+        Log.log "ACME: next retry in %.0f minutes" (!retry_delay /. 60.0))
     done
   with _ -> ()
