@@ -18,7 +18,7 @@ let attrs_to_string attrs =
     List.filter_map
       (fun (k, v) ->
         if v = "" then None
-        else Some (Printf.sprintf " %s=\"%s\"" k v))
+        else Some (Printf.sprintf " %s=\"%s\"" k (escape_html v)))
       attrs
   in
   String.concat "" parts
@@ -45,6 +45,7 @@ let _el ~void name
     ?(data_lv_click = "") ?(data_lv_submit = "") ?(data_lv_change = "")
     ?(data_lv_debounce = "") ?(data_lv_throttle = "")
     ?(data_lv_hook = "") ?(data_lv_navigate = "") ?(data_lv_patch = "")
+    ?(data_lv_confirm = "")
     (* Link / navigation *)
     ?(href = "") ?(target = "") ?(rel = "") ?(download = "")
     (* Media *)
@@ -88,6 +89,7 @@ let _el ~void name
       ("data-lv-hook", data_lv_hook);
       ("data-lv-navigate", data_lv_navigate);
       ("data-lv-patch", data_lv_patch);
+      ("data-lv-confirm", data_lv_confirm);
       ("href", href); ("target", target); ("rel", rel);
       ("download", download);
       ("src", src); ("alt", alt); ("width", width); ("height", height);
@@ -132,7 +134,31 @@ let void_tag = _el ~void:true
 
 (* ── Document ────────────────────────────────────────────────────── *)
 
-let html = tag "html"
+let html ?id ?class_ ?lang ?title ?style ?role ?tabindex ?dir
+    ?data_lv_click ?data_lv_submit ?data_lv_change ?data_lv_debounce
+    ?data_lv_throttle ?data_lv_hook ?data_lv_navigate ?data_lv_patch
+    ?data_lv_confirm ?href ?target ?rel ?download ?src ?alt ?width ?height
+    ?loading ?srcset ?sizes ?poster ?preload ?crossorigin ?integrity
+    ?action ?method_ ?type_ ?placeholder ?value ?name_ ?enctype ?accept
+    ?for_ ?autocomplete ?min ?max ?step ?pattern ?maxlength ?minlength
+    ?rows ?cols ?wrap ?size ?formaction ?formmethod ?charset ?content
+    ?http_equiv ?media ?colspan ?rowspan ?scope ?datetime ?start
+    ?hidden ?disabled ?readonly ?required ?checked ?selected ?multiple
+    ?autofocus ?novalidate ?open_ ?defer ?async_ ?autoplay ?controls
+    ?loop ?muted ?draggable ?reversed ?attrs ?bool_attrs ?children () =
+  let (`Html inner) = tag "html" ?id ?class_ ?lang ?title ?style ?role
+    ?tabindex ?dir ?data_lv_click ?data_lv_submit ?data_lv_change
+    ?data_lv_debounce ?data_lv_throttle ?data_lv_hook ?data_lv_navigate
+    ?data_lv_patch ?data_lv_confirm ?href ?target ?rel ?download ?src ?alt
+    ?width ?height ?loading ?srcset ?sizes ?poster ?preload ?crossorigin
+    ?integrity ?action ?method_ ?type_ ?placeholder ?value ?name_ ?enctype
+    ?accept ?for_ ?autocomplete ?min ?max ?step ?pattern ?maxlength
+    ?minlength ?rows ?cols ?wrap ?size ?formaction ?formmethod ?charset
+    ?content ?http_equiv ?media ?colspan ?rowspan ?scope ?datetime ?start
+    ?hidden ?disabled ?readonly ?required ?checked ?selected ?multiple
+    ?autofocus ?novalidate ?open_ ?defer ?async_ ?autoplay ?controls
+    ?loop ?muted ?draggable ?reversed ?attrs ?bool_attrs ?children () in
+  `Html ("<!DOCTYPE html>\n" ^ inner)
 let head = tag "head"
 let title = tag "title"
 let body = tag "body"

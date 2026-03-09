@@ -186,7 +186,8 @@ that coerces to `Well.response` via `:>` in route handlers (automatic).
 **Labeled attributes** (optional, on all elements):
 - Global: `id`, `class_`, `lang`, `title`, `style`, `role`, `tabindex`, `dir`
 - LiveView: `data_lv_click`, `data_lv_submit`, `data_lv_change`,
-  `data_lv_debounce`, `data_lv_throttle`, `data_lv_hook`, `data_lv_navigate`, `data_lv_patch`
+  `data_lv_debounce`, `data_lv_throttle`, `data_lv_hook`, `data_lv_navigate`, `data_lv_patch`,
+  `data_lv_confirm`
 - Link: `href`, `target`, `rel`, `download`
 - Media: `src`, `alt`, `width`, `height`, `loading`, `srcset`, `sizes`,
   `poster`, `preload`, `crossorigin`, `integrity`

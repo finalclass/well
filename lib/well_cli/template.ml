@@ -31,7 +31,7 @@ let dune_project name =
 |}
     name
 
-let root_dune = {|(dirs :standard \ _build)
+let root_dune = {|(dirs :standard \ _build node_modules)
 |}
 
 let makefile =
