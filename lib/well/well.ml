@@ -2075,6 +2075,31 @@ let conn_release ip =
     | Some n -> Hashtbl.replace _ip_conn_store ip (n - 1)
     | None -> ())
 
+(* ── Periodic tasks (Well.every) ───────────────────────────────────── *)
+
+let _pending_every : (string * float * (unit -> unit)) list ref = ref []
+
+let every ~name ~sleep fn =
+  _pending_every := (name, sleep, fn) :: !_pending_every
+
+let _start_every ~sw =
+  let specs = List.rev !_pending_every in
+  _pending_every := [];
+  List.iter (fun (name, sleep_s, fn) ->
+    Eio.Fiber.fork ~sw (fun () ->
+      Log.log "periodic %s started (sleep %.1fs)" name sleep_s;
+      let rec loop () =
+        (try fn ()
+         with
+         | Eio.Cancel.Cancelled _ as exn -> raise exn
+         | exn ->
+           Log.log ~level:"error" "periodic %s: %s" name (Printexc.to_string exn));
+        Env.sleep sleep_s;
+        loop ()
+      in
+      loop ())
+  ) specs
+
 (* ── Shutdown state ────────────────────────────────────────────────── *)
 
 exception Shutdown
@@ -2520,9 +2545,10 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     Service._build_rpc_ctx :=
       (fun req -> rpc_ctx_to_wire (rpc_ctx req));
     Service._cast_sw := Some sw;
-    (* Start all registered services and actors *)
+    (* Start all registered services, actors, and periodic tasks *)
     Service.start_all ~sw;
     Actor.start_all ~sw;
+    _start_every ~sw;
     (* Unix socket for local IPC *)
     (try Unix.mkdir "data" 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
     Service.start_socket ~sw ~net "data/well.sock";
