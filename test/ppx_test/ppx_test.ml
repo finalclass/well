@@ -61,6 +61,10 @@ let%query mixed_query =
 let%query insert_post =
   "INSERT INTO posts (user_id, title, body) VALUES (:user_id, :title, :body?)"
 
+(* LIMIT/OFFSET — inferred as int *)
+let%query paginated_users =
+  "SELECT id, name FROM users ORDER BY id LIMIT :limit OFFSET :offset"
+
 let () =
   let db = Sqlite3.db_open ":memory:" in
   (* Create tables *)
@@ -126,5 +130,11 @@ let () =
   let mixed = Mixed_query.query db ~user_ids:[2] ~title:(Some "Hello") in
   assert (List.length mixed = 1);
   assert ((List.hd mixed).title = "Hello");
+  (* LIMIT/OFFSET — int params, no string_of_int needed *)
+  let page1 = Paginated_users.query db ~limit:1 ~offset:0 in
+  assert (List.length page1 = 1);
+  let page2 = Paginated_users.query db ~limit:1 ~offset:1 in
+  assert (List.length page2 = 1);
+  assert ((List.hd page1).name <> (List.hd page2).name);
   ignore (Sqlite3.db_close db);
   Printf.printf "All PPX tests passed!\n"

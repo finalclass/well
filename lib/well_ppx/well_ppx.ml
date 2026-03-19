@@ -86,6 +86,7 @@ type param = {
   p_name : string;
   p_kind : param_kind;
   p_column_hint : string option;  (* for IN params: the column name from SQL context *)
+  p_type_hint : string option;    (* forced type from SQL context: LIMIT/OFFSET → "int" *)
 }
 
 let extract_params sql =
@@ -105,7 +106,7 @@ let extract_params sql =
           else (Plain, !j)
         in
         if List.exists (fun p -> p.p_name = name) acc then scan end_pos acc
-        else scan end_pos ({ p_name = name; p_kind = kind; p_column_hint = None } :: acc)
+        else scan end_pos ({ p_name = name; p_kind = kind; p_column_hint = None; p_type_hint = None } :: acc)
       end
       else scan (i + 1) acc
     end
@@ -128,10 +129,23 @@ let extract_params sql =
     in_params := (param_name, col_hint) :: !in_params;
     s := Str.match_end ()
   done with Not_found -> ());
+  (* Detect LIMIT/OFFSET :param — force int type *)
+  let int_kw_re = Str.regexp_case_fold
+    {|\(LIMIT\|OFFSET\)[ \t]+:\([a-zA-Z_][a-zA-Z0-9_]*\)|} in
+  let int_params = ref [] in
+  let s2 = ref 0 in
+  (try while true do
+    let _ = Str.search_forward int_kw_re sql !s2 in
+    int_params := Str.matched_group 2 sql :: !int_params;
+    s2 := Str.match_end ()
+  done with Not_found -> ());
   List.map (fun p ->
-    match List.assoc_opt p.p_name !in_params with
-    | Some col_hint -> { p with p_kind = List; p_column_hint = Some col_hint }
-    | None -> p
+    let p = match List.assoc_opt p.p_name !in_params with
+      | Some col_hint -> { p with p_kind = List; p_column_hint = Some col_hint }
+      | None -> p
+    in
+    if List.mem p.p_name !int_params then { p with p_type_hint = Some "int" }
+    else p
   ) params
 
 (* Rewrite SQL for validation: replace IN (:param) with IN (NULL)
@@ -335,6 +349,10 @@ let validate_sql ~loc sql =
     List.map
       (fun p ->
         let ocaml_type =
+          (* Explicit type hint from SQL context (LIMIT/OFFSET → int) *)
+          match p.p_type_hint with
+          | Some t -> t
+          | None ->
           match find_column p.p_name with
           | Some col -> sqlite_to_ocaml_name col.col_sqlite_type
           | None ->
