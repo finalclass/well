@@ -57,8 +57,6 @@ let _build_rpc_ctx : (Types.request -> Yojson.Safe.t) ref =
 
 let _cast_sw : Eio.Switch.t option ref = ref None
 
-(* Forward ref — set by well.ml before start_all, provides Eio sleep *)
-let _sleep : (float -> unit) ref = ref (fun s -> Unix.sleepf s)
 
 (* Forward ref — ws rate limit (messages per second), set by well.ml *)
 let _ws_rate_limit : float ref = ref 100.0
@@ -155,7 +153,7 @@ let supervised_run ~sw spec restart =
           state.status <- Restarting { attempts = List.length state.crashes };
           Log.log ~level:"warn" "service %s restarting in %.1fs: %s"
             spec.name backoff msg;
-          !_sleep backoff;
+          Env.sleep backoff;
           run (min 30.0 (backoff *. 2.0))
         end
   in

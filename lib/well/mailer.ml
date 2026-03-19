@@ -8,13 +8,9 @@ let _fetch_ref :
   ref (fun ~method_:_ ~headers:_ ~body:_ _ ->
     failwith "Mailer._fetch_ref not wired — must be called within Well.run")
 
-(* Net + TLS for SMTP — use Obj.t to avoid value restriction with Eio.Net.t *)
-let _net_ref : Obj.t option ref = ref None
-let _set_net (net : _ Eio.Net.t) = _net_ref := Some (Obj.repr net)
-let _get_net () : _ Eio.Net.t =
-  match !_net_ref with
-  | Some n -> Obj.obj n
-  | None -> failwith "Mailer: net not available (not inside Well.run)"
+(* Net for SMTP — uses global Env *)
+let _set_net (_ : _ Eio.Net.t) = () (* deprecated, kept for compat *)
+let _get_net () = Env.net ()
 let _tls_config_fn : (unit -> Tls.Config.client) ref =
   ref (fun () -> failwith "Mailer._tls_config_fn not wired")
 

@@ -4,7 +4,6 @@
 
 (* ── Forward refs (wired by well.ml) ────────────────────────────── *)
 
-let _sleep_ref : (float -> unit) ref = ref (fun s -> Unix.sleepf s)
 
 type http_response = {
   http_status : int;
@@ -280,7 +279,7 @@ let poll_until_ready ~priv ~kid url =
   let rec loop attempt =
     if attempt >= max_attempts then
       failwith "ACME: timed out waiting for order to become ready";
-    !_sleep_ref 2.0;
+    Env.sleep 2.0;
     let resp = acme_post ~priv ~key_id:(Some kid) ~url Empty in
     let json = Yojson.Safe.from_string resp.http_body in
     let status = Yojson.Safe.Util.(json |> member "status" |> to_string) in
@@ -458,7 +457,7 @@ let renewal_fiber ~staging domain =
   let retry_delay = ref hour_seconds in  (* start at 1h, back off on failure *)
   try
     while true do
-      !_sleep_ref !retry_delay;
+      Env.sleep !retry_delay;
       (try
         let cp = cert_file domain in
         if Sys.file_exists cp then begin

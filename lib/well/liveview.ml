@@ -335,7 +335,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
   register_connection session_id conn;
   cleanup_sessions ();
   Eio.Switch.run @@ fun sw ->
-  Websocket.start_keepalive ~sw ~sleep:(!Service._sleep) ws;
+  Websocket.start_keepalive ~sw ~sleep:(Env.sleep) ws;
   let rate = !(Service._ws_rate_limit) in
   let limiter = Websocket.create_limiter ~max_tokens:rate ~refill_rate:rate () in
   let unified = Eio.Stream.create 64 in

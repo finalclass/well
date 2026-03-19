@@ -1910,33 +1910,25 @@ let _fetch_impl =
 let fetch ?(method_ = "GET") ?(headers = []) ?(body = "") url =
   !_fetch_impl ~method_ ~headers ~body url
 
-(* ── File operations (Eio) ───────────────────────────────────────── *)
+(* ── File operations (via Env) ────────────────────────────────────── *)
 
-let _write_file_impl =
-  ref (fun (_ : string) (_ : string) ->
-    failwith "Well.write_file: must be called within Well.run")
+let write_file path data =
+  Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(Env.cwd () / path) data
 
-let _read_file_impl =
-  ref (fun (_ : string) : string ->
-    failwith "Well.read_file: must be called within Well.run")
+let read_file path =
+  Eio.Path.load Eio.Path.(Env.cwd () / path)
 
-let _file_exists_impl =
-  ref (fun (_ : string) : bool ->
-    failwith "Well.file_exists: must be called within Well.run")
+let file_exists path =
+  try ignore (Eio.Path.stat ~follow:true Eio.Path.(Env.cwd () / path)); true
+  with Eio.Io _ -> false
 
-let _mkdir_impl =
-  ref (fun (_ : string) ->
-    failwith "Well.mkdir: must be called within Well.run")
+let mkdir path =
+  try Eio.Path.mkdir ~perm:0o755 Eio.Path.(Env.cwd () / path)
+  with Eio.Io _ -> ()
 
-let _list_dir_impl =
-  ref (fun (_ : string) : string list ->
-    failwith "Well.list_dir: must be called within Well.run")
-
-let write_file path data = !_write_file_impl path data
-let read_file path = !_read_file_impl path
-let file_exists path = !_file_exists_impl path
-let mkdir path = !_mkdir_impl path
-let list_dir path = !_list_dir_impl path
+let list_dir path =
+  try Eio.Path.read_dir Eio.Path.(Env.cwd () / path) |> List.sort String.compare
+  with Eio.Io _ -> []
 
 let stream_file ?(content_type = "application/octet-stream") ?(headers = []) path : response =
   stream ~content_type ~headers (fun write_chunk ->
@@ -1970,8 +1962,7 @@ let request_id (req : request) =
 
 exception Keep_alive_timeout
 
-let _with_ka_timeout : (float -> (unit -> unit) -> unit) ref =
-  ref (fun _t f -> f ())  (* default: no timeout *)
+let _with_ka_timeout t f = Env.with_timeout t f
 let _keep_alive_timeout = ref 5.0
 let _request_timeout = ref 30.0
 let keep_alive_timeout n = _keep_alive_timeout := n
@@ -2216,7 +2207,7 @@ let handle_connection flow _addr =
   let timed_http_request meth path hdrs query_params =
     let result = ref `Close in
     (try
-       !_with_ka_timeout !_request_timeout (fun () ->
+       _with_ka_timeout !_request_timeout (fun () ->
          result := handle_http_request meth path hdrs query_params)
      with
      | Keep_alive_timeout | Eio__Time.Timeout ->
@@ -2247,7 +2238,7 @@ let handle_connection flow _addr =
     end else begin
       let got_data =
         try
-          !_with_ka_timeout !_keep_alive_timeout (fun () ->
+          _with_ka_timeout !_keep_alive_timeout (fun () ->
             ignore (Eio.Buf_read.peek reader));
           true
         with _ -> false
@@ -2304,8 +2295,8 @@ let handle_tls_connection tls_cfg flow addr =
   | None -> Eio.Flow.close flow
   | Some tls -> handle_connection tls addr
 
-let load_tls_config ~env ~cert ~key =
-  let fs = Eio.Stdenv.fs env in
+let load_tls_config ~cert ~key =
+  let fs = Env.fs () in
   let cert_path = Eio.Path.(fs / cert) in
   let key_path = Eio.Path.(fs / key) in
   let certificate = X509_eio.private_of_pems ~cert:cert_path ~priv_key:key_path in
@@ -2387,12 +2378,9 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
   if acme_mode && port <> 443 then
     Log.log ~level:"warn" "~domain given but port is %d (not 443) — ACME validation may fail" port;
   Eio_main.run @@ fun env ->
-  let net = Eio.Stdenv.net env in
-  let clock = Eio.Stdenv.clock env in
-  _with_ka_timeout := (fun t f -> Eio.Time.with_timeout_exn clock t f);
-  Service._sleep := (fun seconds -> Eio.Time.sleep clock seconds);
+  Env.set env;
+  let net = Env.net () in
   Service._ws_rate_limit := !_ws_rate_limit;
-  Acme._sleep_ref := (fun seconds -> Eio.Time.sleep clock seconds);
   _fetch_impl :=
     (fun ~method_ ~headers ~body url ->
       let parsed = parse_fetch_url url in
@@ -2451,24 +2439,6 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
   Oauth._session_delete_ref := (fun sid key -> Session_store.delete ~session_id:sid ~key);
   Oauth._put_flash_ref := put_flash;
   Oauth._log_ref := (fun msg -> Log.log "%s" msg);
-  let cwd = Eio.Stdenv.cwd env in
-  _write_file_impl :=
-    (fun path data ->
-      Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(cwd / path) data);
-  _read_file_impl :=
-    (fun path -> Eio.Path.load Eio.Path.(cwd / path));
-  _file_exists_impl :=
-    (fun path ->
-      try ignore (Eio.Path.stat ~follow:true Eio.Path.(cwd / path)); true
-      with Eio.Io _ -> false);
-  _mkdir_impl :=
-    (fun path ->
-      try Eio.Path.mkdir ~perm:0o755 Eio.Path.(cwd / path)
-      with Eio.Io _ -> ());
-  _list_dir_impl :=
-    (fun path ->
-      try Eio.Path.read_dir Eio.Path.(cwd / path) |> List.sort String.compare
-      with Eio.Io _ -> []);
   Log.init ();
   let start_server () =
     Eio.Switch.run @@ fun sw ->
@@ -2562,7 +2532,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     (* Session + CSRF auto-cleanup fiber *)
     Eio.Fiber.fork ~sw (fun () ->
       let rec cleanup_loop () =
-        Eio.Time.sleep clock 3600.0;
+        Env.sleep 3600.0;
         (try Session_store.cleanup ~max_age_days:7 () with _ -> ());
         (try Liveview.cleanup_sessions () with _ -> ());
         (try Liveview.cleanup_uploads () with _ -> ());
@@ -2633,7 +2603,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
           None
       | None ->
           if tls_enabled then
-            Some (load_tls_config ~env
+            Some (load_tls_config
                     ~cert:(Option.get cert) ~key:(Option.get key))
           else None
     in
@@ -2685,7 +2655,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
       if workers > 0 then begin
         let pool =
           Eio.Executor_pool.create ~sw ~domain_count:workers
-            (Eio.Stdenv.domain_mgr env)
+            (Env.domain_mgr ())
         in
         let rec accept_loop () =
           let flow, addr = Eio.Net.accept ~sw socket in
@@ -2712,7 +2682,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     (* Main fiber: await shutdown signal *)
     Eio.Promise.await shutdown_p;
     Log.log "shutting down...";
-    Eio.Time.sleep clock 0.5;
+    Env.sleep 0.5;
     Db.close_well_db ();
     Log.log "stopped.";
     Log.close ();
@@ -2735,10 +2705,8 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
   Random.self_init ();
   let test_port = if port > 0 then port else 40000 + Random.int 20000 in
   Eio_main.run @@ fun env ->
-  let net = Eio.Stdenv.net env in
-  let clock = Eio.Stdenv.clock env in
-  _with_ka_timeout := (fun t f -> Eio.Time.with_timeout_exn clock t f);
-  Service._sleep := (fun seconds -> Eio.Time.sleep clock seconds);
+  Env.set env;
+  let net = Env.net () in
   _fetch_impl :=
     (fun ~method_ ~headers ~body url ->
       let parsed = parse_fetch_url url in
@@ -2789,24 +2757,6 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
   Oauth._session_delete_ref := (fun sid key -> Session_store.delete ~session_id:sid ~key);
   Oauth._put_flash_ref := put_flash;
   Oauth._log_ref := (fun msg -> Log.log "%s" msg);
-  let cwd = Eio.Stdenv.cwd env in
-  _write_file_impl :=
-    (fun path data ->
-      Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(cwd / path) data);
-  _read_file_impl :=
-    (fun path -> Eio.Path.load Eio.Path.(cwd / path));
-  _file_exists_impl :=
-    (fun path ->
-      try ignore (Eio.Path.stat ~follow:true Eio.Path.(cwd / path)); true
-      with Eio.Io _ -> false);
-  _mkdir_impl :=
-    (fun path ->
-      try Eio.Path.mkdir ~perm:0o755 Eio.Path.(cwd / path)
-      with Eio.Io _ -> ());
-  _list_dir_impl :=
-    (fun path ->
-      try Eio.Path.read_dir Eio.Path.(cwd / path) |> List.sort String.compare
-      with Eio.Io _ -> []);
   Mirage_crypto_rng_unix.use_default ();
   Eio.Switch.run @@ fun sw ->
   Service._register_post_json :=
@@ -2977,6 +2927,7 @@ let () = Liveview._resolve_route := (fun req url ->
 
 (* ── Re-export submodules ─────────────────────────────────────────── *)
 
+module Env = Env
 module Log = Log
 module Acme = Acme
 module Cap_hook = Cap_hook
@@ -3006,6 +2957,15 @@ let url_encode str =
   Buffer.contents buf
 
 (* ── Typed pub/sub ────────────────────────────────────────────────── *)
+
+(* ── Env convenience re-exports ───────────────────────────────────── *)
+
+let env = Env.get
+let net = Env.net
+let clock = Env.clock
+let cwd = Env.cwd
+let fs = Env.fs
+let sleep = Env.sleep
 
 type 'a topic = 'a Message_bus.topic
 type 'a event = 'a Message_bus.typed_event = { id : int; value : 'a; created_at : float }
@@ -3054,7 +3014,7 @@ let request ~cmd ~reply ~key ?(timeout = 5.0) value =
         Message_bus.unsubscribe sub_id;
         raise Request_timeout
       end;
-      !Service._sleep 0.005;
+      Env.sleep 0.005;
       wait ()
   in
   wait ()
