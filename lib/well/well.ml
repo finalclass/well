@@ -2460,8 +2460,9 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     Service._build_rpc_ctx :=
       (fun req -> rpc_ctx_to_wire (rpc_ctx req));
     Service._cast_sw := Some sw;
-    (* Start all registered service actors *)
+    (* Start all registered services and actors *)
     Service.start_all ~sw;
+    Actor.start_all ~sw;
     (* Unix socket for local IPC *)
     (try Unix.mkdir "data" 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
     Service.start_socket ~sw ~net "data/well.sock";
@@ -2470,11 +2471,11 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     Channel.ensure_ws_route ();
     (* Health endpoint *)
     get "/health" (fun _req ->
-      let statuses = Service.health () in
+      let statuses = Service.full_health () in
       `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
     (* Readiness probe *)
     get "/ready" (fun _req ->
-      let service_statuses = Service.health () in
+      let service_statuses = Service.full_health () in
       let all_running = List.for_all (fun (_, st) -> st = "running") service_statuses in
       let db_ok = Session_store.check () in
       if all_running && db_ok then
@@ -2770,13 +2771,14 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
     (fun req -> rpc_ctx_to_wire (rpc_ctx req));
   Service._cast_sw := Some sw;
   Service.start_all ~sw;
+  Actor.start_all ~sw;
   Message_bus.init ();
   Channel.ensure_ws_route ();
   get "/health" (fun _req ->
-    let statuses = Service.health () in
+    let statuses = Service.full_health () in
     `Assoc (List.map (fun (name, st) -> (name, `String st)) statuses));
   get "/ready" (fun _req ->
-    let service_statuses = Service.health () in
+    let service_statuses = Service.full_health () in
     let all_running = List.for_all (fun (_, st) -> st = "running") service_statuses in
     let db_ok = Session_store.check () in
     if all_running && db_ok then
@@ -2936,6 +2938,7 @@ module Form = Form
 module Websocket = Websocket
 module LiveView = Liveview
 module Service = Service
+module Actor = Actor
 module MessageBus = Message_bus
 module Channel = Channel
 module Auth = Auth

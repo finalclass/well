@@ -273,12 +273,10 @@ let generate_impl_sig ~local_module service msgs =
   let buf = Buffer.create 256 in
   let p fmt = Printf.bprintf buf fmt in
   p "module type IMPL = sig\n";
-  p "  type state\n";
-  p "  val init : unit -> state\n";
   List.iter (fun (rpc : rpc) ->
     let req_type = resolve_msg_type ~local_module msgs rpc.request_msg in
     let resp_type = resolve_msg_type ~local_module msgs rpc.response_msg in
-    p "  val %s : state -> Well.rpc_ctx -> %s -> %s\n" (snake_case rpc.name) req_type resp_type
+    p "  val %s : Well.rpc_ctx -> %s -> %s\n" (snake_case rpc.name) req_type resp_type
   ) service.rpcs;
   p "end\n";
   Buffer.contents buf
@@ -289,8 +287,7 @@ let generate_make_spec ~local_module:_ cm service =
   let buf = Buffer.create 512 in
   let p fmt = Printf.bprintf buf fmt in
 
-  p "let make_spec (type s) (module I : IMPL with type state = s) : Well.Service.spec =\n";
-  p "  let state = ref (I.init ()) in\n";
+  p "let make_spec (module I : IMPL) : Well.Service.spec =\n";
   p "  { name = \"%s\"\n" cm.name;
   p "  ; rpcs = [\n";
   List.iter (fun (rpc : rpc) ->
@@ -320,7 +317,7 @@ let generate_make_spec ~local_module:_ cm service =
   p "      match rpc_name with\n";
   List.iter (fun (rpc : rpc) ->
     p "      | \"%s\" ->\n" rpc.name;
-    p "          %s.to_wire (I.%s !state ctx (%s.of_wire payload))\n"
+    p "          %s.to_wire (I.%s ctx (%s.of_wire payload))\n"
       (ocaml_msg_path rpc.response_msg) (snake_case rpc.name) (ocaml_msg_path rpc.request_msg)
   ) service.rpcs;
   p "      | _ -> failwith (\"Unknown RPC: \" ^ rpc_name))\n";

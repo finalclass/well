@@ -1,4 +1,4 @@
-(* Service — In-process actor system with mailbox and crash isolation *)
+(* Service — Concurrent, stateless RPC dispatch with fiber-per-request *)
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
@@ -12,37 +12,17 @@ type spec = {
   rpcs : rpc_info list;
 }
 
-type restart = Permanent | Transient | Temporary
+(* ── Unified dispatch table ───────────────────────────────────────── *)
+(* Both Service (direct) and Actor (via mailbox) register here.
+   HTTP routes, socket, health — all dispatch through this table. *)
 
-type child_status =
-  | Running
-  | Restarting of { attempts : int }
-  | Down of string
-
-type mailbox_msg =
-  | Call of {
-      rpc : string;
-      ctx : Yojson.Safe.t;
-      payload : Yojson.Safe.t;
-      reply : Yojson.Safe.t Eio.Promise.u;
-    }
-  | Stop
-
-type actor = {
-  spec : spec;
-  mailbox : mailbox_msg Eio.Stream.t;
+type handler_entry = {
+  dispatch : string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t;
+  rpcs : rpc_info list;
+  kind : [ `Service | `Actor ];
 }
 
-type supervised = {
-  mutable status : child_status;
-  mutable crashes : float list;
-}
-
-(* ── State ─────────────────────────────────────────────────────────── *)
-
-let pending_specs : (spec * restart) list ref = ref []
-let actors : (string, actor) Hashtbl.t = Hashtbl.create 8
-let supervised_states : (string, supervised) Hashtbl.t = Hashtbl.create 8
+let handlers : (string, handler_entry) Hashtbl.t = Hashtbl.create 8
 let exposed_services : string list ref = ref []
 
 (* Forward ref — set by well.ml
@@ -57,55 +37,38 @@ let _build_rpc_ctx : (Types.request -> Yojson.Safe.t) ref =
 
 let _cast_sw : Eio.Switch.t option ref = ref None
 
-
 (* Forward ref — ws rate limit (messages per second), set by well.ml *)
 let _ws_rate_limit : float ref = ref 100.0
 
 (* ── Registration (at module init time) ──────────────────────────── *)
 
-let register ?(restart = Permanent) spec =
-  pending_specs := (spec, restart) :: !pending_specs
+let pending_specs : spec list ref = ref []
+
+let register spec =
+  pending_specs := spec :: !pending_specs
 
 let expose name =
   exposed_services := name :: !exposed_services
 
-(* ── Actor loop ──────────────────────────────────────────────────── *)
+(* Register a handler entry — used by both Service and Actor *)
+let register_handler name entry =
+  Hashtbl.replace handlers name entry
 
-let actor_loop actor =
-  let rec loop () =
-    match Eio.Stream.take actor.mailbox with
-    | Stop -> ()
-    | Call { rpc; ctx; payload; reply } ->
-      let result =
-        try actor.spec.handler rpc ctx payload
-        with exn ->
-          Log.log ~level:"error" "service %s rpc %s error: %s"
-            actor.spec.name rpc (Printexc.to_string exn);
-          `Assoc [("error", `String (Printexc.to_string exn))]
-      in
-      Eio.Promise.resolve reply result;
-      loop ()
-  in
-  loop ()
-
-(* ── Dispatch function (wired to convenience fns via set_ref) ─────── *)
+(* ── Dispatch ─────────────────────────────────────────────────────── *)
 
 let dispatch_by_name name rpc ctx payload =
-  match Hashtbl.find_opt actors name with
-  | None -> `Assoc [("error", `String (name ^ " is down"))]
-  | Some actor ->
-      let promise, resolver = Eio.Promise.create () in
-      Eio.Stream.add actor.mailbox (Call { rpc; ctx; payload; reply = resolver });
-      Eio.Promise.await promise
+  match Hashtbl.find_opt handlers name with
+  | None -> `Assoc [("error", `String (name ^ " is not registered"))]
+  | Some entry -> entry.dispatch rpc ctx payload
 
 (* ── Expose service over HTTP ─────────────────────────────────────── *)
 
 let expose_http_routes () =
   List.iter (fun name ->
-    match Hashtbl.find_opt actors name with
+    match Hashtbl.find_opt handlers name with
     | None ->
       Log.log ~level:"warn" "cannot expose service '%s' — not registered" name
-    | Some actor ->
+    | Some entry ->
       List.iter (fun (rpc : rpc_info) ->
         let path = Printf.sprintf "/rpc/%s/%s" name rpc.rname in
         !_register_post_json path (fun req ->
@@ -116,59 +79,27 @@ let expose_http_routes () =
           in
           let result = dispatch_by_name name rpc.rname ctx payload in
           Yojson.Safe.to_string result)
-      ) actor.spec.rpcs
+      ) entry.rpcs
   ) !exposed_services
 
-(* ── Supervised actor fiber ────────────────────────────────────────── *)
+(* ── Start all services (called by Well.run) ──────────────────────── *)
 
-let supervised_run ~sw spec restart =
-  let state = { status = Running; crashes = [] } in
-  let max_crashes = 5 in
-  let crash_window = 60.0 in
-  let rec run backoff =
-    let mailbox = Eio.Stream.create 64 in
-    let actor = { spec; mailbox } in
-    Hashtbl.replace actors spec.name actor;
-    state.status <- Running;
-    let result =
-      try actor_loop actor; `Normal
-      with
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | exn -> `Crashed (Printexc.to_string exn)
-    in
-    Hashtbl.remove actors spec.name;
-    match result, restart with
-    | `Normal, Permanent -> run 1.0
-    | `Normal, _ -> ()
-    | `Crashed _, Temporary ->
-        state.status <- Down "crashed (temporary)"
-    | `Crashed msg, (Permanent | Transient) ->
-        let now = Unix.gettimeofday () in
-        state.crashes <- now :: List.filter (fun t -> now -. t < crash_window) state.crashes;
-        if List.length state.crashes > max_crashes then begin
-          state.status <- Down (Printf.sprintf "circuit breaker: %d crashes in %.0fs"
-            (List.length state.crashes) crash_window);
-          Log.log ~level:"error" "service %s circuit breaker tripped" spec.name
-        end else begin
-          state.status <- Restarting { attempts = List.length state.crashes };
-          Log.log ~level:"warn" "service %s restarting in %.1fs: %s"
-            spec.name backoff msg;
-          Env.sleep backoff;
-          run (min 30.0 (backoff *. 2.0))
-        end
-  in
-  Eio.Fiber.fork ~sw (fun () -> run 1.0);
-  state
-
-(* ── Start all actors (called by Well.run) ────────────────────────── *)
-
-let start_all ~sw =
+let start_all ~sw:_ =
   let specs = List.rev !pending_specs in
   pending_specs := [];
-  List.iter (fun (spec, restart) ->
-    spec.set_ref (dispatch_by_name spec.name);
-    let state = supervised_run ~sw spec restart in
-    Hashtbl.replace supervised_states spec.name state
+  List.iter (fun spec ->
+    let entry = {
+      dispatch = (fun rpc ctx payload ->
+        try spec.handler rpc ctx payload
+        with exn ->
+          Log.log ~level:"error" "service %s rpc %s error: %s"
+            spec.name rpc (Printexc.to_string exn);
+          `Assoc [("error", `String (Printexc.to_string exn))]);
+      rpcs = spec.rpcs;
+      kind = `Service;
+    } in
+    register_handler spec.name entry;
+    spec.set_ref (dispatch_by_name spec.name)
   ) specs;
   expose_http_routes ()
 
@@ -176,29 +107,41 @@ let start_all ~sw =
 
 let health () =
   let result = ref [] in
-  Hashtbl.iter (fun name state ->
-    let st = match state.status with
-      | Running -> "running"
-      | Restarting { attempts } -> Printf.sprintf "restarting (attempt %d)" attempts
-      | Down reason -> "down: " ^ reason
+  Hashtbl.iter (fun name entry ->
+    let st = match entry.kind with
+      | `Service -> "running"
+      | `Actor -> "running"  (* Actor overrides via actor_health *)
     in
     result := (name, st) :: !result
-  ) supervised_states;
+  ) handlers;
   List.sort (fun (a, _) (b, _) -> String.compare a b) !result
+
+(* Actor can override health entries *)
+let _actor_health : (unit -> (string * string) list) ref = ref (fun () -> [])
+
+let full_health () =
+  let base = health () in
+  let actor_statuses = !_actor_health () in
+  (* Override base health with actor-specific statuses *)
+  List.map (fun (name, base_st) ->
+    match List.assoc_opt name actor_statuses with
+    | Some st -> (name, st)
+    | None -> (name, base_st)
+  ) base
 
 (* ── Unix socket transport (local IPC) ────────────────────────────── *)
 
 let list_services () =
   let result = ref [] in
-  Hashtbl.iter (fun name actor ->
-    let rpc_names = List.map (fun (r : rpc_info) -> r.rname) actor.spec.rpcs in
+  Hashtbl.iter (fun name entry ->
+    let rpc_names = List.map (fun (r : rpc_info) -> r.rname) entry.rpcs in
     result := (name, rpc_names) :: !result
-  ) actors;
+  ) handlers;
   List.sort (fun (a, _) (b, _) -> String.compare a b) !result
 
 let describe_services () =
   let result = ref [] in
-  Hashtbl.iter (fun name actor ->
+  Hashtbl.iter (fun name entry ->
     let rpcs_json = `Assoc (List.map (fun (rpc : rpc_info) ->
       let param_to_json p =
         `Assoc [("name", `String p.pname);
@@ -209,9 +152,9 @@ let describe_services () =
         ("params", `List (List.map param_to_json rpc.params));
         ("returns", `List (List.map param_to_json rpc.returns));
         ("returns_name", `String rpc.returns_name)])
-    ) actor.spec.rpcs) in
+    ) entry.rpcs) in
     result := (name, rpcs_json) :: !result
-  ) actors;
+  ) handlers;
   `Assoc (List.sort (fun (a, _) (b, _) -> String.compare a b) !result)
 
 let handle_socket_line line =
@@ -264,7 +207,7 @@ let handle_socket_line line =
       ) services) in
       Yojson.Safe.to_string (`Assoc [("result", result)])
     else if service = "_system" && rpc = "health" then
-      let statuses = health () in
+      let statuses = full_health () in
       let result = `Assoc (List.map (fun (name, st) ->
         (name, `String st)
       ) statuses) in

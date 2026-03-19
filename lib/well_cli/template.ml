@@ -380,29 +380,26 @@ let note_of_row (r : All_notes.row) : Note_access.Note.t =
 let note_of_find (r : Find_note.row) : Note_access.Note.t =
   { id = r.id; title = r.title; body = r.body }
 
-module Impl : Note_access.IMPL with type state = unit = struct
-  type state = unit
-  let init () = ()
-
-  let list () _ctx (_req : Note_access.ListReq.t) =
+module Impl : Note_access.IMPL = struct
+  let list _ctx (_req : Note_access.ListReq.t) =
     let db = get_db () in
     let rows = All_notes.query db in
     let notes = List.map note_of_row rows in
     Note_access.NoteList.make ~notes ()
 
-  let get () _ctx (req : Note_access.IdReq.t) =
+  let get _ctx (req : Note_access.IdReq.t) =
     let db = get_db () in
     match Find_note.query db ~id:req.id with
     | r :: _ -> note_of_find r
     | [] -> failwith "Note not found"
 
-  let create () _ctx (req : Note_access.CreateReq.t) =
+  let create _ctx (req : Note_access.CreateReq.t) =
     let db = get_db () in
     Insert_note.exec db ~title:req.title ~body:req.body;
     let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
     Note_access.Note.make ~id ~title:req.title ~body:req.body ()
 
-  let delete () _ctx (req : Note_access.IdReq.t) =
+  let delete _ctx (req : Note_access.IdReq.t) =
     let db = get_db () in
     Delete_note.exec db ~id:req.id;
     Note_access.Ok.make ~ok:true ()
@@ -1822,29 +1819,26 @@ end
 let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None
 
 module type IMPL = sig
-  type state
-  val init : unit -> state
-  val list : state -> Well.rpc_ctx -> ListReq.t -> NoteList.t
-  val get : state -> Well.rpc_ctx -> IdReq.t -> Note.t
-  val create : state -> Well.rpc_ctx -> CreateReq.t -> Note.t
-  val delete : state -> Well.rpc_ctx -> IdReq.t -> Ok.t
+  val list : Well.rpc_ctx -> ListReq.t -> NoteList.t
+  val get : Well.rpc_ctx -> IdReq.t -> Note.t
+  val create : Well.rpc_ctx -> CreateReq.t -> Note.t
+  val delete : Well.rpc_ctx -> IdReq.t -> Ok.t
 end
 
-let make_spec (type s) (module I : IMPL with type state = s) : Well.Service.spec =
-  let state = ref (I.init ()) in
+let make_spec (module I : IMPL) : Well.Service.spec =
   { name = "NoteAccess"
   ; rpcs = []
   ; handler = (fun rpc_name ctx_json payload ->
       let ctx = Well.rpc_ctx_of_wire ctx_json in
       match rpc_name with
       | "list" ->
-          NoteList.to_wire (I.list !state ctx (ListReq.of_wire payload))
+          NoteList.to_wire (I.list ctx (ListReq.of_wire payload))
       | "get" ->
-          Note.to_wire (I.get !state ctx (IdReq.of_wire payload))
+          Note.to_wire (I.get ctx (IdReq.of_wire payload))
       | "create" ->
-          Note.to_wire (I.create !state ctx (CreateReq.of_wire payload))
+          Note.to_wire (I.create ctx (CreateReq.of_wire payload))
       | "delete" ->
-          Ok.to_wire (I.delete !state ctx (IdReq.of_wire payload))
+          Ok.to_wire (I.delete ctx (IdReq.of_wire payload))
       | _ -> failwith ("Unknown RPC: " ^ rpc_name))
   ; set_ref = (fun f -> _service_ref := Some f)
   }
@@ -2054,32 +2048,29 @@ end
 let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None
 
 module type IMPL = sig
-  type state
-  val init : unit -> state
-  val list : state -> Well.rpc_ctx -> ListReq.t -> TaskList.t
-  val get : state -> Well.rpc_ctx -> IdReq.t -> Task.t
-  val create : state -> Well.rpc_ctx -> CreateReq.t -> Task.t
-  val update : state -> Well.rpc_ctx -> UpdateReq.t -> Task.t
-  val delete : state -> Well.rpc_ctx -> IdReq.t -> Ok.t
+  val list : Well.rpc_ctx -> ListReq.t -> TaskList.t
+  val get : Well.rpc_ctx -> IdReq.t -> Task.t
+  val create : Well.rpc_ctx -> CreateReq.t -> Task.t
+  val update : Well.rpc_ctx -> UpdateReq.t -> Task.t
+  val delete : Well.rpc_ctx -> IdReq.t -> Ok.t
 end
 
-let make_spec (type s) (module I : IMPL with type state = s) : Well.Service.spec =
-  let state = ref (I.init ()) in
+let make_spec (module I : IMPL) : Well.Service.spec =
   { name = "TaskAccess"
   ; rpcs = []
   ; handler = (fun rpc_name ctx_json payload ->
       let ctx = Well.rpc_ctx_of_wire ctx_json in
       match rpc_name with
       | "list" ->
-          TaskList.to_wire (I.list !state ctx (ListReq.of_wire payload))
+          TaskList.to_wire (I.list ctx (ListReq.of_wire payload))
       | "get" ->
-          Task.to_wire (I.get !state ctx (IdReq.of_wire payload))
+          Task.to_wire (I.get ctx (IdReq.of_wire payload))
       | "create" ->
-          Task.to_wire (I.create !state ctx (CreateReq.of_wire payload))
+          Task.to_wire (I.create ctx (CreateReq.of_wire payload))
       | "update" ->
-          Task.to_wire (I.update !state ctx (UpdateReq.of_wire payload))
+          Task.to_wire (I.update ctx (UpdateReq.of_wire payload))
       | "delete" ->
-          Ok.to_wire (I.delete !state ctx (IdReq.of_wire payload))
+          Ok.to_wire (I.delete ctx (IdReq.of_wire payload))
       | _ -> failwith ("Unknown RPC: " ^ rpc_name))
   ; set_ref = (fun f -> _service_ref := Some f)
   }
@@ -2263,29 +2254,26 @@ end
 let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None
 
 module type IMPL = sig
-  type state
-  val init : unit -> state
-  val list : state -> Well.rpc_ctx -> Task_access.ListReq.t -> TaskListRes.t
-  val add : state -> Well.rpc_ctx -> AddReq.t -> TaskRes.t
-  val toggle : state -> Well.rpc_ctx -> ToggleReq.t -> TaskRes.t
-  val delete : state -> Well.rpc_ctx -> DeleteReq.t -> StatusRes.t
+  val list : Well.rpc_ctx -> Task_access.ListReq.t -> TaskListRes.t
+  val add : Well.rpc_ctx -> AddReq.t -> TaskRes.t
+  val toggle : Well.rpc_ctx -> ToggleReq.t -> TaskRes.t
+  val delete : Well.rpc_ctx -> DeleteReq.t -> StatusRes.t
 end
 
-let make_spec (type s) (module I : IMPL with type state = s) : Well.Service.spec =
-  let state = ref (I.init ()) in
+let make_spec (module I : IMPL) : Well.Service.spec =
   { name = "TaskManager"
   ; rpcs = []
   ; handler = (fun rpc_name ctx_json payload ->
       let ctx = Well.rpc_ctx_of_wire ctx_json in
       match rpc_name with
       | "list" ->
-          TaskListRes.to_wire (I.list !state ctx (Task_access.ListReq.of_wire payload))
+          TaskListRes.to_wire (I.list ctx (Task_access.ListReq.of_wire payload))
       | "add" ->
-          TaskRes.to_wire (I.add !state ctx (AddReq.of_wire payload))
+          TaskRes.to_wire (I.add ctx (AddReq.of_wire payload))
       | "toggle" ->
-          TaskRes.to_wire (I.toggle !state ctx (ToggleReq.of_wire payload))
+          TaskRes.to_wire (I.toggle ctx (ToggleReq.of_wire payload))
       | "delete" ->
-          StatusRes.to_wire (I.delete !state ctx (DeleteReq.of_wire payload))
+          StatusRes.to_wire (I.delete ctx (DeleteReq.of_wire payload))
       | _ -> failwith ("Unknown RPC: " ^ rpc_name))
   ; set_ref = (fun f -> _service_ref := Some f)
   }
@@ -2388,11 +2376,8 @@ let task_of_row (r : All_tasks.row) : Task_access.Task.t =
 let task_of_find (r : Find_task.row) : Task_access.Task.t =
   { id = r.id; title = r.title; completed = r.completed <> 0 }
 
-module Impl : Task_access.IMPL with type state = unit = struct
-  type state = unit
-  let init () = ()
-
-  let list () _ctx (req : Task_access.ListReq.t) =
+module Impl : Task_access.IMPL = struct
+  let list _ctx (req : Task_access.ListReq.t) =
     let db = get_db () in
     let rows = All_tasks.query db in
     let tasks = List.map task_of_row rows in
@@ -2403,19 +2388,19 @@ module Impl : Task_access.IMPL with type state = unit = struct
     in
     Task_access.TaskList.make ~tasks ()
 
-  let get () _ctx (req : Task_access.IdReq.t) =
+  let get _ctx (req : Task_access.IdReq.t) =
     let db = get_db () in
     match Find_task.query db ~id:req.id with
     | r :: _ -> task_of_find r
     | [] -> failwith "Task not found"
 
-  let create () _ctx (req : Task_access.CreateReq.t) =
+  let create _ctx (req : Task_access.CreateReq.t) =
     let db = get_db () in
     Insert_task.exec db ~title:req.title;
     let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
     Task_access.Task.make ~id ~title:req.title ~completed:false ()
 
-  let update () _ctx (req : Task_access.UpdateReq.t) =
+  let update _ctx (req : Task_access.UpdateReq.t) =
     let db = get_db () in
     (match req.title with
      | Some t -> Update_title.exec db ~title:t ~id:req.id
@@ -2427,7 +2412,7 @@ module Impl : Task_access.IMPL with type state = unit = struct
     | r :: _ -> task_of_find r
     | [] -> failwith "Task not found"
 
-  let delete () _ctx (req : Task_access.IdReq.t) =
+  let delete _ctx (req : Task_access.IdReq.t) =
     let db = get_db () in
     Delete_task.exec db ~id:req.id;
     Task_access.Ok.make ~ok:true ()
@@ -2440,26 +2425,23 @@ let task_manager_impl _name =
   {|(* TaskManager implementation — business logic *)
 (* IDesign: Manager service — delegates to Access *)
 
-module Impl : Task_manager.IMPL with type state = unit = struct
-  type state = unit
-  let init () = ()
-
-  let list () ctx (req : Task_access.ListReq.t) =
+module Impl : Task_manager.IMPL = struct
+  let list ctx (req : Task_access.ListReq.t) =
     let result = Task_access.list ~ctx ~limit:req.limit in
     Task_manager.TaskListRes.make ~tasks:result.tasks ()
 
-  let add () ctx (req : Task_manager.AddReq.t) =
+  let add ctx (req : Task_manager.AddReq.t) =
     if String.trim req.title = "" then failwith "Title cannot be empty";
     let task = Task_access.create ~ctx ~title:req.title in
     Task_manager.TaskRes.make ~task ()
 
-  let toggle () ctx (req : Task_manager.ToggleReq.t) =
+  let toggle ctx (req : Task_manager.ToggleReq.t) =
     let current = Task_access.get ~ctx ~id:req.id in
     ignore (Task_access.update ~ctx ~id:req.id ~completed:(not current.completed) ());
     let updated = Task_access.get ~ctx ~id:req.id in
     Task_manager.TaskRes.make ~task:updated ()
 
-  let delete () ctx (req : Task_manager.DeleteReq.t) =
+  let delete ctx (req : Task_manager.DeleteReq.t) =
     ignore (Task_access.delete ~ctx ~id:req.id);
     Task_manager.StatusRes.make ~ok:true ()
 end
@@ -4250,14 +4232,11 @@ Generate: `well contract build .`
 
 Implement:
 ```ocaml
-module Impl : Task_access.IMPL with type state = unit = struct
-  type state = unit
-  let init () = ()
-
-  let list () _ctx (req : Task_access.ListReq.t) =
+module Impl : Task_access.IMPL = struct
+  let list _ctx (req : Task_access.ListReq.t) =
     Task_access.TaskList.make ~tasks ()
 
-  let create () _ctx (req : Task_access.CreateReq.t) =
+  let create _ctx (req : Task_access.CreateReq.t) =
     Task_access.Task.make ~id ~title:req.title ~completed:false ()
 end
 
@@ -4273,12 +4252,13 @@ Well.Service.expose "TaskAccess";  (* creates /rpc/TaskAccess/* HTTP routes *)
 ### Service Module
 
 ```ocaml
-Well.Service.register : ?restart:restart -> spec -> unit
+Well.Service.register : spec -> unit  (* concurrent, stateless *)
+Well.Actor.register : ?restart:restart -> spec -> unit  (* sequential, stateful *)
 (* restart: Permanent (always restart) | Transient (restart on error) | Temporary (no restart) *)
 
 Well.Service.expose : string -> unit  (* expose as HTTP RPC *)
 Well.Service.list_services : unit -> (string * string list) list
-Well.Service.health : unit -> (string * string) list
+Well.Service.full_health : unit -> (string * string) list
 Well.Service.cast : (unit -> unit) -> unit  (* fire-and-forget async *)
 ```
 
