@@ -3764,6 +3764,49 @@ Well.Db.rollback : string -> unit              (* restore from .bak *)
 Well.Db.data_dir : string ref  (* default "data", set before create_pool *)
 ```
 
+### Dynamic SQL Helpers
+
+When `let%query` PPX can't be used (dynamic WHERE, conditional ORDER BY, etc.),
+use these helpers instead of raw Sqlite3:
+
+```ocaml
+(* Params: Null | Int n | Float f | Text s | Blob s *)
+
+(* SELECT → list with mapper *)
+Well.Db.query db "SELECT id, name FROM users WHERE age > ?"
+  [Int 25]
+  (fun r -> (r.int 0, r.text 1))
+(* : (int * string) list *)
+
+(* SELECT → option (0 or 1 row) *)
+Well.Db.query_one db "SELECT id, name FROM users WHERE id = ?"
+  [Int user_id]
+  (fun r -> (r.int 0, r.text 1))
+(* : (int * string) option *)
+
+(* INSERT/UPDATE/DELETE → affected rows *)
+Well.Db.exec db "DELETE FROM users WHERE active = ?" [Int 0]
+(* : int *)
+
+(* SELECT → Yojson.Safe.t list (works with [@@deriving yojson]) *)
+Well.Db.fetch_yojson db "SELECT id, name FROM users" []
+(* : Yojson.Safe.t list — each row is `Assoc [("id", `Int ...); ...] *)
+```
+
+Row accessors: `r.int`, `r.float`, `r.text`, `r.bool` — and nullable variants
+`r.int_opt`, `r.float_opt`, `r.text_opt`, `r.bool_opt`.
+
+Dynamic query example:
+```ocaml
+let search ?status ~order db =
+  let where, params = match status with
+    | Some s -> "WHERE status = ?", [Well.Db.Text s]
+    | None -> "", []
+  in
+  let sql = Printf.sprintf "SELECT id, title FROM tasks %s ORDER BY %s" where order in
+  Well.Db.query db sql params (fun r -> (r.int 0, r.text 1))
+```
+
 ---
 
 ## Typed Pub/Sub (Well.MessageBus)

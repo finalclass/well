@@ -335,6 +335,103 @@ let with_well_db f =
   let idx = Atomic.fetch_and_add _well_next 1 mod _well_size in
   f conns.(idx)
 
+(* ── Query helpers ────────────────────────────────────────────────── *)
+
+type param =
+  | Null
+  | Int of int
+  | Float of float
+  | Text of string
+  | Blob of string
+
+let _bind_params stmt params =
+  List.iteri (fun i p ->
+    let d = match p with
+      | Null -> Sqlite3.Data.NULL
+      | Int n -> Sqlite3.Data.INT (Int64.of_int n)
+      | Float f -> Sqlite3.Data.FLOAT f
+      | Text s -> Sqlite3.Data.TEXT s
+      | Blob s -> Sqlite3.Data.BLOB s
+    in
+    ignore (Sqlite3.bind stmt (i + 1) d)
+  ) params
+
+let _col_to_yojson stmt i : Yojson.Safe.t =
+  match Sqlite3.column stmt i with
+  | Sqlite3.Data.NULL | Sqlite3.Data.NONE -> `Null
+  | Sqlite3.Data.INT n -> `Int (Int64.to_int n)
+  | Sqlite3.Data.FLOAT f -> `Float f
+  | Sqlite3.Data.TEXT s -> `String s
+  | Sqlite3.Data.BLOB s -> `String s
+
+type row = {
+  int : int -> int;
+  float : int -> float;
+  text : int -> string;
+  bool : int -> bool;
+  int_opt : int -> int option;
+  float_opt : int -> float option;
+  text_opt : int -> string option;
+  bool_opt : int -> bool option;
+}
+
+let _make_row stmt =
+  let _float i =
+    match Sqlite3.column stmt i with
+    | Sqlite3.Data.FLOAT f -> f | Sqlite3.Data.INT n -> Int64.to_float n | _ -> 0.0
+  in
+  { int = (fun i -> Sqlite3.column_int stmt i);
+    float = _float;
+    text = (fun i -> Sqlite3.column_text stmt i);
+    bool = (fun i -> Sqlite3.column_int stmt i <> 0);
+    int_opt = (fun i -> match Sqlite3.column stmt i with Sqlite3.Data.NULL -> None | _ -> Some (Sqlite3.column_int stmt i));
+    float_opt = (fun i -> match Sqlite3.column stmt i with Sqlite3.Data.NULL -> None | _ -> Some (_float i));
+    text_opt = (fun i -> match Sqlite3.column stmt i with Sqlite3.Data.NULL -> None | _ -> Some (Sqlite3.column_text stmt i));
+    bool_opt = (fun i -> match Sqlite3.column stmt i with Sqlite3.Data.NULL -> None | _ -> Some (Sqlite3.column_int stmt i <> 0));
+  }
+
+let query db sql params f =
+  let stmt = Sqlite3.prepare db sql in
+  _bind_params stmt params;
+  let r = _make_row stmt in
+  let results = ref [] in
+  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+    while Sqlite3.step stmt = Sqlite3.Rc.ROW do
+      results := f r :: !results
+    done;
+    List.rev !results)
+
+let query_one db sql params f =
+  let stmt = Sqlite3.prepare db sql in
+  _bind_params stmt params;
+  let r = _make_row stmt in
+  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+    match Sqlite3.step stmt with
+    | Sqlite3.Rc.ROW -> Some (f r)
+    | _ -> None)
+
+let exec db sql params =
+  let stmt = Sqlite3.prepare db sql in
+  _bind_params stmt params;
+  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+    match Sqlite3.step stmt with
+    | Sqlite3.Rc.DONE -> Sqlite3.changes db
+    | rc -> failwith ("Well.Db.exec: " ^ Sqlite3.Rc.to_string rc))
+
+let fetch_yojson db sql params =
+  let stmt = Sqlite3.prepare db sql in
+  _bind_params stmt params;
+  let ncols = Sqlite3.column_count stmt in
+  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+    let results = ref [] in
+    while Sqlite3.step stmt = Sqlite3.Rc.ROW do
+      let names = Array.init ncols (fun i -> Sqlite3.column_name stmt i) in
+      let assoc = Array.to_list (Array.mapi (fun i name ->
+        (name, _col_to_yojson stmt i)) names) in
+      results := `Assoc assoc :: !results
+    done;
+    List.rev !results)
+
 let close_well_db () =
   Mutex.lock _well_mu;
   Fun.protect ~finally:(fun () -> Mutex.unlock _well_mu) (fun () ->
