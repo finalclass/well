@@ -115,6 +115,39 @@ let copy_and_delete ~old_session_id ~new_session_id =
   let _ = Sqlite3.finalize del in
   ()
 
+let get_all ~session_id =
+  Db.with_well_db @@ fun db ->
+  ensure_table db;
+  let sql = "SELECT key, value FROM _well_sessions WHERE session_id = ?" in
+  let stmt = Sqlite3.prepare db sql in
+  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT session_id) in
+  let results = ref [] in
+  while Sqlite3.step stmt = Sqlite3.Rc.ROW do
+    let key = Sqlite3.column_text stmt 0 in
+    let value = Sqlite3.column_text stmt 1 in
+    results := (key, value) :: !results
+  done;
+  let _ = Sqlite3.finalize stmt in
+  List.rev !results
+
+let find_sessions ~key ~value =
+  Db.with_well_db @@ fun db ->
+  ensure_table db;
+  let sql = "SELECT DISTINCT session_id FROM _well_sessions WHERE key = ? AND value = ?" in
+  let stmt = Sqlite3.prepare db sql in
+  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT key) in
+  let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT value) in
+  let results = ref [] in
+  while Sqlite3.step stmt = Sqlite3.Rc.ROW do
+    results := Sqlite3.column_text stmt 0 :: !results
+  done;
+  let _ = Sqlite3.finalize stmt in
+  List.rev !results
+
+let delete_by_value ~key ~value =
+  let sids = find_sessions ~key ~value in
+  List.iter (fun session_id -> clear ~session_id) sids
+
 let check () =
   try
     Db.with_well_db @@ fun db ->

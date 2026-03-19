@@ -477,6 +477,10 @@ let () = Liveview._register_ws_route := ws
 let () = Channel._register_ws_route := ws
 
 
+(* ── Session config ───────────────────────────────────────────────── *)
+
+let _session_lifetime = ref 86400 (* seconds, default 24h *)
+
 (* ── Session cookie ───────────────────────────────────────────────── *)
 
 let generate_session_id () =
@@ -513,8 +517,28 @@ end)
 let _tls_active = ref false
 let _flash_prefix = "_flash:"
 
+let parse_session_id_from_header headers =
+  (* Try Authorization: Bearer <session_id> *)
+  match List.assoc_opt "authorization" headers with
+  | Some auth_value ->
+    let prefix = "Bearer " in
+    let plen = String.length prefix in
+    if String.length auth_value > plen
+       && String.sub auth_value 0 plen = prefix then
+      Some (String.sub auth_value plen (String.length auth_value - plen))
+    else
+      (* Try X-Session-Id header *)
+      List.assoc_opt "x-session-id" headers
+  | None ->
+    List.assoc_opt "x-session-id" headers
+
 let session_middleware : middleware = fun next req ->
-  let existing = parse_session_id req.headers in
+  (* Priority: cookie > Authorization: Bearer > X-Session-Id > new session *)
+  let existing =
+    match parse_session_id req.headers with
+    | Some _ as s -> s
+    | None -> parse_session_id_from_header req.headers
+  in
   let session_id, new_session =
     match existing with
     | Some sid -> (sid, false)
@@ -549,6 +573,20 @@ let session_delete req key =
 
 let session_clear req =
   Session_store.clear ~session_id:req.session_id
+
+(* Programmatic session API — no HTTP context required *)
+module Session = struct
+  let create () = generate_session_id ()
+  let get = Session_store.get
+  let set = Session_store.set
+  let delete = Session_store.delete
+  let clear = Session_store.clear
+  let get_all = Session_store.get_all
+  let find_sessions = Session_store.find_sessions
+  let delete_by_value = Session_store.delete_by_value
+end
+
+let session_lifetime seconds = _session_lifetime := seconds
 
 (* Wire Auth session forward refs *)
 let () =
@@ -591,6 +629,7 @@ type rpc_ctx = {
   user_id : string option;
   user_name : string option;
   locale : string;
+  session_data : (string * string) list;
 }
 
 let rpc_ctx_to_wire (ctx : rpc_ctx) : Yojson.Safe.t =
@@ -600,6 +639,7 @@ let rpc_ctx_to_wire (ctx : rpc_ctx) : Yojson.Safe.t =
     (match ctx.user_id with Some s -> `String s | None -> `Null);
     (match ctx.user_name with Some s -> `String s | None -> `Null);
     `String ctx.locale;
+    `Assoc (List.map (fun (k, v) -> (k, `String v)) ctx.session_data);
   ]
 
 let rpc_ctx_of_wire (wire : Yojson.Safe.t) : rpc_ctx =
@@ -610,10 +650,25 @@ let rpc_ctx_of_wire (wire : Yojson.Safe.t) : rpc_ctx =
       user_id = (match uid with `String s -> Some s | _ -> None);
       user_name = (match uname with `String s -> Some s | _ -> None);
       locale = (match loc with `String s -> s | _ -> "en");
+      session_data = [];
+    }
+  | `List ( sid :: rid :: uid :: uname :: loc :: rest ) ->
+    let session_data = match rest with
+      | `Assoc pairs :: _ ->
+        List.filter_map (fun (k, v) ->
+          match v with `String s -> Some (k, s) | _ -> None) pairs
+      | _ -> []
+    in
+    { session_id = (match sid with `String s -> s | _ -> "");
+      request_id = (match rid with `String s -> s | _ -> "");
+      user_id = (match uid with `String s -> Some s | _ -> None);
+      user_name = (match uname with `String s -> Some s | _ -> None);
+      locale = (match loc with `String s -> s | _ -> "en");
+      session_data;
     }
   | _ ->
     { session_id = ""; request_id = ""; user_id = None;
-      user_name = None; locale = "en" }
+      user_name = None; locale = "en"; session_data = [] }
 
 let _request_id_counter = ref 0
 
@@ -624,10 +679,11 @@ let rpc_ctx (req : request) : rpc_ctx =
       (Unix.gettimeofday ())
     |> Digestif.SHA1.(fun s -> digest_string s |> to_hex)
   in
-  let user_id = Session_store.get ~session_id:req.session_id ~key:"user_id" in
-  let user_name = Session_store.get ~session_id:req.session_id ~key:"user_name" in
+  let all_data = Session_store.get_all ~session_id:req.session_id in
+  let user_id = List.assoc_opt "user_id" all_data in
+  let user_name = List.assoc_opt "user_name" all_data in
   let locale =
-    match Session_store.get ~session_id:req.session_id ~key:"locale" with
+    match List.assoc_opt "locale" all_data with
     | Some l -> l
     | None ->
       match List.assoc_opt "accept-language" req.headers with
@@ -641,7 +697,11 @@ let rpc_ctx (req : request) : rpc_ctx =
          | [] -> "en")
       | None -> "en"
   in
-  { session_id = req.session_id; request_id; user_id; user_name; locale }
+  (* Filter out internal keys like _flash:kind from session_data *)
+  let session_data = List.filter (fun (k, _) ->
+    not (String.length k > 7 && String.sub k 0 7 = "_flash:")) all_data
+  in
+  { session_id = req.session_id; request_id; user_id; user_name; locale; session_data }
 
 (* ── Flash API ───────────────────────────────────────────────────── *)
 
@@ -2534,7 +2594,11 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
     Eio.Fiber.fork ~sw (fun () ->
       let rec cleanup_loop () =
         Env.sleep 3600.0;
-        (try Session_store.cleanup ~max_age_days:7 () with _ -> ());
+        (try
+           let max_age_days =
+             max 1 ((!_session_lifetime + 86399) / 86400)
+           in
+           Session_store.cleanup ~max_age_days () with _ -> ());
         (try Liveview.cleanup_sessions () with _ -> ());
         (try Liveview.cleanup_uploads () with _ -> ());
         (* Prune CSRF tokens for sessions no longer in the store *)

@@ -550,6 +550,8 @@ let value = Ctx.get req
 
 ## Auth / Sessions
 
+### Request-scoped session (requires HTTP context)
+
 ```ocaml
 (* Login *)
 Well.session_set req "user_id" username;
@@ -572,6 +574,67 @@ Well.get ~middleware:api_auth "/api/data" @@ fun req -> ...
 (* Basic auth with custom realm *)
 let admin = [Well.basic_auth ~check:check_credentials ~realm:"Admin Panel" ()]
 ```
+
+### Programmatic session API (no HTTP context needed)
+
+Use `Well.Session.*` for RPC login, background jobs, or any code outside HTTP handlers:
+
+```ocaml
+(* Create a new session and set data — e.g. in an RPC login handler *)
+let session_id = Well.Session.create () in
+Well.Session.set ~session_id ~key:"user_id" ~value:user_id;
+Well.Session.set ~session_id ~key:"user_name" ~value:name;
+Well.Session.set ~session_id ~key:"impersonated_by" ~value:admin_id;
+(* Return session_id to client — client sends it in subsequent requests *)
+
+(* Read/write by session_id *)
+Well.Session.get ~session_id ~key:"user_id"        (* string option *)
+Well.Session.get_all ~session_id                    (* (string * string) list *)
+Well.Session.delete ~session_id ~key:"locale"
+Well.Session.clear ~session_id                      (* remove all keys *)
+
+(* Find and bulk-delete sessions by value — useful for:
+   - Archive user: delete all sessions where user_id = X
+   - Password change: logout all sessions for a user
+   - Logout all devices *)
+Well.Session.find_sessions ~key:"user_id" ~value:uid  (* string list — session_ids *)
+Well.Session.delete_by_value ~key:"user_id" ~value:uid (* clears all matching sessions *)
+```
+
+### Session ID from headers (Flutter / mobile / API clients)
+
+Session middleware reads session_id in this priority order:
+1. Cookie `well_session`
+2. `Authorization: Bearer <session_id>` header
+3. `X-Session-Id: <session_id>` header
+4. Generate new session
+
+Mobile/API clients that don't use cookies can send the session_id from login RPC as a Bearer token or X-Session-Id header.
+
+### Configurable session lifetime
+
+```ocaml
+(* In app init — default is 86400 seconds (24h) *)
+Well.session_lifetime (3600 * 24 * 7)  (* 7 days *)
+```
+
+### rpc_ctx — includes all session data
+
+```ocaml
+type rpc_ctx = {
+  session_id : string;
+  request_id : string;
+  user_id : string option;
+  user_name : string option;
+  locale : string;
+  session_data : (string * string) list;  (* all session key-values *)
+}
+
+(* Access custom session fields from rpc_ctx *)
+let impersonated_by = List.assoc_opt "impersonated_by" ctx.session_data
+```
+
+Wire format is backwards-compatible — old 5-element JSON arrays parse with `session_data = []`.
 
 ## Forms & File Upload
 
