@@ -3668,7 +3668,25 @@ let%query find_note = "SELECT id, title, body FROM notes WHERE id = :id"
 let%query delete_note = "DELETE FROM notes WHERE id = :id"
 let%query search_notes = "SELECT id, title FROM notes WHERE title LIKE :q"
 let%query update_note = "UPDATE notes SET title = :title, body = :body WHERE id = :id"
+
+(* IN (:list) — list parameter, expands to ?,?,? at runtime *)
+let%query notes_by_ids = "SELECT id, title FROM notes WHERE id IN (:ids)"
+(* → Notes_by_ids.query : Sqlite3.db -> ids:int list -> row list *)
+
+(* :param? — optional parameter, binds NULL when None *)
+let%query update_score = "UPDATE notes SET score = :score? WHERE id = :id"
+(* → Update_score.exec : Sqlite3.db -> score:float option -> id:int -> unit *)
+
+(* Mixed: list + optional *)
+let%query filtered = "SELECT id, title FROM notes WHERE id IN (:ids) AND title = :title?"
 ```
+
+**Parameter kinds**:
+- `:param` — required, type inferred from column (e.g. `:id` → `int` from `id INTEGER`)
+- `:param?` — optional, binds NULL when None (e.g. `:score?` → `float option`)
+- `IN (:param)` — list, expands to `?,?,?` at runtime (e.g. `IN (:ids)` → `int list`)
+  - Type inferred from comparison column: `id IN (:ids)` → `int list` (from `id INTEGER`)
+  - Empty list → `IN (SELECT NULL WHERE 0)` (matches nothing)
 
 **Generated code**:
 
@@ -4354,6 +4372,22 @@ Well.run ~domain:"myapp.example.com" ~port:443 ()
 (* Automatically provisions certificate via HTTP-01 challenge *)
 (* Stores certs in data/certs/ *)
 ```
+
+### Well.Env — EIO Environment Access
+
+```ocaml
+Well.env : unit -> Eio_unix.Stdenv.base  (* full EIO env, set by Well.run *)
+Well.net : unit -> _ Eio.Net.t           (* network *)
+Well.clock : unit -> float Eio.Time.clock (* monotonic clock *)
+Well.cwd : unit -> _ Eio.Path.t          (* working directory *)
+Well.fs : unit -> _ Eio.Path.t           (* filesystem root *)
+
+Well.Env.sleep : float -> unit                    (* sleep seconds *)
+Well.Env.with_timeout : float -> (unit -> 'a) -> 'a  (* timeout in seconds *)
+Well.Env.domain_mgr : unit -> _ Eio.Domain_manager.t
+```
+
+Available inside `Well.run` (and route handlers, services, actors). Avoids passing `env` through every function.
 
 ---
 

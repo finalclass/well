@@ -13,13 +13,19 @@
   (= %{os_family} debian))
  ((zlib1g-dev)
   (= %{os_family} ubuntu))
- ((zlib-devel)
-  (= %{os_distribution} centos))
+ ((zlib-static zlib-devel)
+  (and_absorb_undefined_var
+   (= %{os_distribution} centos)
+   (< %{os_version} 10)))
+ ((zlib-ng-compat-static zlib-ng-compat-devel)
+  (and_absorb_undefined_var
+   (= %{os_distribution} centos)
+   (>= %{os_version} 10)))
  ((zlib-devel)
   (and_absorb_undefined_var
    (= %{os_family} fedora)
    (< %{os_version} 40)))
- ((zlib-ng-compat-devel)
+ ((zlib-ng-compat-static zlib-ng-compat-devel)
   (and_absorb_undefined_var
    (= %{os_family} fedora)
    (>= %{os_version} 40)))
@@ -38,4 +44,14 @@
    (= %{os} win32)
    (= %{os_distribution} cygwinports)))
  ((zlib-devel)
-  (= %{os} cygwin)))
+  (= %{os} cygwin))
+ ((zlib-ng-compat-devel)
+  (= %{os_family} opensuse))
+ ((zlib-devel)
+  (and_absorb_undefined_var
+   (= %{os_family} suse)
+   (< %{os_version} 16)))
+ ((zlib-ng-compat-devel)
+  (and_absorb_undefined_var
+   (= %{os_family} suse)
+   (>= %{os_version} 16))))

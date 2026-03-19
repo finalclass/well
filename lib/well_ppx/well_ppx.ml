@@ -69,6 +69,9 @@ let create_table_sql info =
 
 (* ═══════════════════════════════════════════════════════════════════ *)
 (*  Extract :param names from SQL string                              *)
+(*  :param  — required parameter                                      *)
+(*  :param? — optional parameter (binds NULL when None)               *)
+(*  IN (:param) — list parameter (expands to ?,?,? at runtime)        *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
 let is_ident_char c =
@@ -76,6 +79,14 @@ let is_ident_char c =
   || (c >= 'A' && c <= 'Z')
   || (c >= '0' && c <= '9')
   || c = '_'
+
+type param_kind = Plain | Optional | List
+
+type param = {
+  p_name : string;
+  p_kind : param_kind;
+  p_column_hint : string option;  (* for IN params: the column name from SQL context *)
+}
 
 let extract_params sql =
   let len = String.length sql in
@@ -86,14 +97,60 @@ let extract_params sql =
       while !j < len && is_ident_char sql.[!j] do
         incr j
       done;
-      if !j > i + 1 then
+      if !j > i + 1 then begin
         let name = String.sub sql (i + 1) (!j - i - 1) in
-        if List.mem name acc then scan !j acc else scan !j (name :: acc)
+        (* Check for trailing ? → optional *)
+        let kind, end_pos =
+          if !j < len && sql.[!j] = '?' then (Optional, !j + 1)
+          else (Plain, !j)
+        in
+        if List.exists (fun p -> p.p_name = name) acc then scan end_pos acc
+        else scan end_pos ({ p_name = name; p_kind = kind; p_column_hint = None } :: acc)
+      end
       else scan (i + 1) acc
     end
     else scan (i + 1) acc
   in
-  scan 0 []
+  let params = scan 0 [] in
+  (* Detect IN (:param) — upgrade matching params to List kind
+     Also capture the column name from "column IN (:param)" for type inference *)
+  let in_re = Str.regexp_case_fold
+    {|\([a-zA-Z_][a-zA-Z0-9_.]*\)[ \t]+IN[ \t]*([ \t]*:\([a-zA-Z_][a-zA-Z0-9_]*\)[ \t]*)|} in
+  let in_params = ref [] in  (* (param_name, column_name) *)
+  let s = ref 0 in
+  (try while true do
+    let _ = Str.search_forward in_re sql !s in
+    let col_name = Str.matched_group 1 sql in
+    let param_name = Str.matched_group 2 sql in
+    (* Strip table prefix: "users.id" → "id" *)
+    let col_hint = match String.split_on_char '.' col_name with
+      | [_; c] -> c | _ -> col_name in
+    in_params := (param_name, col_hint) :: !in_params;
+    s := Str.match_end ()
+  done with Not_found -> ());
+  List.map (fun p ->
+    match List.assoc_opt p.p_name !in_params with
+    | Some col_hint -> { p with p_kind = List; p_column_hint = Some col_hint }
+    | None -> p
+  ) params
+
+(* Rewrite SQL for validation: replace IN (:param) with IN (NULL)
+   and :param? with NULL for SQLite to accept the query *)
+let sql_for_validation sql =
+  let s = Str.global_replace
+    (Str.regexp_case_fold {|IN[ \t]*([ \t]*:[a-zA-Z_][a-zA-Z0-9_]*[ \t]*)|})
+    "IN (NULL)" sql
+  in
+  (* Replace :param? with NULL *)
+  Str.global_replace
+    (Str.regexp {|:[a-zA-Z_][a-zA-Z0-9_]*\?|})
+    "NULL" s
+
+(* Rewrite SQL: strip ? from :param?, keep :param as-is for plain *)
+let sql_for_runtime sql =
+  Str.global_replace
+    (Str.regexp {|\(:[a-zA-Z_][a-zA-Z0-9_]*\)\?|})
+    {|\1|} sql
 
 (* ═══════════════════════════════════════════════════════════════════ *)
 (*  Sanitize column names for OCaml identifiers                       *)
@@ -223,9 +280,15 @@ let _ =
 (*  Compile-time SQL validation via in-memory SQLite                  *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
+type typed_param = {
+  tp_name : string;
+  tp_type : string;  (* ocaml type name *)
+  tp_kind : param_kind;
+}
+
 type query_result = {
   columns : (string * string) list; (* sanitized_name, ocaml_type_name *)
-  params : (string * string) list; (* param_name, ocaml_type_name *)
+  params : typed_param list;
 }
 
 let validate_sql ~loc sql =
@@ -242,9 +305,10 @@ let validate_sql ~loc sql =
             "well.ppx internal: failed to create table %s: %s"
             info.tbl_name (Sqlite3.Rc.to_string rc))
     tables;
-  (* Prepare the query — SQLite validates it *)
+  (* Validate with rewritten SQL (IN (:x) → IN (NULL), :x? → NULL) *)
+  let validation_sql = sql_for_validation sql in
   let stmt =
-    try Sqlite3.prepare db sql
+    try Sqlite3.prepare db validation_sql
     with Sqlite3.Error msg ->
       ignore (Sqlite3.db_close db);
       Location.raise_errorf ~loc "SQL error: %s\n  in: %s" msg sql
@@ -265,18 +329,24 @@ let validate_sql ~loc sql =
         in
         (name, ocaml_type))
   in
-  (* Extract parameters from SQL *)
-  let param_names = extract_params sql in
+  (* Extract parameters from original SQL *)
+  let raw_params = extract_params sql in
   let params =
     List.map
-      (fun name ->
+      (fun p ->
         let ocaml_type =
-          match find_column name with
+          match find_column p.p_name with
           | Some col -> sqlite_to_ocaml_name col.col_sqlite_type
-          | None -> "string"
+          | None ->
+            (* For IN params, try the column hint (e.g. "id" from "id IN (:ids)") *)
+            match p.p_column_hint with
+            | Some hint -> (match find_column hint with
+              | Some col -> sqlite_to_ocaml_name col.col_sqlite_type
+              | None -> "string")
+            | None -> "string"
         in
-        (name, ocaml_type))
-      param_names
+        { tp_name = p.p_name; tp_type = ocaml_type; tp_kind = p.p_kind })
+      raw_params
   in
   ignore (Sqlite3.finalize stmt);
   ignore (Sqlite3.db_close db);
@@ -312,16 +382,28 @@ let gen_col_extract ~loc idx (_col_name, type_name) =
         | Sqlite3.Data.FLOAT f -> string_of_float f
         | _ -> ""]
 
-let gen_param_bind ~loc idx (param_name, type_name) =
-  let idx_e = Ast_builder.Default.eint ~loc (idx + 1) in
-  let param_e = Ast_builder.Default.evar ~loc param_name in
-  let data_e =
-    match type_name with
-    | "int" -> [%expr Sqlite3.Data.INT (Int64.of_int [%e param_e])]
-    | "float" -> [%expr Sqlite3.Data.FLOAT [%e param_e]]
-    | _ -> [%expr Sqlite3.Data.TEXT [%e param_e]]
-  in
-  [%expr ignore (Sqlite3.bind stmt [%e idx_e] [%e data_e])]
+let gen_data_expr ~loc type_name value_e =
+  match type_name with
+  | "int" -> [%expr Sqlite3.Data.INT (Int64.of_int [%e value_e])]
+  | "float" -> [%expr Sqlite3.Data.FLOAT [%e value_e]]
+  | _ -> [%expr Sqlite3.Data.TEXT [%e value_e]]
+
+let gen_param_bind ~loc idx tp =
+  let param_e = Ast_builder.Default.evar ~loc tp.tp_name in
+  match tp.tp_kind with
+  | Plain ->
+    let idx_e = Ast_builder.Default.eint ~loc (idx + 1) in
+    let data_e = gen_data_expr ~loc tp.tp_type param_e in
+    [%expr ignore (Sqlite3.bind stmt [%e idx_e] [%e data_e])]
+  | Optional ->
+    let idx_e = Ast_builder.Default.eint ~loc (idx + 1) in
+    [%expr ignore (Sqlite3.bind stmt [%e idx_e]
+      (match [%e param_e] with
+       | None -> Sqlite3.Data.NULL
+       | Some _v -> [%e gen_data_expr ~loc tp.tp_type (Ast_builder.Default.evar ~loc "_v")]))]
+  | List ->
+    (* List params use dynamic binding — handled separately *)
+    [%expr ignore [%e param_e]]  (* placeholder, not actually used *)
 
 let capitalize s =
   if String.length s = 0 then s
@@ -333,34 +415,122 @@ let capitalize s =
 (*  Generate module for let%query                                     *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
-let gen_query_module ~loc name sql =
-  let info = validate_sql ~loc sql in
-  let module_name = capitalize name in
-  let sql_e = Ast_builder.Default.estring ~loc sql in
-  if info.columns = [] then begin
-    (* Non-SELECT (INSERT/UPDATE/DELETE) → exec returning unit *)
+let has_list_params params = List.exists (fun tp -> tp.tp_kind = List) params
+
+(* Generate the function parameter type for a typed_param *)
+let gen_param_type ~loc tp =
+  let base_type = Ast_builder.Default.ptyp_constr ~loc
+    { txt = Lident tp.tp_type; loc } [] in
+  match tp.tp_kind with
+  | Plain -> base_type
+  | Optional ->
+    Ast_builder.Default.ptyp_constr ~loc { txt = Lident "option"; loc } [base_type]
+  | List ->
+    Ast_builder.Default.ptyp_constr ~loc { txt = Lident "list"; loc } [base_type]
+
+(* Generate body that prepares SQL, binds params, and executes.
+   For queries with list params, SQL is rewritten at runtime.
+   All params are converted to positional ? and bound in SQL appearance order. *)
+let gen_body_with_binds ~loc sql info tail_expr =
+  let runtime_sql = sql_for_runtime sql in
+  let sql_e = Ast_builder.Default.estring ~loc runtime_sql in
+  if has_list_params info.params then begin
+    (* Dynamic SQL: replace ALL named params with positional ?,
+       and IN (:param) with IN (?,?,?) — bind in order of appearance *)
+    let list_params = List.filter (fun tp -> tp.tp_kind = List) info.params in
+    (* Step 1: rewrite IN (:param) → IN (:param) placeholder (expand at runtime) *)
+    let sql_rewrite =
+      List.fold_left (fun acc tp ->
+        let param_e = Ast_builder.Default.evar ~loc tp.tp_name in
+        let pattern_str = Ast_builder.Default.estring ~loc
+          (Printf.sprintf "IN (:%s)" tp.tp_name) in
+        [%expr
+          let _n = List.length [%e param_e] in
+          let _placeholders =
+            if _n = 0 then "IN (SELECT NULL WHERE 0)"
+            else "IN (" ^ String.concat "," (List.init _n (fun _ -> "?")) ^ ")"
+          in
+          Str.global_replace (Str.regexp_case_fold [%e pattern_str]) _placeholders [%e acc]]
+      ) [%expr _sql] list_params
+    in
+    (* Step 2: replace remaining named params with ? *)
+    let non_list = List.filter (fun tp -> tp.tp_kind <> List) info.params in
+    let sql_rewrite2 =
+      List.fold_left (fun acc tp ->
+        let pattern_str = Ast_builder.Default.estring ~loc
+          (Printf.sprintf ":%s" tp.tp_name) in
+        [%expr Str.global_replace (Str.regexp [%e pattern_str]) "?" [%e acc]]
+      ) sql_rewrite non_list
+    in
+    (* Step 3: bind in SQL appearance order using _offset counter *)
+    let bind_exprs = List.map (fun tp ->
+      let param_e = Ast_builder.Default.evar ~loc tp.tp_name in
+      match tp.tp_kind with
+      | List ->
+        let bind_one = match tp.tp_type with
+          | "int" -> [%expr fun _i v -> ignore (Sqlite3.bind stmt _i (Sqlite3.Data.INT (Int64.of_int v)))]
+          | "float" -> [%expr fun _i v -> ignore (Sqlite3.bind stmt _i (Sqlite3.Data.FLOAT v))]
+          | _ -> [%expr fun _i v -> ignore (Sqlite3.bind stmt _i (Sqlite3.Data.TEXT v))]
+        in
+        [%expr
+          let _bind_one = [%e bind_one] in
+          List.iteri (fun _j v -> _bind_one (!_off + _j + 1) v) [%e param_e];
+          _off := !_off + List.length [%e param_e]]
+      | Optional ->
+        [%expr
+          _off := !_off + 1;
+          ignore (Sqlite3.bind stmt !_off
+            (match [%e param_e] with
+             | None -> Sqlite3.Data.NULL
+             | Some _v -> [%e gen_data_expr ~loc tp.tp_type (Ast_builder.Default.evar ~loc "_v")]))]
+      | Plain ->
+        let data_e = gen_data_expr ~loc tp.tp_type param_e in
+        [%expr _off := !_off + 1; ignore (Sqlite3.bind stmt !_off [%e data_e])]
+    ) info.params in
+    let all_binds =
+      List.fold_right (fun e acc -> [%expr [%e e]; [%e acc]])
+        bind_exprs tail_expr
+    in
+    [%expr
+      let _sql = [%e sql_e] in
+      let _sql = [%e sql_rewrite2] in
+      let stmt = Sqlite3.prepare db _sql in
+      let _off = ref 0 in
+      [%e all_binds]]
+  end else begin
+    (* Simple case: no list params, static SQL *)
     let bind_exprs =
       List.mapi (fun i p -> gen_param_bind ~loc i p) info.params
     in
-    let exec_body =
-      let stmts =
-        List.fold_right
-          (fun e acc -> [%expr [%e e]; [%e acc]])
-          bind_exprs
-          [%expr
-            ignore (Sqlite3.step stmt);
-            ignore (Sqlite3.finalize stmt)]
-      in
+    let with_binds =
+      List.fold_right
+        (fun e acc -> [%expr [%e e]; [%e acc]])
+        bind_exprs tail_expr
+    in
+    [%expr
+      let stmt = Sqlite3.prepare db [%e sql_e] in
+      [%e with_binds]]
+  end
+
+let gen_query_module ~loc name sql =
+  let info = validate_sql ~loc sql in
+  let module_name = capitalize name in
+  let runtime_sql = sql_for_runtime sql in
+  let sql_e = Ast_builder.Default.estring ~loc runtime_sql in
+  if info.columns = [] then begin
+    (* Non-SELECT (INSERT/UPDATE/DELETE) → exec returning unit *)
+    let exec_body = gen_body_with_binds ~loc sql info
       [%expr
-        let stmt = Sqlite3.prepare db [%e sql_e] in
-        [%e stmts]]
+        ignore (Sqlite3.step stmt);
+        ignore (Sqlite3.finalize stmt)]
     in
     let exec_fun =
       List.fold_right
-        (fun (pname, _ptype) body ->
-          Ast_builder.Default.pexp_fun ~loc (Labelled pname) None
-            (Ast_builder.Default.ppat_var ~loc { txt = pname; loc })
-            body)
+        (fun tp body ->
+          let pat = Ast_builder.Default.ppat_constraint ~loc
+            (Ast_builder.Default.ppat_var ~loc { txt = tp.tp_name; loc })
+            (gen_param_type ~loc tp) in
+          Ast_builder.Default.pexp_fun ~loc (Labelled tp.tp_name) None pat body)
         info.params exec_body
     in
     let exec_with_db =
@@ -424,39 +594,27 @@ let gen_query_module ~loc name sql =
       Ast_builder.Default.pexp_record ~loc row_fields_expr None
     in
     (* Parameter bindings + collect loop *)
-    let bind_exprs =
-      List.mapi (fun i p -> gen_param_bind ~loc i p) info.params
-    in
-    let query_body =
-      let loop_and_collect =
-        [%expr
-          let results = ref [] in
-          let rec loop () =
-            match Sqlite3.step stmt with
-            | Sqlite3.Rc.ROW ->
-                results := [%e row_expr] :: !results;
-                loop ()
-            | _ -> ()
-          in
-          loop ();
-          ignore (Sqlite3.finalize stmt);
-          List.rev !results]
-      in
-      let with_binds =
-        List.fold_right
-          (fun e acc -> [%expr [%e e]; [%e acc]])
-          bind_exprs loop_and_collect
-      in
+    let query_body = gen_body_with_binds ~loc sql info
       [%expr
-        let stmt = Sqlite3.prepare db [%e sql_e] in
-        [%e with_binds]]
+        let results = ref [] in
+        let rec loop () =
+          match Sqlite3.step stmt with
+          | Sqlite3.Rc.ROW ->
+              results := [%e row_expr] :: !results;
+              loop ()
+          | _ -> ()
+        in
+        loop ();
+        ignore (Sqlite3.finalize stmt);
+        List.rev !results]
     in
     let query_fun =
       List.fold_right
-        (fun (pname, _ptype) body ->
-          Ast_builder.Default.pexp_fun ~loc (Labelled pname) None
-            (Ast_builder.Default.ppat_var ~loc { txt = pname; loc })
-            body)
+        (fun tp body ->
+          let pat = Ast_builder.Default.ppat_constraint ~loc
+            (Ast_builder.Default.ppat_var ~loc { txt = tp.tp_name; loc })
+            (gen_param_type ~loc tp) in
+          Ast_builder.Default.pexp_fun ~loc (Labelled tp.tp_name) None pat body)
         info.params query_body
     in
     let query_with_db =

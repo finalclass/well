@@ -47,6 +47,20 @@ let%query delete_user =
 (* SELECT with alias *)
 let%query count_users = "SELECT COUNT(*) AS cnt FROM users"
 
+(* IN (:list) — list parameter *)
+let%query users_by_ids = "SELECT id, name FROM users WHERE id IN (:ids)"
+
+(* Optional parameter — :param? binds NULL when None *)
+let%query users_by_body = "SELECT id, title FROM posts WHERE body = :body?"
+
+(* Mixed: list + optional + plain *)
+let%query mixed_query =
+  "SELECT id, title FROM posts WHERE user_id IN (:user_ids) AND title = :title?"
+
+(* INSERT with optional *)
+let%query insert_post =
+  "INSERT INTO posts (user_id, title, body) VALUES (:user_id, :title, :body?)"
+
 let () =
   let db = Sqlite3.db_open ":memory:" in
   (* Create tables *)
@@ -88,5 +102,29 @@ let () =
   Delete_user.exec db ~id:1;
   let remaining = All_users.query db in
   assert (List.length remaining = 1);
+  (* Re-insert for IN/optional tests *)
+  Insert_user.exec db ~name:"Alice" ~email:"alice@example.com" ~active:1;
+  (* IN (:ids) — list param *)
+  let by_ids = Users_by_ids.query db ~ids:[1; 2] in
+  assert (List.length by_ids = 1);  (* only Bobby=2 + Alice=3 exist, id 1 was deleted *)
+  let by_ids2 = Users_by_ids.query db ~ids:[2; 3] in
+  assert (List.length by_ids2 = 2);
+  (* Empty list → no results *)
+  let by_ids_empty = Users_by_ids.query db ~ids:[] in
+  assert (List.length by_ids_empty = 0);
+  (* INSERT with optional param *)
+  Insert_post.exec db ~user_id:2 ~title:"Hello" ~body:(Some "World");
+  Insert_post.exec db ~user_id:2 ~title:"NoBody" ~body:None;
+  (* Optional param in WHERE — match value *)
+  let with_body = Users_by_body.query db ~body:(Some "World") in
+  assert (List.length with_body = 1);
+  assert ((List.hd with_body).title = "Hello");
+  (* Optional param in WHERE — NULL comparison (body = NULL → no match, SQL semantics) *)
+  let with_null = Users_by_body.query db ~body:None in
+  assert (List.length with_null = 0);  (* NULL = NULL is false in SQL *)
+  (* Mixed: list + optional *)
+  let mixed = Mixed_query.query db ~user_ids:[2] ~title:(Some "Hello") in
+  assert (List.length mixed = 1);
+  assert ((List.hd mixed).title = "Hello");
   ignore (Sqlite3.db_close db);
   Printf.printf "All PPX tests passed!\n"
