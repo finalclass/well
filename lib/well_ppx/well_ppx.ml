@@ -61,10 +61,10 @@ let create_table_sql info =
         let nn =
           if c.col_nullable || c.col_primary then "" else " NOT NULL"
         in
-        Printf.sprintf "%s %s%s%s" c.col_name c.col_sqlite_type pk nn)
+        Printf.sprintf "\"%s\" %s%s%s" c.col_name c.col_sqlite_type pk nn)
       info.tbl_cols
   in
-  Printf.sprintf "CREATE TABLE IF NOT EXISTS %s (%s)" info.tbl_name
+  Printf.sprintf "CREATE TABLE IF NOT EXISTS \"%s\" (%s)" info.tbl_name
     (String.concat ", " col_strs)
 
 (* ═══════════════════════════════════════════════════════════════════ *)
