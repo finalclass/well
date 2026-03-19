@@ -131,6 +131,18 @@ let generate_struct_module ~local_module msg_name props =
   let buf = Buffer.create 512 in
   let p fmt = Printf.bprintf buf fmt in
 
+  match props with
+  | [] ->
+    (* Empty struct → type t = unit *)
+    p "module %s = struct\n" msg_name;
+    p "  type t = unit\n\n";
+    p "  let make () = ()\n\n";
+    p "  let to_wire (() : t) : Yojson.Safe.t = `List []\n\n";
+    p "  let of_wire (_wire : Yojson.Safe.t) : t = ()\n";
+    p "end\n";
+    Buffer.contents buf
+  | _ ->
+
   (* type t *)
   p "module %s = struct\n" msg_name;
   p "  type t = {\n";
