@@ -1,11 +1,9 @@
-(* LiveView persistent storage — uses shared well.sqlite, thread-safe via Mutex *)
+(* LiveView persistent storage — uses shared well.sqlite pool *)
 
-let mu = Mutex.create ()
 let _tables_created = Atomic.make false
 
-let ensure_table () =
+let ensure_table db =
   if not (Atomic.get _tables_created) then begin
-    let db = Db.well_db () in
     let _ =
       Sqlite3.exec db
         {|CREATE TABLE IF NOT EXISTS _well_liveview_state (
@@ -20,14 +18,9 @@ let ensure_table () =
     Atomic.set _tables_created true
   end
 
-let with_lock f =
-  Mutex.lock mu;
-  Fun.protect ~finally:(fun () -> Mutex.unlock mu) f
-
 let save ~user_id ~topic ~endpoint ~model_json =
-  with_lock @@ fun () ->
-  ensure_table ();
-  let db = Db.well_db () in
+  Db.with_well_db @@ fun db ->
+  ensure_table db;
   let sql =
     {|INSERT OR REPLACE INTO _well_liveview_state
       (user_id, topic, endpoint, model_json, updated_at)
@@ -47,9 +40,8 @@ let save ~user_id ~topic ~endpoint ~model_json =
   ()
 
 let load ~user_id ~topic =
-  with_lock @@ fun () ->
-  ensure_table ();
-  let db = Db.well_db () in
+  Db.with_well_db @@ fun db ->
+  ensure_table db;
   let sql =
     "SELECT endpoint, model_json FROM _well_liveview_state \
      WHERE user_id = ? AND topic = ?"
@@ -69,9 +61,8 @@ let load ~user_id ~topic =
       None
 
 let delete ~user_id ~topic =
-  with_lock @@ fun () ->
-  ensure_table ();
-  let db = Db.well_db () in
+  Db.with_well_db @@ fun db ->
+  ensure_table db;
   let sql =
     "DELETE FROM _well_liveview_state WHERE user_id = ? AND topic = ?"
   in
@@ -83,9 +74,8 @@ let delete ~user_id ~topic =
   ()
 
 let cleanup ?(max_age_days = 30) () =
-  with_lock @@ fun () ->
-  ensure_table ();
-  let db = Db.well_db () in
+  Db.with_well_db @@ fun db ->
+  ensure_table db;
   let cutoff =
     Unix.gettimeofday () -. (float_of_int max_age_days *. 86400.0)
   in

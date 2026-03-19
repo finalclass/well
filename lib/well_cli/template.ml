@@ -371,8 +371,8 @@ let%query find_note = "SELECT id, title, body FROM notes WHERE id = :id"
 let%query insert_note = "INSERT INTO notes (title, body) VALUES (:title, :body)"
 let%query delete_note = "DELETE FROM notes WHERE id = :id"
 
-let db = lazy (Well.Db.open_db ())
-let get_db () = Lazy.force db
+let pool = lazy (Well.Db.create_pool ())
+let with_db f = Well.Db.with_conn (Lazy.force pool) f
 
 let note_of_row (r : All_notes.row) : Note_access.Note.t =
   { id = r.id; title = r.title; body = r.body }
@@ -382,25 +382,25 @@ let note_of_find (r : Find_note.row) : Note_access.Note.t =
 
 module Impl : Note_access.IMPL = struct
   let list _ctx (_req : Note_access.ListReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     let rows = All_notes.query db in
     let notes = List.map note_of_row rows in
     Note_access.NoteList.make ~notes ()
 
   let get _ctx (req : Note_access.IdReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     match Find_note.query db ~id:req.id with
     | r :: _ -> note_of_find r
     | [] -> failwith "Note not found"
 
   let create _ctx (req : Note_access.CreateReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     Insert_note.exec db ~title:req.title ~body:req.body;
     let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
     Note_access.Note.make ~id ~title:req.title ~body:req.body ()
 
   let delete _ctx (req : Note_access.IdReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     Delete_note.exec db ~id:req.id;
     Note_access.Ok.make ~ok:true ()
 end
@@ -2367,8 +2367,8 @@ let%query update_completed = "UPDATE tasks SET completed = :completed WHERE id =
 let%query update_title = "UPDATE tasks SET title = :title WHERE id = :id"
 let%query delete_task = "DELETE FROM tasks WHERE id = :id"
 
-let db = lazy (Well.Db.open_db ())
-let get_db () = Lazy.force db
+let pool = lazy (Well.Db.create_pool ())
+let with_db f = Well.Db.with_conn (Lazy.force pool) f
 
 let task_of_row (r : All_tasks.row) : Task_access.Task.t =
   { id = r.id; title = r.title; completed = r.completed <> 0 }
@@ -2378,7 +2378,7 @@ let task_of_find (r : Find_task.row) : Task_access.Task.t =
 
 module Impl : Task_access.IMPL = struct
   let list _ctx (req : Task_access.ListReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     let rows = All_tasks.query db in
     let tasks = List.map task_of_row rows in
     let tasks =
@@ -2389,19 +2389,19 @@ module Impl : Task_access.IMPL = struct
     Task_access.TaskList.make ~tasks ()
 
   let get _ctx (req : Task_access.IdReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     match Find_task.query db ~id:req.id with
     | r :: _ -> task_of_find r
     | [] -> failwith "Task not found"
 
   let create _ctx (req : Task_access.CreateReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     Insert_task.exec db ~title:req.title;
     let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
     Task_access.Task.make ~id ~title:req.title ~completed:false ()
 
   let update _ctx (req : Task_access.UpdateReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     (match req.title with
      | Some t -> Update_title.exec db ~title:t ~id:req.id
      | None -> ());
@@ -2413,7 +2413,7 @@ module Impl : Task_access.IMPL = struct
     | [] -> failwith "Task not found"
 
   let delete _ctx (req : Task_access.IdReq.t) =
-    let db = get_db () in
+    with_db @@ fun db ->
     Delete_task.exec db ~id:req.id;
     Task_access.Ok.make ~ok:true ()
 end
@@ -3655,7 +3655,7 @@ type note = {
 `[@@deriving table]` generates:
 - `CREATE TABLE IF NOT EXISTS` SQL
 - Schema registration for compile-time validation
-- Auto-migration: `Well.Db.open_db ()` creates tables + adds new columns
+- Auto-migration: `Well.Db.create_pool ()` creates tables + adds new columns
 
 Type mapping: `int`→INTEGER, `float`→REAL, `string`→TEXT, `bool`→INTEGER, `'a option`→nullable
 
@@ -3721,22 +3721,33 @@ type note = { id: int; title: string; body: string } [@@deriving table ~name:"no
 let%query all = "SELECT id, title, body FROM notes ORDER BY id DESC"
 let%query insert = "INSERT INTO notes (title, body) VALUES (:title, :body)"
 
-let db = lazy (Well.Db.open_db ())
-let get_db () = Lazy.force db
+let pool = lazy (Well.Db.create_pool ())
+let with_db f = Well.Db.with_conn (Lazy.force pool) f
 ```
 
 Usage:
 ```ocaml
-let db = Notes.get_db () in
-let notes = Notes.All.query db in
-Notes.Insert.exec db ~title:"Hello" ~body:"World";
+Notes.with_db (fun db ->
+  let notes = Notes.All.query db in
+  Notes.Insert.exec db ~title:"Hello" ~body:"World";
+  ...)
 ```
 
 ### Well.Db Module
 
 ```ocaml
+(* Connection pool — use for concurrent access *)
+Well.Db.create_pool : ?size:int -> ?filename:string -> unit -> Well.Db.pool
+(* Creates pool of N SQLite connections (default 8). Auto-migrates on first use. *)
+
+Well.Db.with_conn : Well.Db.pool -> (Sqlite3.db -> 'a) -> 'a
+(* Borrows a connection from pool, runs f, returns connection *)
+
+Well.Db.close_pool : Well.Db.pool -> unit
+(* Closes all connections in pool *)
+
+(* Single connection — for simple scripts or backward compat *)
 Well.Db.open_db : ?filename:string -> unit -> Sqlite3.db
-(* Opens SQLite in data/ dir, runs auto_migrate. Default filename: "app.sqlite" *)
 
 Well.Db.with_test_db : (Sqlite3.db -> 'a) -> 'a
 (* Opens :memory: SQLite, runs auto_migrate, perfect for tests *)
@@ -3750,7 +3761,7 @@ Well.Db.auto_migrate : Sqlite3.db -> unit      (* run manually if needed *)
 Well.Db.backup : string -> unit                (* backup db file *)
 Well.Db.rollback : string -> unit              (* restore from .bak *)
 
-Well.Db.data_dir : string ref  (* default "data", set before open_db *)
+Well.Db.data_dir : string ref  (* default "data", set before create_pool *)
 ```
 
 ---
@@ -4711,7 +4722,7 @@ Services must hide internal functions using `open struct ... end`. Only the cont
 When adding a new feature, you typically need:
 
 1. **Static page**: Create `lib/client/pages/feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
-2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let db = lazy (Well.Db.open_db ())`
+2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let pool = lazy (Well.Db.create_pool ())`
 3. **LiveView**: Create `lib/client/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields. Register with `Well.live "/feature" (module Feature_live)` in `lib/app.ml`. Then create a GET page that embeds `<Well.LiveView name="feature" />`. Both steps are required — `Well.live` only registers the WS handler, not the page.
 4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or LiveViews
 5. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module, register + expose in `lib/app.ml`

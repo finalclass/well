@@ -184,7 +184,39 @@ let auto_migrate db =
 
 let data_dir = ref "data"
 
-(* ── open_db — replaces manual init ───────────────────────────────── *)
+(* ── Connection pool ─────────────────────────────────────────────── *)
+
+let _init_conn db =
+  ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
+  ignore (Sqlite3.exec db "PRAGMA synchronous=NORMAL")
+
+type pool = {
+  conns : Sqlite3.db array;
+  next : int Atomic.t;
+}
+
+let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
+  let dir = !data_dir in
+  (try Unix.mkdir dir 0o755
+   with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  let path = Filename.concat dir filename in
+  let migrated = Atomic.make false in
+  let conns = Array.init size (fun _ ->
+    let db = Sqlite3.db_open path in
+    _init_conn db;
+    if not (Atomic.exchange migrated true) then
+      auto_migrate db;
+    db) in
+  { conns; next = Atomic.make 0 }
+
+let with_conn pool f =
+  let idx = Atomic.fetch_and_add pool.next 1 mod Array.length pool.conns in
+  f pool.conns.(idx)
+
+let close_pool pool =
+  Array.iter (fun db -> ignore (Sqlite3.db_close db)) pool.conns
+
+(* ── open_db — single connection (backward compat) ───────────────── *)
 
 let open_db ?(filename = "app.sqlite") () =
   let dir = !data_dir in
@@ -192,8 +224,7 @@ let open_db ?(filename = "app.sqlite") () =
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
   let path = Filename.concat dir filename in
   let db = Sqlite3.db_open path in
-  ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
-  ignore (Sqlite3.exec db "PRAGMA synchronous=NORMAL");
+  _init_conn db;
   auto_migrate db;
   db
 
@@ -258,8 +289,6 @@ let with_test_db f =
     ~finally:(fun () -> ignore (Sqlite3.db_close db))
     (fun () -> f db)
 
-(* ── Backup / rollback ────────────────────────────────────────────── *)
-
 let rollback path =
   let bak = path ^ ".bak" in
   if Sys.file_exists bak then begin
@@ -272,28 +301,45 @@ let rollback path =
 
 (* ── well.sqlite — shared framework database ─────────────────────── *)
 
-let _well_db : Sqlite3.db option ref = ref None
-let _well_mu = Mutex.create ()
+(* Simple round-robin pool for well.sqlite.
+   No Eio dependency — works both inside and outside Eio runtime.
+   Each fiber/thread gets its own connection via round-robin — no locking needed. *)
 
-let well_db () =
-  Mutex.lock _well_mu;
-  Fun.protect ~finally:(fun () -> Mutex.unlock _well_mu) (fun () ->
-    match !_well_db with
-    | Some d -> d
-    | None ->
-      let dir = !data_dir in
-      (try Unix.mkdir dir 0o755
-       with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-      let path = Filename.concat dir "well.sqlite" in
-      let d = Sqlite3.db_open path in
-      ignore (Sqlite3.exec d "PRAGMA journal_mode=WAL");
-      ignore (Sqlite3.exec d "PRAGMA synchronous=NORMAL");
-      _well_db := Some d;
-      d)
+let _well_size = 4
+let _well_conns : Sqlite3.db array option ref = ref None
+let _well_next = Atomic.make 0
+let _well_mu = Mutex.create () (* only for lazy init + shutdown *)
+
+let _ensure_well_conns () =
+  match !_well_conns with
+  | Some c -> c
+  | None ->
+    Mutex.lock _well_mu;
+    Fun.protect ~finally:(fun () -> Mutex.unlock _well_mu) (fun () ->
+      match !_well_conns with
+      | Some c -> c (* double-check after lock *)
+      | None ->
+        let dir = !data_dir in
+        (try Unix.mkdir dir 0o755
+         with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+        let path = Filename.concat dir "well.sqlite" in
+        let conns = Array.init _well_size (fun _ ->
+          let db = Sqlite3.db_open path in
+          _init_conn db;
+          db) in
+        _well_conns := Some conns;
+        conns)
+
+let with_well_db f =
+  let conns = _ensure_well_conns () in
+  let idx = Atomic.fetch_and_add _well_next 1 mod _well_size in
+  f conns.(idx)
 
 let close_well_db () =
   Mutex.lock _well_mu;
   Fun.protect ~finally:(fun () -> Mutex.unlock _well_mu) (fun () ->
-    match !_well_db with
-    | Some d -> ignore (Sqlite3.db_close d); _well_db := None
+    match !_well_conns with
+    | Some conns ->
+      Array.iter (fun db -> ignore (Sqlite3.db_close db)) conns;
+      _well_conns := None
     | None -> ())

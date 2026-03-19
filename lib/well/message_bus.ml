@@ -14,9 +14,8 @@ type event = {
 
 let _tables_created = Atomic.make false
 
-let ensure_tables () =
+let ensure_tables db =
   if not (Atomic.get _tables_created) then begin
-    let db = Db.well_db () in
     let _ =
       Sqlite3.exec db
         {|CREATE TABLE IF NOT EXISTS _well_events (
@@ -34,7 +33,7 @@ let ensure_tables () =
     Atomic.set _tables_created true
   end
 
-let init () = ensure_tables ()
+let init () = Db.with_well_db ensure_tables
 
 (* ── Wildcard matching ─────────────────────────────────────────────── *)
 
@@ -106,21 +105,23 @@ let publish ?(ephemeral = false) channel payload =
     Telemetry.incr_bus_events ();
     0
   end else begin
-    ensure_tables ();
-    let db = Db.well_db () in
-    let sql =
-      "INSERT INTO _well_events (channel, payload, created_at) VALUES (?, ?, ?)"
+    let id = Db.with_well_db (fun db ->
+      ensure_tables db;
+      let sql =
+        "INSERT INTO _well_events (channel, payload, created_at) VALUES (?, ?, ?)"
+      in
+      let stmt = Sqlite3.prepare db sql in
+      let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT channel) in
+      let _ =
+        Sqlite3.bind stmt 2
+          (Sqlite3.Data.TEXT (Yojson.Safe.to_string payload))
+      in
+      let _ = Sqlite3.bind stmt 3 (Sqlite3.Data.FLOAT now) in
+      let _ = Sqlite3.step stmt in
+      let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
+      let _ = Sqlite3.finalize stmt in
+      id)
     in
-    let stmt = Sqlite3.prepare db sql in
-    let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT channel) in
-    let _ =
-      Sqlite3.bind stmt 2
-        (Sqlite3.Data.TEXT (Yojson.Safe.to_string payload))
-    in
-    let _ = Sqlite3.bind stmt 3 (Sqlite3.Data.FLOAT now) in
-    let _ = Sqlite3.step stmt in
-    let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
-    let _ = Sqlite3.finalize stmt in
     let event = { id; channel; payload; created_at = now } in
     notify event;
     Telemetry.incr_bus_events ();
@@ -133,8 +134,8 @@ let close () =
   Atomic.set _tables_created false
 
 let replay ?(since_id = 0) pattern cb =
-  ensure_tables ();
-  let db = Db.well_db () in
+  Db.with_well_db @@ fun db ->
+  ensure_tables db;
   let sql =
     "SELECT id, channel, payload, created_at FROM _well_events \
      WHERE id > ? ORDER BY id ASC"
@@ -172,8 +173,8 @@ let replay ?(since_id = 0) pattern cb =
 (* ── Prune ────────────────────────────────────────────────────────── *)
 
 let prune ~keep_since_id () =
-  ensure_tables ();
-  let db = Db.well_db () in
+  Db.with_well_db @@ fun db ->
+  ensure_tables db;
   let sql = "DELETE FROM _well_events WHERE id <= ?" in
   let stmt = Sqlite3.prepare db sql in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int keep_since_id)) in

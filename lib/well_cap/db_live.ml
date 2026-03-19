@@ -31,10 +31,12 @@ type msg =
 
 let persistence = Well.LiveView.Ephemeral
 
-let get_db_for source =
+let with_db_for source f =
   match source with
-  | App -> Well.Db.open_db ()
-  | Well_fw -> Well.Db.well_db ()
+  | App ->
+    let db = Well.Db.open_db () in
+    Fun.protect ~finally:(fun () -> ignore (Sqlite3.db_close db)) (fun () -> f db)
+  | Well_fw -> Well.Db.with_well_db f
 
 let sanitize_name s =
   String.map (fun c -> if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
@@ -46,7 +48,7 @@ let get_table_names_app () =
 
 let get_table_names_well () =
   try
-    let db = Well.Db.well_db () in
+    Well.Db.with_well_db @@ fun db ->
     let stmt = Sqlite3.prepare db
       "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '_well_%' ORDER BY name" in
     let results = ref [] in
@@ -73,7 +75,7 @@ let find_pk_app table_name =
 
 let find_pk_well table_name =
   try
-    let db = Well.Db.well_db () in
+    Well.Db.with_well_db @@ fun db ->
     let sql = Printf.sprintf "PRAGMA table_info(%s)" (Well.Db.quote_id table_name) in
     let stmt = Sqlite3.prepare db sql in
     let result = ref None in
@@ -115,7 +117,7 @@ let read_rows stmt =
 
 let count_table source table_name =
   try
-    let db = get_db_for source in
+    with_db_for source @@ fun db ->
     let sql = Printf.sprintf "SELECT COUNT(*) FROM %s" (sanitize_name table_name) in
     let stmt = Sqlite3.prepare db sql in
     let n = if Sqlite3.step stmt = Sqlite3.Rc.ROW then
@@ -129,7 +131,7 @@ let count_table source table_name =
 
 let query_table_page source table_name page =
   try
-    let db = get_db_for source in
+    with_db_for source @@ fun db ->
     let offset = page * page_size in
     let sql = Printf.sprintf "SELECT * FROM %s LIMIT %d OFFSET %d"
       (sanitize_name table_name) page_size offset in
@@ -140,7 +142,7 @@ let query_table_page source table_name page =
 
 let update_cell source table_name pk_col row_id col_name new_value =
   try
-    let db = get_db_for source in
+    with_db_for source @@ fun db ->
     let sql = Printf.sprintf "UPDATE %s SET %s = ? WHERE %s = ?"
       (sanitize_name table_name) (sanitize_name col_name) (sanitize_name pk_col) in
     let stmt = Sqlite3.prepare db sql in
@@ -157,7 +159,7 @@ let update_cell source table_name pk_col row_id col_name new_value =
 
 let run_sql source sql_str =
   try
-    let db = get_db_for source in
+    with_db_for source @@ fun db ->
     let stmt = Sqlite3.prepare db sql_str in
     let ncols = Sqlite3.column_count stmt in
     if ncols = 0 then begin
