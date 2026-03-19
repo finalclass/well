@@ -390,6 +390,55 @@ let generate_convenience_fns cm service =
   ) service.rpcs;
   Buffer.contents buf
 
+(* ── Topological sort of messages by dependency ──────────────────── *)
+
+let rec collect_local_deps ~local_module acc = function
+  | Prim _ -> acc
+  | Custom { module_name; msg_name } ->
+    if module_name = local_module then msg_name :: acc else acc
+  | List inner | Optional inner -> collect_local_deps ~local_module acc inner
+
+let msg_deps ~local_module (msg : msg) =
+  let deps = match msg.kind with
+    | Struct props ->
+      List.fold_left (fun acc (p : property) ->
+        collect_local_deps ~local_module acc p.type_info
+      ) [] props
+    | Variant ctors ->
+      List.fold_left (fun acc (c : constructor) ->
+        collect_local_deps ~local_module acc c.payload
+      ) [] ctors
+  in
+  List.sort_uniq String.compare deps
+
+let topo_sort_msgs ~local_module msgs =
+  (* Kahn's algorithm *)
+  let names = List.map (fun (m : msg) -> m.name) msgs in
+  let by_name = List.map (fun (m : msg) -> (m.name, m)) msgs in
+  let deps = List.map (fun (m : msg) ->
+    (m.name, msg_deps ~local_module m
+              |> List.filter (fun d -> List.mem d names))
+  ) msgs in
+  let remaining = Hashtbl.create 16 in
+  List.iter (fun (n, ds) -> Hashtbl.replace remaining n ds) deps;
+  let result = ref [] in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    Hashtbl.iter (fun name ds ->
+      let unresolved = List.filter (fun d -> Hashtbl.mem remaining d) ds in
+      if unresolved = [] then begin
+        result := name :: !result;
+        Hashtbl.remove remaining name;
+        changed := true
+      end
+    ) remaining
+  done;
+  (* Append any remaining (cycles) in original order *)
+  Hashtbl.iter (fun name _ -> result := name :: !result) remaining;
+  List.rev !result
+  |> List.filter_map (fun n -> List.assoc_opt n by_name)
+
 (* ── Generate complete module ─────────────────────────────────────── *)
 
 let generate_module cm =
@@ -400,9 +449,10 @@ let generate_module cm =
   p "[@@@warning \"-32\"]\n\n";
 
   (* Message modules — topologically sorted *)
+  let sorted_msgs = topo_sort_msgs ~local_module cm.msgs in
   List.iter (fun msg ->
     p "%s\n" (generate_msg ~local_module msg)
-  ) cm.msgs;
+  ) sorted_msgs;
 
   (* Service-specific code *)
   (match cm.service with
@@ -743,10 +793,11 @@ let generate_ts_module cm =
   ) imports;
   if imports <> [] || cm.service <> None then p "\n";
 
-  (* Message types *)
+  (* Message types — topologically sorted *)
+  let sorted_msgs = topo_sort_msgs ~local_module cm.msgs in
   List.iter (fun msg ->
     p "%s\n" (generate_ts_msg ~local_module msg)
-  ) cm.msgs;
+  ) sorted_msgs;
 
   (* Service *)
   (match cm.service with
@@ -1129,10 +1180,11 @@ let generate_go_module ~go_module_path cm =
     p ")\n\n"
   end;
 
-  (* Messages *)
+  (* Messages — topologically sorted *)
+  let sorted_msgs = topo_sort_msgs ~local_module cm.msgs in
   List.iter (fun msg ->
     p "%s\n" (generate_go_msg ~local_module msg)
-  ) cm.msgs;
+  ) sorted_msgs;
 
   (* Service *)
   (match cm.service with
@@ -1509,10 +1561,11 @@ let generate_dart_module cm =
   end;
   if imports <> [] || cm.service <> None then p "\n";
 
-  (* Messages *)
+  (* Messages — topologically sorted *)
+  let sorted_msgs = topo_sort_msgs ~local_module cm.msgs in
   List.iter (fun msg ->
     p "%s\n" (generate_dart_msg ~local_module msg)
-  ) cm.msgs;
+  ) sorted_msgs;
 
   (* Proxy client *)
   (match cm.service with
