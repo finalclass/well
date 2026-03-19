@@ -4334,6 +4334,18 @@ Well.Service.full_health : unit -> (string * string) list
 Well.Service.cast : (unit -> unit) -> unit  (* fire-and-forget async *)
 ```
 
+### Periodic Background Tasks
+
+```ocaml
+Well.every ~name:"kicker" ~sleep:5.0 (fun () ->
+  (* runs in loop: execute → sleep 5s → execute → ... *)
+  (* crashes are logged, loop continues *)
+  (* cancelled automatically on shutdown *)
+)
+```
+
+Register before `Well.run` (like routes). Each task runs in its own EIO fiber.
+
 ---
 
 ## WebSocket (Raw)
