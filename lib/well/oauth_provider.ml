@@ -16,8 +16,8 @@ let _session_delete_ref : (string -> string -> unit) ref =
 let _session_clear_ref : (string -> unit) ref =
   ref (fun _ -> failwith "Oauth_provider._session_clear_ref not wired")
 
-let _login_ref : (email:string -> password:string -> (Auth.user, string) result) ref =
-  ref (fun ~email:_ ~password:_ -> failwith "Oauth_provider._login_ref not wired")
+let _login_ref : (email:string -> password:string -> ?ip:string -> unit -> (Auth.user, string) result) ref =
+  ref (fun ~email:_ ~password:_ ?ip:_ () -> failwith "Oauth_provider._login_ref not wired")
 
 let _current_user_ref : (Types.request -> string option) ref =
   ref (fun _ -> failwith "Oauth_provider._current_user_ref not wired")
@@ -359,7 +359,7 @@ let setup ?(title = "Logowanie") ?(subtitle = "Zaloguj się, aby kontynuować") 
                  ~error:"Nieprawidłowy redirect_uri" ())
       else begin
         (* Authenticate *)
-        match !_login_ref ~email ~password with
+        match !_login_ref ~email ~password () with
         | Error _msg ->
           `Html (login_page ~title ~subtitle ~client_id ~redirect_uri ~state
                    ~error:"Nieprawidłowy email lub hasło" ())

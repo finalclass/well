@@ -56,7 +56,7 @@ let () =
     Hashtbl.replace post_handlers path handler);
 
   (* Register a test user *)
-  let _user = Result.get_ok (Well.Auth.register ~email:"admin@test.com" ~password:"secret123") in
+  let _user = Result.get_ok (Well.Auth.register ~email:"admin@test.com" ~password:"secret123" ()) in
 
   (* ── Setup ────────────────────────────────────────────────────── *)
 

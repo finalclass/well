@@ -13,7 +13,7 @@ let () =
 
   (* ── PBKDF2 correctness ─────────────────────────────────────────── *)
 
-  let r1 = Well.Auth.register ~email:"test@example.com" ~password:"password123" in
+  let r1 = Well.Auth.register ~email:"test@example.com" ~password:"password123" () in
   check "register succeeds" (Result.is_ok r1);
   let user1 = Result.get_ok r1 in
   check "register returns id" (user1.id > 0);
@@ -21,19 +21,19 @@ let () =
   check "register returns created_at" (String.length user1.created_at > 0);
 
   (* Login with correct password *)
-  let l1 = Well.Auth.login ~email:"test@example.com" ~password:"password123" in
+  let l1 = Well.Auth.login ~email:"test@example.com" ~password:"password123" () in
   check "login correct password" (Result.is_ok l1);
   let login_user = Result.get_ok l1 in
   check "login returns same id" (login_user.id = user1.id);
   check "login returns same email" (login_user.email = "test@example.com");
 
   (* Login with wrong password *)
-  let l2 = Well.Auth.login ~email:"test@example.com" ~password:"wrongpassword" in
+  let l2 = Well.Auth.login ~email:"test@example.com" ~password:"wrongpassword" () in
   check "login wrong password fails" (Result.is_error l2);
   check "login wrong password msg" (Result.get_error l2 = "Invalid email or password");
 
   (* Login with nonexistent email *)
-  let l3 = Well.Auth.login ~email:"nobody@example.com" ~password:"password123" in
+  let l3 = Well.Auth.login ~email:"nobody@example.com" ~password:"password123" () in
   check "login nonexistent email fails" (Result.is_error l3);
   check "login nonexistent msg" (Result.get_error l3 = "Invalid email or password");
 
@@ -47,65 +47,65 @@ let () =
   (* ── Email normalization ─────────────────────────────────────────── *)
 
   (* Case insensitive — "TEST@Example.COM" should match "test@example.com" *)
-  let r_upper = Well.Auth.register ~email:"TEST@Example.COM" ~password:"password123" in
+  let r_upper = Well.Auth.register ~email:"TEST@Example.COM" ~password:"password123" () in
   check "register case-normalized rejects dupe" (Result.is_error r_upper);
 
   (* Login with different case *)
-  let l_case = Well.Auth.login ~email:"TEST@EXAMPLE.COM" ~password:"password123" in
+  let l_case = Well.Auth.login ~email:"TEST@EXAMPLE.COM" ~password:"password123" () in
   check "login case-insensitive" (Result.is_ok l_case);
 
   (* Whitespace trimmed *)
-  let l_trim = Well.Auth.login ~email:"  test@example.com  " ~password:"password123" in
+  let l_trim = Well.Auth.login ~email:"  test@example.com  " ~password:"password123" () in
   check "login trims whitespace" (Result.is_ok l_trim);
 
   (* ── Email validation ────────────────────────────────────────────── *)
 
-  let r_empty = Well.Auth.register ~email:"" ~password:"password123" in
+  let r_empty = Well.Auth.register ~email:"" ~password:"password123" () in
   check "register empty email" (Result.is_error r_empty);
 
-  let r_no_at = Well.Auth.register ~email:"notanemail" ~password:"password123" in
+  let r_no_at = Well.Auth.register ~email:"notanemail" ~password:"password123" () in
   check "register no @ in email" (Result.is_error r_no_at);
 
-  let r_no_domain = Well.Auth.register ~email:"user@" ~password:"password123" in
+  let r_no_domain = Well.Auth.register ~email:"user@" ~password:"password123" () in
   check "register no domain" (Result.is_error r_no_domain);
 
-  let r_no_local = Well.Auth.register ~email:"@example.com" ~password:"password123" in
+  let r_no_local = Well.Auth.register ~email:"@example.com" ~password:"password123" () in
   check "register no local part" (Result.is_error r_no_local);
 
-  let r_no_dot = Well.Auth.register ~email:"user@localhost" ~password:"password123" in
+  let r_no_dot = Well.Auth.register ~email:"user@localhost" ~password:"password123" () in
   check "register no dot in domain" (Result.is_error r_no_dot);
 
-  let r_spaces = Well.Auth.register ~email:"user @example.com" ~password:"password123" in
+  let r_spaces = Well.Auth.register ~email:"user @example.com" ~password:"password123" () in
   check "register space in email" (Result.is_error r_spaces);
 
-  let r_newline = Well.Auth.register ~email:"user\n@example.com" ~password:"password123" in
+  let r_newline = Well.Auth.register ~email:"user\n@example.com" ~password:"password123" () in
   check "register newline in email" (Result.is_error r_newline);
 
-  let r_cr = Well.Auth.register ~email:"user\r@example.com" ~password:"password123" in
+  let r_cr = Well.Auth.register ~email:"user\r@example.com" ~password:"password123" () in
   check "register CR in email" (Result.is_error r_cr);
 
   (* ── Password validation ─────────────────────────────────────────── *)
 
-  let r_short = Well.Auth.register ~email:"short@example.com" ~password:"1234567" in
+  let r_short = Well.Auth.register ~email:"short@example.com" ~password:"1234567" () in
   check "register short password" (Result.is_error r_short);
   check "register short password msg" (Result.get_error r_short = "Password must be at least 8 characters");
 
-  let r_empty_pw = Well.Auth.register ~email:"empty_pw@example.com" ~password:"" in
+  let r_empty_pw = Well.Auth.register ~email:"empty_pw@example.com" ~password:"" () in
   check "register empty password" (Result.is_error r_empty_pw);
 
   (* Max password length — DoS prevention *)
   let huge_pw = String.make 2000 'A' in
-  let r_huge = Well.Auth.register ~email:"huge@example.com" ~password:huge_pw in
+  let r_huge = Well.Auth.register ~email:"huge@example.com" ~password:huge_pw () in
   check "register huge password rejected" (Result.is_error r_huge);
   check "register huge pw msg" (Result.get_error r_huge = "Password is too long");
 
   (* Login with huge password — should not DoS *)
-  let l_huge = Well.Auth.login ~email:"test@example.com" ~password:huge_pw in
+  let l_huge = Well.Auth.login ~email:"test@example.com" ~password:huge_pw () in
   check "login huge password fast rejection" (Result.is_error l_huge);
 
   (* ── Duplicate email ─────────────────────────────────────────────── *)
 
-  let r_dup = Well.Auth.register ~email:"test@example.com" ~password:"password456" in
+  let r_dup = Well.Auth.register ~email:"test@example.com" ~password:"password456" () in
   check "register duplicate email" (Result.is_error r_dup);
   check "register duplicate msg" (Result.get_error r_dup = "Email already taken");
 
@@ -113,9 +113,9 @@ let () =
   (* Both existing and nonexistent email should take similar time
      because we burn a dummy hash on miss. We can't test exact timing,
      but we verify the dummy hash path doesn't crash. *)
-  let l_existing_wrong = Well.Auth.login ~email:"test@example.com" ~password:"wrongwrong" in
+  let l_existing_wrong = Well.Auth.login ~email:"test@example.com" ~password:"wrongwrong" () in
   check "timing: existing email wrong pw" (Result.is_error l_existing_wrong);
-  let l_nonexistent = Well.Auth.login ~email:"doesnotexist@example.com" ~password:"wrongwrong" in
+  let l_nonexistent = Well.Auth.login ~email:"doesnotexist@example.com" ~password:"wrongwrong" () in
   check "timing: nonexistent email" (Result.is_error l_nonexistent);
 
   (* ── Grants ──────────────────────────────────────────────────────── *)
@@ -166,15 +166,15 @@ let () =
   (* ── Password hash format ───────────────────────────────────────── *)
 
   (* Verify the stored hash is not reversible / is properly formatted *)
-  let r_fmt = Well.Auth.register ~email:"format@example.com" ~password:"testformat123" in
+  let r_fmt = Well.Auth.register ~email:"format@example.com" ~password:"testformat123" () in
   check "hash format: register ok" (Result.is_ok r_fmt);
 
   (* Verify password against itself *)
-  let l_fmt = Well.Auth.login ~email:"format@example.com" ~password:"testformat123" in
+  let l_fmt = Well.Auth.login ~email:"format@example.com" ~password:"testformat123" () in
   check "hash format: login ok" (Result.is_ok l_fmt);
 
   (* Wrong password of same length *)
-  let l_wrong_same_len = Well.Auth.login ~email:"format@example.com" ~password:"testformat124" in
+  let l_wrong_same_len = Well.Auth.login ~email:"format@example.com" ~password:"testformat124" () in
   check "hash format: wrong pw same length" (Result.is_error l_wrong_same_len);
 
   (* ── Malformed hash resilience ──────────────────────────────────── *)
@@ -188,7 +188,7 @@ let () =
 
   (* ── SQL injection resistance ───────────────────────────────────── *)
   (* Parameterized queries should handle these fine *)
-  let r_sqli = Well.Auth.register ~email:"bobby'; DROP TABLE users;--@example.com" ~password:"password123" in
+  let r_sqli = Well.Auth.register ~email:"bobby'; DROP TABLE users;--@example.com" ~password:"password123" () in
   check "SQLi in email: register ok or dup" (Result.is_ok r_sqli || Result.is_error r_sqli);
   (* If it registered, the user should exist with the exact email *)
   (match r_sqli with
@@ -200,18 +200,18 @@ let () =
        | None -> false)
    | Error _ -> check "SQLi in email: rejected by validation" true);
 
-  let r_sqli_pw = Well.Auth.register ~email:"sqli_pw@example.com" ~password:"'; DROP TABLE users;-- padding" in
+  let r_sqli_pw = Well.Auth.register ~email:"sqli_pw@example.com" ~password:"'; DROP TABLE users;-- padding" () in
   check "SQLi in password: register ok" (Result.is_ok r_sqli_pw);
-  let l_sqli_pw = Well.Auth.login ~email:"sqli_pw@example.com" ~password:"'; DROP TABLE users;-- padding" in
+  let l_sqli_pw = Well.Auth.login ~email:"sqli_pw@example.com" ~password:"'; DROP TABLE users;-- padding" () in
   check "SQLi in password: login ok" (Result.is_ok l_sqli_pw);
 
   (* ── Unicode in email/password ──────────────────────────────────── *)
   (* test@example.com already taken — verify unicode password doesn't bypass anything *)
-  let r_unicode = Well.Auth.register ~email:"test@example.com" ~password:"\xc3\xa9\xc3\xa0\xc3\xbc12345" in
+  let r_unicode = Well.Auth.register ~email:"test@example.com" ~password:"\xc3\xa9\xc3\xa0\xc3\xbc12345" () in
   check "unicode password: register (dup email)" (Result.is_error r_unicode);
-  let r_uni2 = Well.Auth.register ~email:"unicode@example.com" ~password:"\xc3\xa9\xc3\xa0\xc3\xbc12345" in
+  let r_uni2 = Well.Auth.register ~email:"unicode@example.com" ~password:"\xc3\xa9\xc3\xa0\xc3\xbc12345" () in
   check "unicode password: register new" (Result.is_ok r_uni2);
-  let l_uni2 = Well.Auth.login ~email:"unicode@example.com" ~password:"\xc3\xa9\xc3\xa0\xc3\xbc12345" in
+  let l_uni2 = Well.Auth.login ~email:"unicode@example.com" ~password:"\xc3\xa9\xc3\xa0\xc3\xbc12345" () in
   check "unicode password: login" (Result.is_ok l_uni2);
 
   (* ── Integration: error_handler catches Auth_denied ──────────────── *)
@@ -235,7 +235,7 @@ let () =
 
     (* Non-admin user = 403 *)
     (* Register and login a user via the auth module *)
-    let _r = Well.Auth.register ~email:"grantuser@example.com" ~password:"password123" in
+    let _r = Well.Auth.register ~email:"grantuser@example.com" ~password:"password123" () in
     (* We can't easily set session in test, so we verify the module behavior directly *)
 
     (* ── create_user_without_password ────────────────────────────────── *)
@@ -247,7 +247,7 @@ let () =
     check "create_user_without_password: email" (nopw_user.email = "oauth@example.com");
 
     (* Password login impossible on no-password account *)
-    let l_nopw = Well.Auth.login ~email:"oauth@example.com" ~password:"anything" in
+    let l_nopw = Well.Auth.login ~email:"oauth@example.com" ~password:"anything" () in
     check "no-password user: login fails" (Result.is_error l_nopw);
 
     (* Duplicate email *)
@@ -408,7 +408,7 @@ let () =
 
     (* ── Account linking: verified email links to existing ───────────── *)
 
-    let r_link = Well.Auth.register ~email:"linked@example.com" ~password:"password123" in
+    let r_link = Well.Auth.register ~email:"linked@example.com" ~password:"password123" () in
     check "link: register existing user" (Result.is_ok r_link);
     let link_user = Result.get_ok r_link in
     let link_result = Well.OAuth.link_or_create_user
@@ -422,7 +422,7 @@ let () =
 
     (* ── Account linking: unverified email creates separate ──────────── *)
 
-    let r_existing = Well.Auth.register ~email:"existing@example.com" ~password:"password123" in
+    let r_existing = Well.Auth.register ~email:"existing@example.com" ~password:"password123" () in
     check "separate: register existing" (Result.is_ok r_existing);
     let existing_user = Result.get_ok r_existing in
     let sep_result = Well.OAuth.link_or_create_user

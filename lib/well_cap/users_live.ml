@@ -76,7 +76,7 @@ let update _req model msg =
   | BackToList ->
       {(clear model) with view= List; users= load_users ~search:model.search ()}
   | CreateUser (email, password) -> (
-    match Well.Auth.register ~email ~password with
+    match Well.Auth.register ~email ~password () with
     | Ok _user ->
         { (clear model) with
           view= List
@@ -235,7 +235,7 @@ let render_edit model id =
       List.find_opt (fun ((u : Well.Auth.user), _) -> u.id = id) model.users
     with
     | Some (u, g) -> (u, g)
-    | None -> ({Well.Auth.id; email= ""; created_at= ""}, [])
+    | None -> ({Well.Auth.id; email= ""; first_name= ""; last_name= ""; language= "pl"; phone_number= ""; is_archived= false; created_at= ""}, [])
   in
   let grants_html =
     if grants = []

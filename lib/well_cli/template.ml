@@ -528,7 +528,7 @@ let error = Well.get_flash req "error" in
 Well.post "/signup" @@ fun req ->
 let email = Well.form req "email" in
 let password = Well.form req "password" in
-match Well.Auth.register ~email ~password with
+match Well.Auth.register ~email ~password () with
 | Ok _user ->
   (match Well.Auth.login_and_set_session req ~email ~password with
    | Ok _ -> Well.redirect "/"
@@ -4060,16 +4060,34 @@ let value = Ctx.get req
 PBKDF2-SHA256, 100k iterations. Stored in `data/well.sqlite`.
 
 ```ocaml
-type user = { id: int; email: string; created_at: string }
+type user = {
+  id: int; email: string; first_name: string; last_name: string;
+  language: string; phone_number: string; is_archived: bool; created_at: string
+}
 
 (* User management *)
-Well.Auth.register : email:string -> password:string -> (user, string) result
-Well.Auth.login : email:string -> password:string -> (user, string) result
+Well.Auth.register : email:string -> password:string -> ?first_name:string -> ?last_name:string -> unit -> (user, string) result
+Well.Auth.login : email:string -> password:string -> ?ip:string -> unit -> (user, string) result
 Well.Auth.get_user : int -> user option
+Well.Auth.edit_profile : id:int -> ?first_name:string -> ?last_name:string -> ?language:string -> ?phone_number:string -> unit -> (unit, string) result
+Well.Auth.archive_user : id:int -> is_archived:bool -> unit -> unit
+Well.Auth.find_users : ?current:int -> ?ids:int list -> ?email:string -> ?include_archived:bool -> unit -> user list
 
 (* Session integration *)
 Well.Auth.login_and_set_session : request -> email:string -> password:string -> (user, string) result
 Well.Auth.logout : request -> unit
+
+(* OTP *)
+Well.Auth.initiate_otp : email:string -> unit -> (string, string) result  (* returns code *)
+Well.Auth.verify_otp : email:string -> code:string -> ?ip:string -> unit -> (user, string) result
+
+(* User settings — JSON blob per user *)
+Well.Auth.get_settings : user_id:int -> unit -> Yojson.Safe.t option
+Well.Auth.set_settings : user_id:int -> settings:Yojson.Safe.t -> unit -> unit
+
+(* Brute-force protection *)
+Well.Auth.reset_attempts : email:string -> unit -> unit
+Well.Auth.configure : ?login_failures_limit:int -> ?login_failure_window_seconds:int -> ?otp_lifetime_seconds:int -> ... -> unit -> unit
 
 (* Grants — flat permission system *)
 Well.Auth.grant : user_id:int -> string -> unit
