@@ -1482,7 +1482,7 @@ let generate_dart_proxy ~local_module cm service msgs =
   p "  final http.Client _httpClient;\n";
   p "  final String _baseUrl;\n\n";
   p "  %sClient(this._httpClient, String baseUrl)\n" cm.name;
-  p "      : _baseUrl = '$baseUrl/%s';\n" (dart_kebab_case cm.name);
+  p "      : _baseUrl = baseUrl;\n";
   List.iter (fun (rpc : rpc) ->
     let req_type = resolve rpc.request_msg in
     let resp_type = resolve rpc.response_msg in
