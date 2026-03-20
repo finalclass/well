@@ -54,18 +54,31 @@ let sqlite_to_ocaml_name = function
 (* ═══════════════════════════════════════════════════════════════════ *)
 
 let create_table_sql info =
+  let pk_cols = List.filter (fun c -> c.col_primary) info.tbl_cols in
+  let compound_pk = List.length pk_cols > 1 in
   let col_strs =
     List.map
       (fun c ->
-        let pk = if c.col_primary then " PRIMARY KEY" else "" in
+        let pk =
+          if c.col_primary && not compound_pk then " PRIMARY KEY"
+          else ""
+        in
         let nn =
-          if c.col_nullable || c.col_primary then "" else " NOT NULL"
+          if c.col_nullable || (c.col_primary && not compound_pk) then ""
+          else " NOT NULL"
         in
         Printf.sprintf "\"%s\" %s%s%s" c.col_name c.col_sqlite_type pk nn)
       info.tbl_cols
   in
+  let pk_constraint =
+    if compound_pk then
+      let names = List.map (fun c ->
+        Printf.sprintf "\"%s\"" c.col_name) pk_cols in
+      [Printf.sprintf "PRIMARY KEY (%s)" (String.concat ", " names)]
+    else []
+  in
   Printf.sprintf "CREATE TABLE IF NOT EXISTS \"%s\" (%s)" info.tbl_name
-    (String.concat ", " col_strs)
+    (String.concat ", " (col_strs @ pk_constraint))
 
 (* ═══════════════════════════════════════════════════════════════════ *)
 (*  Extract :param names from SQL string                              *)
@@ -202,7 +215,14 @@ let derive_table_impl ~ctxt (_rec_flag, type_decls) name_opt =
               (fun (ld : label_declaration) ->
                 let fname = ld.pld_name.txt in
                 let sql_type, nullable = ocaml_to_sqlite ld.pld_type in
-                let primary = fname = "id" && sql_type = "INTEGER" in
+                let has_pk_attr =
+                  List.exists (fun (a : attribute) ->
+                    a.attr_name.txt = "primary_key")
+                    ld.pld_attributes
+                in
+                let primary =
+                  has_pk_attr || (fname = "id" && sql_type = "INTEGER")
+                in
                 {
                   col_name = fname;
                   col_sqlite_type = sql_type;
@@ -283,10 +303,17 @@ let derive_table_impl ~ctxt (_rec_flag, type_decls) name_opt =
             "[@@deriving table] requires a record type")
     type_decls
 
+let attr_primary_key =
+  Attribute.declare "primary_key"
+    Attribute.Context.label_declaration
+    Ast_pattern.(pstr nil)
+    ()
+
 let _ =
   Deriving.add "table"
     ~str_type_decl:
       (Deriving.Generator.V2.make
+         ~attributes:[Attribute.T attr_primary_key]
          Deriving.Args.(empty +> arg "name" (estring __))
          derive_table_impl)
 
