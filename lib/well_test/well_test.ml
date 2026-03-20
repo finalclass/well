@@ -10,18 +10,26 @@ type test_result =
 type test_case = {
   name : string;
   fn : unit -> unit;
+  timeout_s : float option;
   mutable result : test_result option;
   mutable duration_ms : float;
 }
 
 type test_suite = {
   name : string;
+  timeout_s : float option;
   mutable tests : test_case list;
   mutable before_each : (unit -> unit) option;
   mutable after_each : (unit -> unit) option;
   mutable before_all : (unit -> unit) option;
   mutable after_all : (unit -> unit) option;
 }
+
+let _default_timeout = ref 5.0
+
+let default_timeout t = _default_timeout := t
+
+exception Test_timeout of float
 
 type test_state = {
   mutable suites : test_suite list;
@@ -338,10 +346,11 @@ let to_match_snapshot exp =
              (Printf.sprintf "Snapshot mismatch for \"%s\"" key))
       end
 
-let describe name fn =
+let describe ?timeout name fn =
   let suite =
     {
       name;
+      timeout_s = timeout;
       tests = [];
       before_each = None;
       after_each = None;
@@ -355,11 +364,11 @@ let describe name fn =
   state.current_suite <- prev_suite;
   state.suites <- suite :: state.suites
 
-let it name fn =
+let it ?timeout name fn =
   match state.current_suite with
   | None -> failwith "it() must be called inside describe()"
   | Some suite ->
-      let test = { name; fn; result = None; duration_ms = 0.0 } in
+      let test = { name; fn; timeout_s = timeout; result = None; duration_ms = 0.0 } in
       suite.tests <- test :: suite.tests
 
 let test = it
@@ -392,6 +401,7 @@ let skip name _fn =
         {
           name;
           fn = (fun () -> ());
+          timeout_s = None;
           result = Some (Skip "Skipped");
           duration_ms = 0.0;
         }
@@ -402,16 +412,41 @@ let skip name _fn =
 
 let get_time_ms () = Unix.gettimeofday () *. 1000.0
 
+let run_with_timeout timeout_s fn =
+  let alarm_secs = max 1 (int_of_float (ceil timeout_s)) in
+  let old_handler = Sys.signal Sys.sigalrm
+    (Sys.Signal_handle (fun _ -> raise (Test_timeout timeout_s))) in
+  ignore (Unix.alarm alarm_secs);
+  (try
+     fn ();
+     ignore (Unix.alarm 0);
+     Sys.set_signal Sys.sigalrm old_handler
+   with exn ->
+     ignore (Unix.alarm 0);
+     Sys.set_signal Sys.sigalrm old_handler;
+     raise exn)
+
 let run_test suite test =
   state.current_test <- Some test;
   state.snapshot_counter <- 0;
   (match suite.before_each with Some fn -> fn () | None -> ());
+  let timeout_s =
+    match test.timeout_s with
+    | Some t -> t
+    | None ->
+      match suite.timeout_s with
+      | Some t -> t
+      | None -> !_default_timeout
+  in
   let start_time = get_time_ms () in
   (try
-     test.fn ();
+     run_with_timeout timeout_s test.fn;
      test.result <- Some Pass
    with
   | Assertion_failed msg -> test.result <- Some (Fail msg)
+  | Test_timeout t ->
+      test.result <-
+        Some (Fail (Printf.sprintf "Timeout: test exceeded %.1fs limit" t))
   | exn ->
       test.result <-
         Some

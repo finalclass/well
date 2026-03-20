@@ -4464,9 +4464,10 @@ Available inside `Well.run` (and route handlers, services, actors). Avoids passi
 ```ocaml
 open Well_test
 
-describe : string -> (unit -> unit) -> unit
-it : string -> (unit -> unit) -> unit   (* alias: test *)
+describe : ?timeout:float -> string -> (unit -> unit) -> unit
+it : ?timeout:float -> string -> (unit -> unit) -> unit   (* alias: test *)
 skip : string -> (unit -> unit) -> unit
+default_timeout : float -> unit   (* global default, initially 5s *)
 
 before_each : (unit -> unit) -> unit
 after_each : (unit -> unit) -> unit
@@ -4530,6 +4531,23 @@ it "renders correctly" (fun () ->
 (* Update: WELL_UPDATE_SNAPSHOTS=1 or well test -u *)
 (* IMPORTANT: run ~source_file:__FILE__ () — needed for snapshot location *)
 ```
+
+### Timeouts
+
+Default: 5 seconds per test. Cascade: `it ~timeout` > `describe ~timeout` > global default.
+
+```ocaml
+(* Override global default *)
+let () = default_timeout 30.0
+
+(* Suite-level — all tests in this describe get 10s *)
+describe ~timeout:10.0 "database" (fun () ->
+  it "migrates" (fun () -> ...);              (* 10s from describe *)
+  it ~timeout:60.0 "imports CSV" (fun () -> ...);  (* 60s override *)
+);
+```
+
+On timeout: test fails with `"Timeout: test exceeded 5.0s limit"`.
 
 ---
 
