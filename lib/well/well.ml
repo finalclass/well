@@ -2524,6 +2524,18 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
   Oauth._session_delete_ref := (fun sid key -> Session_store.delete ~session_id:sid ~key);
   Oauth._put_flash_ref := put_flash;
   Oauth._log_ref := (fun msg -> Log.log "%s" msg);
+  (* Wire OAuthProvider forward refs *)
+  Oauth_provider._session_get_ref := (fun sid key -> Session_store.get ~session_id:sid ~key);
+  Oauth_provider._session_set_ref := (fun sid key value -> Session_store.set ~session_id:sid ~key ~value);
+  Oauth_provider._session_delete_ref := (fun sid key -> Session_store.delete ~session_id:sid ~key);
+  Oauth_provider._session_clear_ref := (fun sid -> Session_store.clear ~session_id:sid);
+  Oauth_provider._login_ref := Auth.login;
+  Oauth_provider._current_user_ref := current_user;
+  Oauth_provider._register_get_ref := (fun path handler ->
+    get path (fun req -> (handler req :> response)));
+  Oauth_provider._register_post_ref := (fun path handler ->
+    post path (fun req -> (handler req :> response)));
+  Oauth_provider._log_ref := (fun msg -> Log.log "%s" msg);
   Log.init ();
   let start_server () =
     Eio.Switch.run @@ fun sw ->
@@ -3033,6 +3045,7 @@ module MessageBus = Message_bus
 module Channel = Channel
 module Auth = Auth
 module OAuth = Oauth
+module OAuthProvider = Oauth_provider
 module Mailer = Mailer
 module S3 = S3
 module Telemetry = Telemetry
