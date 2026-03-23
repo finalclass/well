@@ -87,7 +87,11 @@ let expose_http_routes () =
           let ctx = !_build_rpc_ctx req in
           let payload =
             if req.body = "" then `Null
-            else Yojson.Safe.from_string req.body
+            else
+              (* Client sends [ctx, ...fields] — strip ctx, keep fields *)
+              match Yojson.Safe.from_string req.body with
+              | `List (_ :: fields) -> `List fields
+              | other -> other
           in
           let result = dispatch_by_name name rpc.rname ctx payload in
           Yojson.Safe.to_string result)
