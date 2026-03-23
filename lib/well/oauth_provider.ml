@@ -289,7 +289,12 @@ let _config : config option ref = ref None
 
 let setup ?(title = "Logowanie") ?(subtitle = "Zaloguj się, aby kontynuować") (clients : client list) =
   List.iter (fun c -> Hashtbl.replace _clients c.client_id c) clients;
-  _config := Some { clients; login_title = title; login_subtitle = subtitle };
+  _config := Some { clients; login_title = title; login_subtitle = subtitle }
+
+let _register_routes () =
+  match !_config with
+  | None -> ()
+  | Some { login_title = title; login_subtitle = subtitle; _ } ->
 
   (* GET /oauth/authorize — show login form or redirect if already logged in *)
   !_register_get_ref "/oauth/authorize" (fun req ->

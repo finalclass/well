@@ -2536,6 +2536,7 @@ let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
   Oauth_provider._register_post_ref := (fun path handler ->
     post path (fun req -> (handler req :> response)));
   Oauth_provider._log_ref := (fun msg -> Log.log "%s" msg);
+  Oauth_provider._register_routes ();
   Log.init ();
   let start_server () =
     Eio.Switch.run @@ fun sw ->
