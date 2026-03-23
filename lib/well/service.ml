@@ -63,26 +63,14 @@ let dispatch_by_name name rpc ctx payload =
 
 (* ── Expose service over HTTP ─────────────────────────────────────── *)
 
-let pascal_to_kebab s =
-  let buf = Buffer.create (String.length s + 4) in
-  String.iteri (fun i c ->
-    if Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c then begin
-      if i > 0 then Buffer.add_char buf '-';
-      Buffer.add_char buf (Char.lowercase_ascii c)
-    end else
-      Buffer.add_char buf c
-  ) s;
-  Buffer.contents buf
-
 let expose_http_routes () =
   List.iter (fun name ->
     match Hashtbl.find_opt handlers name with
     | None ->
       Log.log ~level:"warn" "cannot expose service '%s' — not registered" name
     | Some entry ->
-      let kebab_name = pascal_to_kebab name in
       List.iter (fun (rpc : rpc_info) ->
-        let path = Printf.sprintf "/%s/rpc/%s" kebab_name rpc.rname in
+        let path = Printf.sprintf "/rpc/%s/%s" name rpc.rname in
         !_register_post_json path (fun req ->
           let ctx = !_build_rpc_ctx req in
           let payload =

@@ -4,6 +4,12 @@ open Contract_types
 
 (* ── Helpers ──────────────────────────────────────────────────────── *)
 
+(* Strip trailing ' added by parser for OCaml keyword escaping *)
+let strip_ocaml_escape name =
+  let len = String.length name in
+  if len > 0 && name.[len - 1] = '\'' then String.sub name 0 (len - 1)
+  else name
+
 let snake_case name =
   let buf = Buffer.create (String.length name) in
   String.iteri (fun i c ->
@@ -576,7 +582,7 @@ let generate_ts_struct ~local_module msg_name props =
   List.iter (fun (prop : property) ->
     let ty = ts_type ~local_module prop.type_info in
     let ty = if prop.optional then ty ^ " | null" else ty in
-    p "  %s: %s;\n" prop.name ty
+    p "  %s: %s;\n" (strip_ocaml_escape prop.name) ty
   ) props;
   p "}\n\n";
 
@@ -585,12 +591,13 @@ let generate_ts_struct ~local_module msg_name props =
   p "  return [";
   List.iteri (fun i (prop : property) ->
     if i > 0 then p ", ";
+    let name = strip_ocaml_escape prop.name in
     let expr =
       if prop.optional then
-        let enc = ts_encode ~local_module ("v." ^ prop.name) (Optional prop.type_info) in
+        let enc = ts_encode ~local_module ("v." ^ name) (Optional prop.type_info) in
         enc
       else
-        ts_encode ~local_module ("v." ^ prop.name) prop.type_info
+        ts_encode ~local_module ("v." ^ name) prop.type_info
     in
     p "%s" expr
   ) props;
@@ -602,13 +609,14 @@ let generate_ts_struct ~local_module msg_name props =
   p "  return {\n";
   List.iteri (fun i (prop : property) ->
     let access = Printf.sprintf "wire[%d]" i in
+    let name = strip_ocaml_escape prop.name in
     let expr =
       if prop.optional then
         ts_decode ~local_module access (Optional prop.type_info)
       else
         ts_decode ~local_module access prop.type_info
     in
-    p "    %s: %s,\n" prop.name expr
+    p "    %s: %s,\n" name expr
   ) props;
   p "  };\n";
   p "}\n";
@@ -830,6 +838,7 @@ let generate_ts_rpc () =
 
 let go_public_name name =
   (* snake_case → PascalCase, or capitalize first letter *)
+  let name = strip_ocaml_escape name in
   if String.contains name '_' then
     String.split_on_char '_' name
     |> List.map (fun w ->
@@ -1240,6 +1249,7 @@ let dart_keywords =
     "with"; "yield" ]
 
 let dart_camel_case name =
+  let name = strip_ocaml_escape name in
   let esc n = if List.mem n dart_keywords then "$" ^ n else n in
   if String.contains name '_' then
     let parts = String.split_on_char '_' name in
@@ -1352,14 +1362,18 @@ let generate_dart_struct ~local_module msg_name props =
   p "\n";
 
   (* constructor *)
-  p "  const %s({\n" msg_name;
-  List.iter (fun (prop : property) ->
-    if prop.optional then
-      p "    this.%s,\n" (dart_camel_case prop.name)
-    else
-      p "    required this.%s,\n" (dart_camel_case prop.name)
-  ) props;
-  p "  });\n\n";
+  if props = [] then
+    p "  const %s();\n\n" msg_name
+  else begin
+    p "  const %s({\n" msg_name;
+    List.iter (fun (prop : property) ->
+      if prop.optional then
+        p "    this.%s,\n" (dart_camel_case prop.name)
+      else
+        p "    required this.%s,\n" (dart_camel_case prop.name)
+    ) props;
+    p "  });\n\n"
+  end;
 
   (* fromWire factory *)
   p "  factory %s.fromWire(dynamic data) {\n" msg_name;
