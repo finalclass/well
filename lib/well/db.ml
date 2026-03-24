@@ -196,9 +196,13 @@ type pool = {
   next : int Atomic.t;
 }
 
+let _memory_uri filename =
+  Printf.sprintf "file:%s?mode=memory&cache=shared" filename
+
 let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
   if !memory_mode then begin
-    let db = Sqlite3.db_open ":memory:" in
+    let uri = _memory_uri filename in
+    let db = Sqlite3.db_open ~uri:true uri in
     _init_conn db;
     auto_migrate db;
     { conns = [|db|]; next = Atomic.make 0 }
@@ -228,7 +232,8 @@ let close_pool pool =
 
 let open_db ?(filename = "app.sqlite") () =
   if !memory_mode then begin
-    let db = Sqlite3.db_open ":memory:" in
+    let uri = _memory_uri filename in
+    let db = Sqlite3.db_open ~uri:true uri in
     _init_conn db;
     auto_migrate db;
     db
@@ -336,7 +341,8 @@ let _ensure_well_conns () =
       | None ->
         let conns =
           if !memory_mode then begin
-            let db = Sqlite3.db_open ":memory:" in
+            let uri = _memory_uri "well.sqlite" in
+            let db = Sqlite3.db_open ~uri:true uri in
             _init_conn db;
             [|db|]
           end else begin
