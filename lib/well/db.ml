@@ -361,7 +361,7 @@ let _ensure_well_conns () =
 
 let with_well_db f =
   let conns = _ensure_well_conns () in
-  let idx = Atomic.fetch_and_add _well_next 1 mod _well_size in
+  let idx = Atomic.fetch_and_add _well_next 1 mod Array.length conns in
   f conns.(idx)
 
 (* ── Query helpers ────────────────────────────────────────────────── *)
