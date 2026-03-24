@@ -547,6 +547,11 @@ let run ?(filter = None) ?ci_mode ?source_file () =
       state.snapshots <- parse_snap_file snap_path
   | None -> state.snapshots <- []);
   state.snapshots_used <- [];
+  (* Capture stdout during test execution to prevent log interleaving *)
+  let saved_stdout = Unix.dup Unix.stdout in
+  let (pipe_r, pipe_w) = Unix.pipe () in
+  Unix.dup2 pipe_w Unix.stdout;
+  Unix.close pipe_w;
   let start_time = get_time_ms () in
   let suites = List.rev state.suites in
   List.iter (fun s -> run_suite ~filter ~ci_mode s) suites;
@@ -584,6 +589,21 @@ let run ?(filter = None) ?ci_mode ?source_file () =
        else string_of_int !failed);
     if !skipped > 0 then
       _bprintf "  %s %d skipped\n" (Color.yellow "○") !skipped;
+  end;
+  (* Restore stdout and collect captured output (e.g. Well.Log lines) *)
+  flush stdout;
+  Unix.dup2 saved_stdout Unix.stdout;
+  Unix.close saved_stdout;
+  let captured_ic = Unix.in_channel_of_descr pipe_r in
+  let captured_buf = Buffer.create 1024 in
+  (try while true do
+    Buffer.add_char captured_buf (input_char captured_ic)
+  done with End_of_file -> ());
+  close_in captured_ic;
+  let captured = Buffer.contents captured_buf in
+  if captured <> "" then begin
+    _bprint_string captured;
+    if captured.[String.length captured - 1] <> '\n' then _bprint_newline ()
   end;
   (* Flush entire buffer atomically *)
   let binary_name = Filename.basename Sys.executable_name in

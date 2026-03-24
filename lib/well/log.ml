@@ -2,6 +2,7 @@
 
 let _file : out_channel option ref = ref None
 let _enabled = ref true
+let _buffer : Buffer.t option ref = ref None
 
 (* Hook: called with (timestamp, level, message, ctx) on every log line *)
 let _hook : (float -> string -> string -> (string * string) list -> unit) option ref = ref None
@@ -69,7 +70,9 @@ let write_line ?(ctx=[]) level msg =
     else " " ^ String.concat " " (List.map (fun (k, v) -> k ^ "=" ^ v) ctx)
   in
   let line = Printf.sprintf "[well] %s [%s]%s %s" (format_ts t) level ctx_str msg in
-  print_string line; print_char '\n'; flush stdout;
+  (match !_buffer with
+   | Some buf -> Buffer.add_string buf line; Buffer.add_char buf '\n'
+   | None -> print_string line; print_char '\n'; flush stdout);
   (match !_file with
    | Some oc ->
        output_string oc line;
@@ -83,3 +86,14 @@ let write_line ?(ctx=[]) level msg =
 
 let log ?(level = "info") ?(ctx=[]) fmt =
   Printf.ksprintf (write_line ~ctx level) fmt
+
+let start_buffering () =
+  _buffer := Some (Buffer.create 4096)
+
+let flush_buffer () =
+  match !_buffer with
+  | Some buf ->
+    let s = Buffer.contents buf in
+    _buffer := None;
+    s
+  | None -> ""
