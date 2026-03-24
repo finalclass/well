@@ -2442,8 +2442,15 @@ let handle_http80 ~domain flow _addr =
   | End_of_file -> (try close_flow () with _ -> ())
   | _ -> (try close_flow () with _ -> ()))
 
-let run ?(port = 4000) ?(workers = 0) ?cert ?key ?domain
+let run ?port ?(workers = 0) ?cert ?key ?domain
     ?(acme_staging = false) ?(disable_cap = false) () =
+  let port = match port with
+    | Some p -> p
+    | None ->
+      match Sys.getenv_opt "PORT" with
+      | Some s -> (try int_of_string s with Failure _ -> 4000)
+      | None -> 4000
+  in
   Printexc.record_backtrace true;
   let acme_mode = domain <> None in
   (* Validate: ~domain and ~cert/~key are mutually exclusive *)

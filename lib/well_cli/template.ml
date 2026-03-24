@@ -131,11 +131,10 @@ let bin_main _name =
 |}
 
 let lib_app_dune _name =
-  {|(include_subdirs unqualified)
+  {|(include_subdirs qualified)
 
 (library
  (name app)
- (wrapped false)
  (libraries contract well.core well.html eio yojson sqlite3)
  (preprocess (pps ppx_deriving_yojson well.ppx)))
 |}
@@ -180,9 +179,9 @@ let app_ml _name =
       oauth_providers;
 
   (* Services — IDesign: Manager → Access → DB *)
-  Well.Service.register Note_access_impl.spec;
-  Well.Service.register Task_access_impl.spec;
-  Well.Service.register Task_manager_impl.spec;
+  Well.Service.register Services.Note_access_impl.spec;
+  Well.Service.register Services.Task_access_impl.spec;
+  Well.Service.register Services.Task_manager_impl.spec;
   Well.Service.expose "TaskManager";
 
   (* Keyed pub/sub — echo handler: listens for echo:cmd:*, replies on echo:result:key *)
@@ -191,8 +190,8 @@ let app_ml _name =
     Well.publish_keyed ~ephemeral:true Events.echo_result
       ~key:kev.key { reply = "Echo: " ^ text }));
 
-  Well.live "/counter" (module Counter_live);
-  Well.live "/activity_log" (module Activity_log_live);
+  Well.live "/counter" (module Live.Counter_live);
+  Well.live "/activity_log" (module Live.Activity_log_live);
   Well.static "/static" "static";
   Well.run ()
 |}
@@ -220,7 +219,7 @@ in
 <Layout title="%s">
 <div>
     <h1>(txt "Welcome to %s")</h1>
-    <p>(txt "Edit lib/client/pages/home_page.mlx to get started.")</p>
+    <p>(txt "Edit lib/pages/home_page.mlx to get started.")</p>
     auth_section
     <p><a href="/counter">(txt "Counter — LiveView demo")</a></p>
     <p><a href="/dashboard">(txt "Dashboard — LiveView communication demo")</a></p>
@@ -3142,22 +3141,21 @@ val each : id:string -> ?tag_name:string -> 'a list -> key:('a -> string) -> ('a
 
 ```
 myapp/
-├── bin/main.ml                         # Entry point → App.run ()
+├── bin/main.ml                              # Entry point → App.run ()
 ├── lib/
-│   ├── app.ml                          # Middleware, services, routes, Well.run ()
-│   ├── events.ml                       # Typed pub/sub topics
-│   ├── note_access/note_access_impl.ml # ResourceAccess service impl
-│   ├── client/
-│   │   ├── widgets/layout.mlx          # Layout component
-│   │   ├── pages/home_page.mlx         # Routes: Well.get "/" ...
-│   │   ├── live/counter_live.mlx       # LiveView module
-│   │   └── request_id.ml              # Request ID context middleware
-│   └── contract/                       # Service contracts (TOML)
-├── static/                             # CSS, JS, assets
-└── test/myapp_test.ml                  # Tests
+│   ├── app.ml                               # Middleware, services, routes, Well.run ()
+│   ├── events.ml                            # Typed pub/sub topics
+│   ├── layout.mlx                           # Layout component
+│   ├── request_id.ml                        # Request ID context middleware
+│   ├── pages/home_page.mlx                  # Pages.Home_page — routes: Well.get "/" ...
+│   ├── live/counter_live.mlx                # Live.Counter_live — LiveView module
+│   ├── services/note_access_impl.ml         # Services.Note_access_impl
+│   └── contract/                            # Service contracts (TOML)
+├── static/                                  # CSS, JS, assets
+└── test/myapp_test.ml                       # Tests
 ```
 
-The app library uses `(include_subdirs unqualified)` and `(wrapped false)` — every `.ml`/`.mlx` file is a top-level module (e.g. `Layout`, `Counter_live`).
+The app library uses `(include_subdirs qualified)` — subdirectories become submodules (e.g. `Pages.Home_page`, `Live.Counter_live`, `Services.Note_access_impl`).
 
 ---
 
@@ -3403,14 +3401,14 @@ let view model =
 
 **Step 1.** Register the LiveView module in `lib/app.ml`:
 ```ocaml
-Well.live "/counter" (module Counter_live)
+Well.live "/counter" (module Live.Counter_live)
 ```
-This registers `Counter_live` in the WS view registry under endpoint `"/live/counter"`.
+This registers `Live.Counter_live` in the WS view registry under endpoint `"/live/counter"`.
 It does NOT create a GET route — you must create the page yourself.
 
 **Step 2.** Create a GET page that embeds the LiveView using MLX JSX:
 ```ocaml
-(* lib/client/pages/counter_page.mlx *)
+(* lib/pages/counter_page.mlx *)
 Well.get "/counter" @@ fun _req ->
   let open Html in
   <Layout title="Counter">
@@ -3604,7 +3602,7 @@ match Well.LiveView.consume_upload upload_id with
 ### LiveView Search/Filter Example
 
 ```ocaml
-(* lib/client/live/search_live.mlx — the LiveView module *)
+(* lib/live/search_live.mlx — the LiveView module *)
 (* Then register: Well.live "/search" (module Search_live) in app.ml *)
 (* And create page: Well.get "/search" with <Well.LiveView name="search" /> *)
 type item = { id: int; name: string } [@@deriving yojson]
@@ -4335,7 +4333,7 @@ let spec = Task_access.make_spec (module Impl)
 
 Register in `lib/app.ml`:
 ```ocaml
-Well.Service.register Task_access_impl.spec;
+Well.Service.register Services.Task_access_impl.spec;
 Well.Service.expose "TaskAccess";  (* creates /rpc/TaskAccess/* HTTP routes *)
 ```
 
@@ -4812,9 +4810,9 @@ Services must hide internal functions using `open struct ... end`. Only the cont
 
 When adding a new feature, you typically need:
 
-1. **Static page**: Create `lib/client/pages/feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
+1. **Static page**: Create `lib/pages/feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
 2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let pool = lazy (Well.Db.create_pool ())`
-3. **LiveView**: Create `lib/client/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields. Register with `Well.live "/feature" (module Feature_live)` in `lib/app.ml`. Then create a GET page that embeds `<Well.LiveView name="feature" />`. Both steps are required — `Well.live` only registers the WS handler, not the page.
+3. **LiveView**: Create `lib/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields. Register with `Well.live "/feature" (module Live.Feature_live)` in `lib/app.ml`. Then create a GET page that embeds `<Well.LiveView name="feature" />`. Both steps are required — `Well.live` only registers the WS handler, not the page.
 4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or LiveViews
 5. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module, register + expose in `lib/app.ml`
 6. **Auth-protected**: Add `~middleware:[Well.require_auth ()]` or wrap handler with `Well.Auth.require_grant`
@@ -6206,28 +6204,25 @@ let project_files name =
     { path = "lib/dune"; content = lib_app_dune name };
     { path = "lib/app.ml"; content = app_ml name };
     { path = "lib/events.ml"; content = events name };
-    (* lib/note_access/ *)
-    { path = "lib/note_access/note_access_impl.ml"; content = note_access_impl name };
-    (* lib/task_access/ *)
-    { path = "lib/task_access/task_access_impl.ml"; content = task_access_impl name };
-    (* lib/task_manager/ *)
-    { path = "lib/task_manager/task_manager_impl.ml"; content = task_manager_impl name };
-    (* lib/client/widgets/ *)
-    { path = "lib/client/widgets/layout.mlx"; content = layout name };
-    (* lib/client/pages/ *)
-    { path = "lib/client/pages/home_page.mlx"; content = home_page name };
-    { path = "lib/client/pages/counter_page.mlx"; content = counter_page name };
-    { path = "lib/client/pages/dashboard_page.mlx"; content = dashboard_page name };
-    { path = "lib/client/pages/notes_page.mlx"; content = notes_page name };
-    { path = "lib/client/pages/tasks_page.mlx"; content = tasks_page name };
-    { path = "lib/client/pages/upload_page.mlx"; content = upload_page name };
-    { path = "lib/client/pages/login_page.mlx"; content = login_page name };
-    { path = "lib/client/pages/signup_page.mlx"; content = signup_page name };
-    (* lib/client/live/ *)
-    { path = "lib/client/live/counter_live.mlx"; content = counter_live name };
-    { path = "lib/client/live/activity_log_live.mlx"; content = activity_log_live name };
-    (* lib/client/ *)
-    { path = "lib/client/request_id.ml"; content = request_id name };
+    (* lib/services/ *)
+    { path = "lib/services/note_access_impl.ml"; content = note_access_impl name };
+    { path = "lib/services/task_access_impl.ml"; content = task_access_impl name };
+    { path = "lib/services/task_manager_impl.ml"; content = task_manager_impl name };
+    (* lib/ — root-level modules *)
+    { path = "lib/layout.mlx"; content = layout name };
+    { path = "lib/request_id.ml"; content = request_id name };
+    (* lib/pages/ *)
+    { path = "lib/pages/home_page.mlx"; content = home_page name };
+    { path = "lib/pages/counter_page.mlx"; content = counter_page name };
+    { path = "lib/pages/dashboard_page.mlx"; content = dashboard_page name };
+    { path = "lib/pages/notes_page.mlx"; content = notes_page name };
+    { path = "lib/pages/tasks_page.mlx"; content = tasks_page name };
+    { path = "lib/pages/upload_page.mlx"; content = upload_page name };
+    { path = "lib/pages/login_page.mlx"; content = login_page name };
+    { path = "lib/pages/signup_page.mlx"; content = signup_page name };
+    (* lib/live/ *)
+    { path = "lib/live/counter_live.mlx"; content = counter_live name };
+    { path = "lib/live/activity_log_live.mlx"; content = activity_log_live name };
     (* lib/contract/ — separate dune library *)
     { path = "lib/contract/dune"; content = contract_boundary_dune };
     { path = "lib/contract/build/ocaml/dune"; content = contract_dune_file };
