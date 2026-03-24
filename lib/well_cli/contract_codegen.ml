@@ -499,7 +499,6 @@ let generate_dune modules ~output_dir =
   let p fmt = Printf.bprintf buf fmt in
   p "(library\n";
   p " (name %s)\n" lib_name;
-  p " (wrapped false)\n";
   p " (libraries well.core yojson)\n";
   p " (modules %s))\n" (String.concat " " module_names);
   Buffer.contents buf
