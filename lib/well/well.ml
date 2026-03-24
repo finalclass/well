@@ -2446,10 +2446,7 @@ let run ?port ?(workers = 0) ?cert ?key ?domain
     ?(acme_staging = false) ?(disable_cap = false) () =
   let port = match port with
     | Some p -> p
-    | None ->
-      match Sys.getenv_opt "PORT" with
-      | Some s -> (try int_of_string s with Failure _ -> 4000)
-      | None -> 4000
+    | None -> Config.get_int ~default:4000 "well.port"
   in
   Printexc.record_backtrace true;
   let acme_mode = domain <> None in
@@ -3057,6 +3054,8 @@ module OAuthProvider = Oauth_provider
 module Mailer = Mailer
 module S3 = S3
 module Telemetry = Telemetry
+module Config = Config
+module Toml = Toml
 
 (* ── URL encoding ──────────────────────────────────────────────── *)
 

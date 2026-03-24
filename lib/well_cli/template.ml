@@ -104,6 +104,18 @@ data/                              # SQLite databases (gitignored)
 - `.ts` — TypeScript (compiled to JS via bun, wired through dune)
 |} name
 
+let well_toml name =
+  Printf.sprintf {|[well]
+port = 4000
+# secret_key = "change-me-in-production"
+
+[well.db]
+data_dir = "data"
+
+[app]
+name = "%s"
+|} name
+
 let gitignore =
   {|_build/
 _release/
@@ -6191,6 +6203,7 @@ type file = {
 
 let project_files name =
   [
+    { path = "well.toml"; content = well_toml name };
     { path = "README.md"; content = readme name };
     { path = "dune-project"; content = dune_project name };
     { path = "dune"; content = root_dune };

@@ -182,7 +182,7 @@ let auto_migrate db =
 
 (* ── Data directory ───────────────────────────────────────────────── *)
 
-let data_dir = ref "data"
+let data_dir = ref (Config.get_string ~default:"data" "well.db.data_dir")
 let memory_mode = ref false
 
 (* ── Connection pool ─────────────────────────────────────────────── *)
