@@ -288,18 +288,28 @@ let write_snap_file path entries =
     entries;
   close_out oc
 
+(* === Output buffer === *)
+
+let _output_buf = Buffer.create 4096
+
+let _bprintf fmt = Printf.bprintf _output_buf fmt
+let _bprint_string s = Buffer.add_string _output_buf s
+let _bprint_newline () = Buffer.add_char _output_buf '\n'
+
 (* === Diff utility for failed assertions === *)
 
 let show_diff expected actual =
   let expected_lines = String.split_on_char '\n' expected in
   let actual_lines = String.split_on_char '\n' actual in
-  print_endline (Color.dim "Expected:");
+  _bprint_string (Color.dim "Expected:");
+  _bprint_newline ();
   List.iter
-    (fun line -> Printf.printf "  %s\n" (Color.green ("+ " ^ line)))
+    (fun line -> _bprintf "  %s\n" (Color.green ("+ " ^ line)))
     expected_lines;
-  print_endline (Color.dim "Actual:");
+  _bprint_string (Color.dim "Actual:");
+  _bprint_newline ();
   List.iter
-    (fun line -> Printf.printf "  %s\n" (Color.red ("- " ^ line)))
+    (fun line -> _bprintf "  %s\n" (Color.red ("- " ^ line)))
     actual_lines
 
 let to_match_snapshot exp =
@@ -329,14 +339,14 @@ let to_match_snapshot exp =
   | None ->
       (* New snapshot — record it *)
       state.snapshots_used <- (key, actual) :: state.snapshots_used;
-      Printf.printf "    %s\n"
+      _bprintf "    %s\n"
         (Color.yellow (Printf.sprintf "New snapshot: %s" key))
   | Some expected ->
       if actual = expected then
         state.snapshots_used <- (key, actual) :: state.snapshots_used
       else if state.update_snapshots then begin
         state.snapshots_used <- (key, actual) :: state.snapshots_used;
-        Printf.printf "    %s\n"
+        _bprintf "    %s\n"
           (Color.yellow (Printf.sprintf "Updated snapshot: %s" key))
       end else begin
         state.snapshots_used <- (key, expected) :: state.snapshots_used;
@@ -473,15 +483,15 @@ let run_suite ~(filter : string option) ~ci_mode (suite : test_suite) =
             with Not_found -> false)
           tests
   in
-  if not ci_mode then print_endline (Color.bold suite.name);
+  if not ci_mode then begin _bprint_string (Color.bold suite.name); _bprint_newline () end;
   List.iter
     (fun test ->
       match test.result with
       | Some (Skip reason) ->
           if ci_mode then
-            Printf.printf "SKIP %s > %s (%s)\n" suite.name test.name reason
+            _bprintf "SKIP %s > %s (%s)\n" suite.name test.name reason
           else
-            Printf.printf "  %s %s %s\n" (Color.yellow "○")
+            _bprintf "  %s %s %s\n" (Color.yellow "○")
               (Color.dim test.name)
               (Color.dim (Printf.sprintf "(%s)" reason))
       | _ -> (
@@ -489,23 +499,23 @@ let run_suite ~(filter : string option) ~ci_mode (suite : test_suite) =
           match test.result with
           | Some Pass ->
               if ci_mode then
-                Printf.printf "PASS %s > %s (%.2fms)\n" suite.name test.name
+                _bprintf "PASS %s > %s (%.2fms)\n" suite.name test.name
                   test.duration_ms
               else
-                Printf.printf "  %s %s %s\n" (Color.green "✓") test.name
+                _bprintf "  %s %s %s\n" (Color.green "✓") test.name
                   (Color.gray (Printf.sprintf "(%.2fms)" test.duration_ms))
           | Some (Fail msg) ->
               if ci_mode then
-                Printf.printf "FAIL %s > %s: %s\n" suite.name test.name msg
+                _bprintf "FAIL %s > %s: %s\n" suite.name test.name msg
               else begin
-                Printf.printf "  %s %s\n" (Color.red "✗")
+                _bprintf "  %s %s\n" (Color.red "✗")
                   (Color.red test.name);
-                Printf.printf "    %s\n" (Color.dim msg)
+                _bprintf "    %s\n" (Color.dim msg)
               end
           | Some (Skip _) -> ()
           | None -> ()))
     tests;
-  if not ci_mode then print_newline ();
+  if not ci_mode then _bprint_newline ();
   (match suite.after_all with Some fn -> fn () | None -> ())
 
 type run_result = {
@@ -563,21 +573,30 @@ let run ?(filter = None) ?ci_mode ?source_file () =
       let snap_path = snapshot_path_of f in
       write_snap_file snap_path (List.rev state.snapshots_used)
   | _ -> ());
+  (* Summary *)
   if ci_mode then
-    Printf.printf "\n%d passed, %d failed, %d skipped (%.2fms)\n" !passed
+    _bprintf "\n%d passed, %d failed, %d skipped (%.2fms)\n" !passed
       !failed !skipped duration_ms
   else begin
-    print_endline (Color.bold "Summary:");
-    if !passed > 0 then
-      Printf.printf "  %s %d passed\n" (Color.green "✓") !passed;
-    if !failed > 0 then
-      Printf.printf "  %s %d failed\n" (Color.red "✗") !failed;
+    _bprintf "Summary: %s passed, %s failed\n"
+      (Color.green (string_of_int !passed))
+      (if !failed > 0 then Color.red (string_of_int !failed)
+       else string_of_int !failed);
     if !skipped > 0 then
-      Printf.printf "  %s %d skipped\n" (Color.yellow "○") !skipped;
-    Printf.printf "  %s\n"
-      (Color.gray
-         (Printf.sprintf "Total: %d tests in %.2fms" !total duration_ms))
+      _bprintf "  %s %d skipped\n" (Color.yellow "○") !skipped;
   end;
+  (* Flush entire buffer atomically *)
+  let binary_name = Filename.basename Sys.executable_name in
+  let binary_name =
+    try Filename.chop_extension binary_name
+    with Invalid_argument _ -> binary_name
+  in
+  let header = Printf.sprintf "── %s (%.1fs) %s\n"
+    binary_name (duration_ms /. 1000.0)
+    (String.make (max 0 (60 - String.length binary_name - 12)) '-') in
+  let output = header ^ Buffer.contents _output_buf in
+  output_string stdout output;
+  flush stdout;
   {
     total = !total;
     passed = !passed;
@@ -599,4 +618,5 @@ let reset () =
   state.update_snapshots <- false;
   state.snapshots <- [];
   state.snapshots_used <- [];
-  state.snapshot_counter <- 0
+  state.snapshot_counter <- 0;
+  Buffer.clear _output_buf

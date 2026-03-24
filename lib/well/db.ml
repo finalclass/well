@@ -183,6 +183,7 @@ let auto_migrate db =
 (* ── Data directory ───────────────────────────────────────────────── *)
 
 let data_dir = ref "data"
+let memory_mode = ref false
 
 (* ── Connection pool ─────────────────────────────────────────────── *)
 
@@ -196,18 +197,25 @@ type pool = {
 }
 
 let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
-  let dir = !data_dir in
-  (try Unix.mkdir dir 0o755
-   with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  let path = Filename.concat dir filename in
-  let migrated = Atomic.make false in
-  let conns = Array.init size (fun _ ->
-    let db = Sqlite3.db_open path in
+  if !memory_mode then begin
+    let db = Sqlite3.db_open ":memory:" in
     _init_conn db;
-    if not (Atomic.exchange migrated true) then
-      auto_migrate db;
-    db) in
-  { conns; next = Atomic.make 0 }
+    auto_migrate db;
+    { conns = [|db|]; next = Atomic.make 0 }
+  end else begin
+    let dir = !data_dir in
+    (try Unix.mkdir dir 0o755
+     with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+    let path = Filename.concat dir filename in
+    let migrated = Atomic.make false in
+    let conns = Array.init size (fun _ ->
+      let db = Sqlite3.db_open path in
+      _init_conn db;
+      if not (Atomic.exchange migrated true) then
+        auto_migrate db;
+      db) in
+    { conns; next = Atomic.make 0 }
+  end
 
 let with_conn pool f =
   let idx = Atomic.fetch_and_add pool.next 1 mod Array.length pool.conns in
@@ -219,14 +227,21 @@ let close_pool pool =
 (* ── open_db — single connection (backward compat) ───────────────── *)
 
 let open_db ?(filename = "app.sqlite") () =
-  let dir = !data_dir in
-  (try Unix.mkdir dir 0o755
-   with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  let path = Filename.concat dir filename in
-  let db = Sqlite3.db_open path in
-  _init_conn db;
-  auto_migrate db;
-  db
+  if !memory_mode then begin
+    let db = Sqlite3.db_open ":memory:" in
+    _init_conn db;
+    auto_migrate db;
+    db
+  end else begin
+    let dir = !data_dir in
+    (try Unix.mkdir dir 0o755
+     with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+    let path = Filename.concat dir filename in
+    let db = Sqlite3.db_open path in
+    _init_conn db;
+    auto_migrate db;
+    db
+  end
 
 (* ── Transactions ────────────────────────────────────────────────── *)
 
@@ -319,14 +334,22 @@ let _ensure_well_conns () =
       match !_well_conns with
       | Some c -> c (* double-check after lock *)
       | None ->
-        let dir = !data_dir in
-        (try Unix.mkdir dir 0o755
-         with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-        let path = Filename.concat dir "well.sqlite" in
-        let conns = Array.init _well_size (fun _ ->
-          let db = Sqlite3.db_open path in
-          _init_conn db;
-          db) in
+        let conns =
+          if !memory_mode then begin
+            let db = Sqlite3.db_open ":memory:" in
+            _init_conn db;
+            [|db|]
+          end else begin
+            let dir = !data_dir in
+            (try Unix.mkdir dir 0o755
+             with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+            let path = Filename.concat dir "well.sqlite" in
+            Array.init _well_size (fun _ ->
+              let db = Sqlite3.db_open path in
+              _init_conn db;
+              db)
+          end
+        in
         _well_conns := Some conns;
         conns)
 
