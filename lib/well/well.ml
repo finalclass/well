@@ -1279,7 +1279,7 @@ let try_serve_static meth path headers =
                               ("Content-Range", Printf.sprintf "bytes %d-%d/%d" start_byte end_byte total_size);
                               ("Accept-Ranges", "bytes");
                               ("ETag", etag);
-                              ("Cache-Control", "public, max-age=3600");
+                              ("Cache-Control", "no-cache");
                             ];
                             r_body = Bytes.unsafe_to_string buf;
                           }
@@ -1290,7 +1290,7 @@ let try_serve_static meth path headers =
                               ("Content-Type", content_type);
                               ("Accept-Ranges", "bytes");
                               ("ETag", etag);
-                              ("Cache-Control", "public, max-age=3600");
+                              ("Cache-Control", "no-cache");
                             ];
                             r_body = "";
                           }
@@ -1306,7 +1306,7 @@ let try_serve_static meth path headers =
                                     ("Content-Length", string_of_int total_size);
                                     ("Accept-Ranges", "bytes");
                                     ("ETag", etag);
-                                    ("Cache-Control", "public, max-age=3600");
+                                    ("Cache-Control", "no-cache");
                                   ];
                                 r_body = "";
                               }
@@ -1320,7 +1320,7 @@ let try_serve_static meth path headers =
                                     ("Content-Type", content_type);
                                     ("Accept-Ranges", "bytes");
                                     ("ETag", etag);
-                                    ("Cache-Control", "public, max-age=3600");
+                                    ("Cache-Control", "no-cache");
                                     ("_stream_path", file_path);
                                   ];
                                 r_body = "";
@@ -1343,7 +1343,7 @@ let try_serve_static meth path headers =
                                     ("Content-Type", content_type);
                                     ("Accept-Ranges", "bytes");
                                     ("ETag", etag);
-                                    ("Cache-Control", "public, max-age=3600");
+                                    ("Cache-Control", "no-cache");
                                   ];
                                 r_body = Bytes.unsafe_to_string buf;
                               })
