@@ -3056,6 +3056,7 @@ module S3 = S3
 module Telemetry = Telemetry
 module Config = Config
 module Toml = Toml
+module Cdp = Cdp
 
 (* ── URL encoding ──────────────────────────────────────────────── *)
 
