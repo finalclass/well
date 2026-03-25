@@ -1,5 +1,5 @@
-(* Channel — authorization gateway between MessageBus and WebSocket clients *)
-(* Bridges MessageBus → WebSocket with per-topic join auth *)
+(** Channel — authorization gateway between MessageBus and WebSocket clients.
+    Bridges MessageBus to WebSocket with per-topic join authorization. *)
 
 (* Forward ref — set by well.ml *)
 let _register_ws_route :
@@ -8,16 +8,19 @@ let _register_ws_route :
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
+(** Result of a successful channel join: topics to subscribe and optional initial state. *)
 type join_result = {
   subscribe : string list;
   initial_state : Yojson.Safe.t option;
 }
 
+(** Result of a push handler: optional reply to sender and optional broadcast. *)
 type push_result = {
   reply : Yojson.Safe.t option;
   broadcast : (string * Yojson.Safe.t) option;
 }
 
+(** Channel definition: topic pattern, join auth callback, and optional push handler. *)
 type channel_def = {
   pattern : string;
   on_join : Types.request -> string -> (join_result, string) result;
@@ -28,6 +31,7 @@ type channel_def = {
 
 let channel_defs : channel_def list ref = ref []
 
+(** Register a channel with a topic pattern and join authorization callback. *)
 let channel ?on_push pattern on_join =
   channel_defs := { pattern; on_join; on_push } :: !channel_defs
 
@@ -38,6 +42,7 @@ let find_channel_def topic =
 
 (* ── Handler message type ──────────────────────────────────────────── *)
 
+(** Internal message type for the unified channel event loop. *)
 type handler_msg =
   | WsMsg of Yojson.Safe.t
   | WsClosed
@@ -197,6 +202,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
   in
   loop ()
 
+(** Ensure the [/ws] WebSocket route is registered (called once at startup). *)
 let ensure_ws_route () =
   if not !_ws_registered then begin
     _ws_registered := true;

@@ -1,6 +1,5 @@
-(* acme.ml — ACME HTTP-01 (RFC 8555) auto-TLS provisioning
-   Implements Let's Encrypt certificate provisioning without external deps.
-   Uses mirage-crypto-pk for RS256, x509 for CSR/cert, Well.fetch for HTTPS. *)
+(** ACME HTTP-01 (RFC 8555) auto-TLS provisioning for Let's Encrypt.
+    Handles certificate provisioning, renewal, and hot-reload without external dependencies. *)
 
 (* ── Forward refs (wired by well.ml) ────────────────────────────── *)
 
@@ -25,6 +24,7 @@ let _tls_config : Tls.Config.server option ref = ref None
 
 let _challenges : (string, string) Hashtbl.t = Hashtbl.create 4
 
+(** Look up an ACME challenge response by token (used by HTTP-01 handler). *)
 let serve_challenge token =
   Hashtbl.find_opt _challenges token
 
@@ -337,6 +337,7 @@ let download_cert ~priv ~kid cert_url =
 
 (* ── Certificate validity ───────────────────────────────────────── *)
 
+(** Return the number of days until a PEM-encoded certificate expires. *)
 let cert_days_remaining pem_data =
   match X509.Certificate.decode_pem pem_data with
   | Ok cert ->
@@ -351,6 +352,7 @@ let cert_days_remaining pem_data =
 
 (* ── Full provision flow ────────────────────────────────────────── *)
 
+(** Run the full ACME provisioning flow: account, order, challenge, finalize, download. *)
 let provision ~staging domain =
   Log.log "ACME: provisioning certificate for %s%s"
     domain (if staging then " (staging)" else "");
@@ -399,6 +401,7 @@ let provision ~staging domain =
 
 (* ── Load existing cert from disk (None if missing/broken) ─────── *)
 
+(** Load an existing certificate and key from disk, or [None] if missing/broken. *)
 let load_existing domain =
   let cp = cert_file domain in
   let kp = key_file domain in
@@ -412,6 +415,7 @@ let load_existing domain =
 
 (* ── Ensure certificate (load existing or provision new) ────────── *)
 
+(** Load existing cert if valid (>30 days), otherwise provision a new one. *)
 let ensure_certificate ~staging domain =
   let existing = load_existing domain in
   let days = match existing with
@@ -441,6 +445,7 @@ let ensure_certificate ~staging domain =
 
 (* ── Build TLS server config ────────────────────────────────────── *)
 
+(** Build a TLS server config from PEM certificate and private key. *)
 let build_tls_config cert_pem (domain_key : X509.Private_key.t) =
   match X509.Certificate.decode_pem_multiple cert_pem with
   | Error (`Msg m) -> failwith ("ACME: cannot decode certificate: " ^ m)
@@ -451,6 +456,7 @@ let build_tls_config cert_pem (domain_key : X509.Private_key.t) =
 
 (* ── Renewal fiber (runs in background) ──────────────────────────── *)
 
+(** Background fiber that periodically checks certificate expiry and renews when needed. *)
 let renewal_fiber ~staging domain =
   let day_seconds = 86400.0 in
   let hour_seconds = 3600.0 in

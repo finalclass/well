@@ -1,4 +1,4 @@
-(* Log — unified logging to stdout + file with rotation *)
+(** Log -- unified structured logging to stdout and file with automatic rotation. *)
 
 let _file : out_channel option ref = ref None
 let _enabled = ref true
@@ -44,6 +44,7 @@ let maybe_rotate () =
     with Unix.Unix_error _ -> ()
   end
 
+(** Initialize the log file (opens well.log for appending). *)
 let init () =
   if !_enabled && !_file = None then begin
     let oc = open_out_gen
@@ -51,6 +52,7 @@ let init () =
     _file := Some oc
   end
 
+(** Close the log file handle. *)
 let close () =
   match !_file with
   | Some oc -> close_out_noerr oc; _file := None
@@ -84,12 +86,15 @@ let write_line ?(ctx=[]) level msg =
    | Some f -> (try f t level msg ctx with _ -> ())
    | None -> ())
 
+(** Log a formatted message at the given level with optional key-value context. *)
 let log ?(level = "info") ?(ctx=[]) fmt =
   Printf.ksprintf (write_line ~ctx level) fmt
 
+(** Start buffering log output (used in tests to prevent interleaving). *)
 let start_buffering () =
   _buffer := Some (Buffer.create 4096)
 
+(** Flush the log buffer and return its contents as a string. *)
 let flush_buffer () =
   match !_buffer with
   | Some buf ->

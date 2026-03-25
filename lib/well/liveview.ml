@@ -1,4 +1,8 @@
-(* LiveView — Server-side reactive components *)
+(** LiveView — Server-side reactive UI engine.
+
+    Implements the Elm architecture (model -> update -> render) with all state
+    on the server. WebSocket sends only morphdom patches to the client.
+    Supports three persistence modes: ephemeral, session, and per-user. *)
 
 (* Forward ref — set by well.ml to avoid circular module dependency *)
 let _register_ws_route :
@@ -11,29 +15,53 @@ let _resolve_route : (Types.request -> string -> string option) ref =
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
+(** State persistence strategy for a LiveView. *)
 type persistence =
-  | Ephemeral
-  | Session
-  | User
+  | Ephemeral  (** Fresh state per connection — no persistence. *)
+  | Session  (** In-memory per session — survives reconnect, 5 min timeout. *)
+  | User  (** SQLite per user — survives restart, syncs across devices. *)
 
+(** Module signature for a LiveView component.
+    Implement this to define a server-rendered reactive view. *)
 module type VIEW = sig
+  (** The server-side state for this view. *)
   type model
+
+  (** Messages dispatched by user interactions (clicks, submits, etc.). *)
   type msg
 
+  (** How this view's state is persisted across connections. *)
   val persistence : persistence
+
+  (** Initialize model from request and props. Returns model and list of
+      MessageBus channels to subscribe to. *)
   val init : Types.request -> Yojson.Safe.t -> model * string list
+
+  (** Handle a message by returning an updated model. Can perform blocking I/O. *)
   val update : Types.request -> model -> msg -> model
+
+  (** Called when URL query params change (live navigation). *)
   val handle_params : Types.request -> model -> model
+
+  (** Render the current model as HTML. *)
   val view : model -> Html.node
+
+  (** Reset transient fields after each render cycle (e.g. flash messages). *)
   val temporary_assigns : model -> model
 
+  (** Serialize model to JSON for persistence. *)
   val model_to_yojson : model -> Yojson.Safe.t
+
+  (** Deserialize model from JSON. *)
   val model_of_yojson : Yojson.Safe.t -> (model, string) result
+
+  (** Deserialize a client message from JSON. *)
   val msg_of_yojson : Yojson.Safe.t -> (msg, string) result
 end
 
 (* ── Session store ─────────────────────────────────────────────────── *)
 
+(** In-memory session state for Session persistence mode. *)
 type session_state = {
   endpoint : string;
   model_json : Yojson.Safe.t;
@@ -45,6 +73,7 @@ let session_timeout = 300.0
 
 (* ── Connection registry for User persistence broadcast ──────────── *)
 
+(** A WebSocket connection tracked for User persistence broadcast. *)
 type connection = {
   ws : Websocket.t;
   topics : (string, unit) Hashtbl.t;
@@ -84,11 +113,13 @@ let broadcast_to_user user_id topic exclude_ws msg =
 
 (* ── Session/connection introspection ─────────────────────────────── *)
 
+(** Return all active sessions as [(session_key, endpoint, last_active)] triples. *)
 let list_sessions () =
   Hashtbl.fold (fun key data acc ->
     (key, data.endpoint, data.last_active) :: acc
   ) sessions []
 
+(** Count total active WebSocket connections across all users. *)
 let count_connections () =
   Hashtbl.fold (fun _ conns acc ->
     acc + List.length conns
@@ -96,6 +127,7 @@ let count_connections () =
 
 (* ── Session cleanup ───────────────────────────────────────────────── *)
 
+(** Remove sessions that have been inactive longer than [session_timeout]. *)
 let cleanup_sessions () =
   let now = Unix.gettimeofday () in
   let to_remove =
@@ -109,6 +141,7 @@ let cleanup_sessions () =
 
 (* ── Patch type ────────────────────────────────────────────────────── *)
 
+(** A string patch: replace [len] bytes at [offset] with [content]. *)
 type patch = { offset : int; len : int; content : string }
 
 (* ── JSON encoding ─────────────────────────────────────────────────── *)
@@ -140,6 +173,7 @@ let encode_navigate url html =
 
 let _max_upload_size = ref (50 * 1024 * 1024)  (* 50 MB default *)
 
+(** An in-progress file upload received as base64 chunks over WebSocket. *)
 type upload_entry = {
   upload_id : string;
   filename : string;
@@ -155,6 +189,8 @@ let active_uploads : (string, upload_entry) Hashtbl.t = Hashtbl.create 16
 
 let _upload_max_age = 300.0  (* 5 minutes — abandon timeout *)
 
+(** Consume a completed upload by id. Returns [(filename, content_type, data)]
+    and removes the upload from the active set. Returns [None] if not found. *)
 let consume_upload upload_id =
   match Hashtbl.find_opt active_uploads upload_id with
   | Some entry ->
@@ -163,6 +199,7 @@ let consume_upload upload_id =
       Some (entry.filename, entry.content_type, data)
   | None -> None
 
+(** Remove uploads that have been active longer than the max age (5 min). *)
 let cleanup_uploads () =
   let now = Unix.gettimeofday () in
   let to_remove = Hashtbl.fold (fun id entry acc ->
@@ -172,15 +209,17 @@ let cleanup_uploads () =
 
 (* ── Unified handler message type ─────────────────────────────────── *)
 
+(** Internal message type for the unified WebSocket handler loop. *)
 type handler_msg =
-  | WsMsg of Yojson.Safe.t
-  | WsClosed
-  | InfoMsg of Message_bus.event  (* from MessageBus *)
+  | WsMsg of Yojson.Safe.t  (** Message received from the WebSocket client. *)
+  | WsClosed  (** WebSocket connection was closed. *)
+  | InfoMsg of Message_bus.event  (** Broadcast received from MessageBus. *)
 
 (* ── Patch diffing ─────────────────────────────────────────────────── *)
 
-(* Compute minimal string patches between prev and next HTML.
-   Returns list of (offset, old_len, new_content) sorted by offset. *)
+(** Compute minimal string patches between [prev] and [next] HTML.
+    Returns a list of patches sorted by offset. Uses common prefix/suffix
+    trimming with recursive longest-common-substring splitting. *)
 let compute_patches prev next =
   let prev_len = String.length prev in
   let next_len = String.length next in
@@ -263,6 +302,7 @@ let compute_patches prev next =
 
 (* ── View instance ─────────────────────────────────────────────────── *)
 
+(** A live view instance wrapping a concrete VIEW module with mutable state. *)
 type view_instance = {
   get_html : unit -> string;
   handle_msg : Yojson.Safe.t -> patch list option;
@@ -325,6 +365,8 @@ let save_all_topics topics session_id =
         ts.ts_endpoint (ts.ts_instance.get_model_json ()))
     topics
 
+(** Multiplexed WebSocket handler for all LiveView connections on [/live].
+    Manages join/leave/msg/navigate/params/upload messages and MessageBus integration. *)
 let handler (req : Types.request) (ws : Websocket.t) =
   Log.log "liveview: ws handler started for %s" req.path;
   let topics : (string, topic_state) Hashtbl.t = Hashtbl.create 8 in
@@ -637,6 +679,8 @@ let handler (req : Types.request) (ws : Websocket.t) =
 
 let _ws_registered = ref false
 
+(** Register a VIEW module at the given endpoint path.
+    Automatically sets up the [/live] WebSocket route on first registration. *)
 let register
     (type m msg)
     endpoint
@@ -697,6 +741,8 @@ let register
 
 (* ── Server push helpers ───────────────────────────────────────────── *)
 
+(** Push a server-initiated event to all clients subscribed to [topic].
+    The event is delivered as an ephemeral MessageBus broadcast. *)
 let send_event topic event payload =
   ignore (Message_bus.publish ~ephemeral:true topic
     (`Assoc [("__well_event", `String event);
@@ -704,6 +750,8 @@ let send_event topic event payload =
 
 (* ── SSR: render initial HTML ──────────────────────────────────────── *)
 
+(** Server-side render the initial HTML for a VIEW, restoring persisted state
+    if available. Used for the HTTP GET response before WebSocket connects. *)
 let render_initial
     (type m msg)
     (module View : VIEW with type model = m and type msg = msg)
@@ -726,6 +774,8 @@ let render_initial
 
 (* ── HTML helpers ──────────────────────────────────────────────────── *)
 
+(** Emit a [<live-view>] custom element that the client JS will mount.
+    Encodes endpoint, topic, and props as data attributes. *)
 let live_view ~endpoint ?(topic = "") ?(props = [])
     ?(children : Html.node list = []) () : Html.node =
   let topic = if topic = "" then endpoint else topic in
@@ -744,17 +794,18 @@ let live_view ~endpoint ?(topic = "") ?(props = [])
        (Html.escape_html props_json)
        children_html)
 
+(** Emit the [<script>] tag that loads the LiveView client JS module. *)
 let live_view_script () : Html.node =
   `Html {|<script type="module" src="/static/well.js"></script>|}
 
-(* Inline script for <head> — pre-opens WS before iframes consume the
-   HTTP/1.1 connection pool (6 connections per origin).  Must be a
-   regular (non-module) script so it executes synchronously during
-   HTML parsing, before the browser starts fetching body resources. *)
+(** Inline script for [<head>] that pre-opens the LiveView WebSocket before
+    iframes consume the HTTP/1.1 connection pool. Must be non-module to
+    execute synchronously during HTML parsing. *)
 let live_preconnect_script () : Html.node =
   `Html {|<script>!function(){var p=location.protocol==="https:"?"wss:":"ws:";window.__wellPreWs=new WebSocket(p+"//"+location.host+"/live")}()</script>|}
 
-(* MLX component: <LiveView name="counter" /> *)
+(** MLX component: [<LiveView name="counter" />].
+    Convenience wrapper around {!live_view} for use in MLX templates. *)
 let createElement ~name ?(props : (string * string) list = [])
     ?(children : Html.node list = []) () : Html.node =
   let endpoint = "/live/" ^ name in

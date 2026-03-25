@@ -1,4 +1,8 @@
-(* Db — Runtime schema registry and automagic migrations *)
+(** Runtime schema registry and automagic SQLite migrations.
+
+    Manages two databases: [app.sqlite] for user tables and [well.sqlite] for
+    framework internals. Registered schemas are automatically diffed and migrated
+    at connection time (CREATE TABLE / ALTER TABLE ADD COLUMN). *)
 
 (* SQLite identifier quoting — prevents injection via table/column names *)
 let quote_id name =
@@ -6,6 +10,7 @@ let quote_id name =
 
 (* ── Schema types ─────────────────────────────────────────────────── *)
 
+(** A column definition in a table schema. *)
 type column = {
   cname : string;
   sqlite_type : string;
@@ -13,6 +18,7 @@ type column = {
   nullable : bool;
 }
 
+(** A table definition with name and column list. *)
 type table = {
   name : string;
   columns : column list;
@@ -20,13 +26,16 @@ type table = {
 
 (* ── Runtime registry ─────────────────────────────────────────────── *)
 
+(** All tables registered via [\[@@deriving table\]] or {!register_table}. *)
 let registered_tables : table list ref = ref []
 
+(** Register a table schema for auto-migration. Called by [\[@@deriving table\]]. *)
 let register_table tbl =
   registered_tables := tbl :: !registered_tables
 
 (* ── SQLite introspection ─────────────────────────────────────────── *)
 
+(** Check whether a table exists in the database. *)
 let table_exists db table_name =
   let sql = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?" in
   let stmt = Sqlite3.prepare db sql in
@@ -35,6 +44,7 @@ let table_exists db table_name =
   ignore (Sqlite3.finalize stmt);
   found
 
+(** Introspect a table's columns via [PRAGMA table_info]. *)
 let get_db_columns db table_name =
   let sql = Printf.sprintf "PRAGMA table_info(%s)" (quote_id table_name) in
   let stmt = Sqlite3.prepare db sql in
@@ -63,6 +73,7 @@ let get_db_columns db table_name =
 
 (* ── SQL generation from schema ───────────────────────────────────── *)
 
+(** Generate a [CREATE TABLE IF NOT EXISTS] statement from a table schema. *)
 let create_table_sql tbl =
   let col_strs =
     List.map (fun c ->
@@ -76,6 +87,7 @@ let create_table_sql tbl =
 
 (* ── Diff types ───────────────────────────────────────────────────── *)
 
+(** A single schema difference between registered tables and the database. *)
 type diff_entry =
   | Create_table of table
   | Add_column of { table : string; column : column }
@@ -85,6 +97,7 @@ type diff_entry =
 
 (* ── Diff computation ─────────────────────────────────────────────── *)
 
+(** Compute schema differences between registered tables and the database. *)
 let diff db =
   List.concat_map (fun tbl ->
     if not (table_exists db tbl.name) then
@@ -123,6 +136,7 @@ let diff db =
 
 (* ── Diff to JSON ─────────────────────────────────────────────────── *)
 
+(** Convert a {!diff_entry} to a JSON representation. *)
 let diff_entry_to_json = function
   | Create_table tbl ->
       `Assoc [("type", `String "create_table"); ("table", `String tbl.name)]
@@ -140,6 +154,8 @@ let diff_entry_to_json = function
 
 (* ── Auto-migrate ─────────────────────────────────────────────────── *)
 
+(** Apply pending migrations: creates missing tables, adds new columns,
+    and warns about schema drift (extra columns or type mismatches). *)
 let auto_migrate db =
   List.iter (fun tbl ->
     if not (table_exists db tbl.name) then begin
@@ -182,7 +198,10 @@ let auto_migrate db =
 
 (* ── Data directory ───────────────────────────────────────────────── *)
 
+(** Directory for SQLite database files. Defaults to ["data"], overridable via config. *)
 let data_dir = ref (Config.get_string ~default:"data" "well.db.data_dir")
+
+(** When [true], all databases use in-memory shared-cache URIs. *)
 let memory_mode = ref false
 
 (* ── Connection pool ─────────────────────────────────────────────── *)
@@ -199,6 +218,7 @@ type pool = {
 let _memory_uri filename =
   Printf.sprintf "file:%s?mode=memory&cache=shared" filename
 
+(** Create a round-robin connection pool. Runs auto-migrate on the first connection. *)
 let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
   if !memory_mode then begin
     let uri = _memory_uri filename in
@@ -221,15 +241,18 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     { conns; next = Atomic.make 0 }
   end
 
+(** Run [f] with the next connection from the pool (round-robin). *)
 let with_conn pool f =
   let idx = Atomic.fetch_and_add pool.next 1 mod Array.length pool.conns in
   f pool.conns.(idx)
 
+(** Close all connections in the pool. *)
 let close_pool pool =
   Array.iter (fun db -> ignore (Sqlite3.db_close db)) pool.conns
 
 (* ── open_db — single connection (backward compat) ───────────────── *)
 
+(** Open a single database connection with WAL mode and auto-migration. *)
 let open_db ?(filename = "app.sqlite") () =
   if !memory_mode then begin
     let uri = _memory_uri filename in
@@ -250,6 +273,7 @@ let open_db ?(filename = "app.sqlite") () =
 
 (* ── Transactions ────────────────────────────────────────────────── *)
 
+(** Run [f] inside a SQLite transaction. Commits on success, rolls back on exception. *)
 let transaction db f =
   ignore (Sqlite3.exec db "BEGIN");
   let committed = ref false in
@@ -266,6 +290,7 @@ let transaction db f =
                       ^ Sqlite3.Rc.to_string rc));
       result)
 
+(** Like {!transaction} but [f] returns a [result]. Commits on [Ok], rolls back on [Error]. *)
 let transaction_result db f =
   ignore (Sqlite3.exec db "BEGIN");
   let committed = ref false in
@@ -287,6 +312,7 @@ let transaction_result db f =
 
 (* ── Backup / rollback ────────────────────────────────────────────── *)
 
+(** Create a binary backup of the database file at [path] as [path.bak]. *)
 let backup path =
   let bak = path ^ ".bak" in
   let ic = open_in_bin path in
@@ -301,6 +327,8 @@ let backup path =
 
 (* ── Test sandbox ────────────────────────────────────────────────── *)
 
+(** Run [f] with an in-memory database that has all registered tables migrated.
+    The connection is closed when [f] returns. *)
 let with_test_db f =
   let db = Sqlite3.db_open ":memory:" in
   ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
@@ -309,6 +337,7 @@ let with_test_db f =
     ~finally:(fun () -> ignore (Sqlite3.db_close db))
     (fun () -> f db)
 
+(** Swap the database at [path] with its [.bak] backup (atomic rename). *)
 let rollback path =
   let bak = path ^ ".bak" in
   if Sys.file_exists bak then begin
@@ -359,6 +388,8 @@ let _ensure_well_conns () =
         _well_conns := Some conns;
         conns)
 
+(** Run [f] with a connection to the framework database ([well.sqlite]).
+    Lazily initializes a round-robin pool on first call. *)
 let with_well_db f =
   let conns = _ensure_well_conns () in
   let idx = Atomic.fetch_and_add _well_next 1 mod Array.length conns in
@@ -366,6 +397,7 @@ let with_well_db f =
 
 (* ── Query helpers ────────────────────────────────────────────────── *)
 
+(** Bind parameter for parameterized SQL queries. *)
 type param =
   | Null
   | Int of int
@@ -393,6 +425,7 @@ let _col_to_yojson stmt i : Yojson.Safe.t =
   | Sqlite3.Data.TEXT s -> `String s
   | Sqlite3.Data.BLOB s -> `String s
 
+(** Typed accessors for reading column values from a result row. *)
 type row = {
   int : int -> int;
   float : int -> float;
@@ -419,6 +452,7 @@ let _make_row stmt =
     bool_opt = (fun i -> match Sqlite3.column stmt i with Sqlite3.Data.NULL -> None | _ -> Some (Sqlite3.column_int stmt i <> 0));
   }
 
+(** Execute a SELECT query and map each row with [f]. Returns results in order. *)
 let query db sql params f =
   let stmt = Sqlite3.prepare db sql in
   _bind_params stmt params;
@@ -430,6 +464,7 @@ let query db sql params f =
     done;
     List.rev !results)
 
+(** Like {!query} but returns only the first row, or [None]. *)
 let query_one db sql params f =
   let stmt = Sqlite3.prepare db sql in
   _bind_params stmt params;
@@ -439,6 +474,7 @@ let query_one db sql params f =
     | Sqlite3.Rc.ROW -> Some (f r)
     | _ -> None)
 
+(** Execute a non-SELECT statement (INSERT, UPDATE, DELETE). Returns the number of changed rows. *)
 let exec db sql params =
   let stmt = Sqlite3.prepare db sql in
   _bind_params stmt params;
@@ -447,6 +483,7 @@ let exec db sql params =
     | Sqlite3.Rc.DONE -> Sqlite3.changes db
     | rc -> failwith ("Well.Db.exec: " ^ Sqlite3.Rc.to_string rc))
 
+(** Execute a SELECT and return rows as [Yojson.Safe.t] association lists. *)
 let fetch_yojson db sql params =
   let stmt = Sqlite3.prepare db sql in
   _bind_params stmt params;
@@ -461,6 +498,7 @@ let fetch_yojson db sql params =
     done;
     List.rev !results)
 
+(** Close all connections in the framework database pool. Safe to call multiple times. *)
 let close_well_db () =
   Mutex.lock _well_mu;
   Fun.protect ~finally:(fun () -> Mutex.unlock _well_mu) (fun () ->

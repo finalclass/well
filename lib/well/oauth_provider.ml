@@ -1,6 +1,5 @@
-(* Well.OAuthProvider — OAuth 2.0 Authorization Server *)
-(* Simple Authorization Code flow, session_id as token *)
-(* No PKCE, no scopes, no refresh tokens — session gives full access *)
+(** Well.OAuthProvider -- OAuth 2.0 Authorization Server.
+    Simple Authorization Code flow where session_id serves as the access token. *)
 
 (* ── Forward refs (wired by well.ml) ────────────────────────────── *)
 
@@ -53,11 +52,13 @@ let _log_ref : (string -> unit) ref = ref (fun _ -> ())
 
 (* ── Types ──────────────────────────────────────────────────────── *)
 
+(** An OAuth client application with allowed redirect URIs. *)
 type client =
   { client_id: string
   ; redirect_uris: string list
   ; name: string }
 
+(** OAuth provider configuration: registered clients and login page customization. *)
 type config =
   { clients: client list
   ; login_title: string
@@ -340,6 +341,7 @@ let login_page ~title ~subtitle ~client_id ~redirect_uri ~state ?(error = "") ()
 
 let _config : config option ref = ref None
 
+(** Register OAuth clients and configure the authorization server. Call before [Well.run]. *)
 let setup
     ?(title = "Logowanie")
     ?(subtitle = "Zaloguj się, aby kontynuować")

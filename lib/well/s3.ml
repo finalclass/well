@@ -14,6 +14,7 @@ let _mime_ref : (string -> string) ref =
 
 (* ── Config type ─────────────────────────────────────────────────── *)
 
+(** S3 client configuration: endpoint, region, credentials, and bucket. *)
 type t = {
   endpoint_url : string;
   region : string;
@@ -25,6 +26,7 @@ type t = {
 let getenv_opt key = try Some (Sys.getenv key) with Not_found -> None
 let getenv_or key default = match getenv_opt key with Some v -> v | None -> default
 
+(** Create an S3 client. Falls back to [AWS_*] env vars for missing parameters. *)
 let connect
     ?endpoint_url ?region ?access_key_id ?secret_access_key ?bucket () =
   {
@@ -199,6 +201,7 @@ let do_bucket_request t ~meth ?(query = "") ?(extra_headers = []) ~body () =
 
 (* ── Public API ──────────────────────────────────────────────────── *)
 
+(** Upload an object. Content-type is auto-detected from file extension if not specified. *)
 let put t ~key ?(content_type = "") body =
   let ct =
     if content_type <> "" then content_type
@@ -211,6 +214,7 @@ let put t ~key ?(content_type = "") body =
   if status >= 200 && status < 300 then Ok ()
   else Error (Printf.sprintf "S3 PUT failed with status %d" status)
 
+(** Download an object, returning its body as a string. *)
 let get t ~key =
   let (status, _headers, body) =
     do_request t ~meth:"GET" ~key ~body:"" ()
@@ -218,6 +222,7 @@ let get t ~key =
   if status >= 200 && status < 300 then Ok body
   else Error (Printf.sprintf "S3 GET failed with status %d" status)
 
+(** Delete an object by key. *)
 let delete t ~key =
   let (status, _headers, _body) =
     do_request t ~meth:"DELETE" ~key ~body:"" ()
@@ -225,6 +230,7 @@ let delete t ~key =
   if status >= 200 && status < 300 then Ok ()
   else Error (Printf.sprintf "S3 DELETE failed with status %d" status)
 
+(** Copy an object from [src] key to [dst] key within the same bucket. *)
 let copy t ~src ~dst =
   let copy_source =
     "/" ^ t.bucket ^ "/" ^ uri_encode ~encode_slash:false src
@@ -236,6 +242,7 @@ let copy t ~src ~dst =
   if status >= 200 && status < 300 then Ok ()
   else Error (Printf.sprintf "S3 COPY failed with status %d" status)
 
+(** Retrieve object metadata (status and headers) without downloading the body. *)
 let head t ~key =
   let (status, headers, _body) =
     do_request t ~meth:"HEAD" ~key ~body:"" ()
@@ -243,6 +250,7 @@ let head t ~key =
   if status >= 200 && status < 300 then Ok (status, headers)
   else Error (Printf.sprintf "S3 HEAD failed with status %d" status)
 
+(** Create the configured bucket. Returns [Ok ()] if already exists. *)
 let create_bucket t =
   let (status, _headers, _body) =
     do_bucket_request t ~meth:"PUT" ~body:"" ()
@@ -253,6 +261,7 @@ let create_bucket t =
 
 (* ── Presigned URLs ──────────────────────────────────────────────── *)
 
+(** Generate a presigned GET URL valid for [expires_in] seconds (default 24h). *)
 let presigned_url t ~key ?(expires_in = 86400) () =
   let now = Unix.gettimeofday () in
   let amz_date = format_iso8601 now in

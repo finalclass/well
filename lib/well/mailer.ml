@@ -1,4 +1,4 @@
-(* Well.Mailer — pluggable email with Log, SMTP, Resend, Zeptomail, SES adapters *)
+(** Well.Mailer -- pluggable email sending with Log, SMTP, Resend, Zeptomail, and SES adapters. *)
 
 (* ── Forward refs (wired by well.ml) ────────────────────────────── *)
 
@@ -16,6 +16,7 @@ let _tls_config_fn : (unit -> Tls.Config.client) ref =
 
 (* ── Config types ──────────────────────────────────────────────── *)
 
+(** SMTP connection settings (host, port, username, password). *)
 type smtp_config = {
   host : string;
   port : int;
@@ -23,19 +24,23 @@ type smtp_config = {
   password : string;
 }
 
+(** Resend API configuration. *)
 type resend_config = { api_key : string }
 
+(** Zeptomail (Zoho) API configuration. *)
 type zeptomail_config = {
   api_url : string;
   token : string;
 }
 
+(** AWS SES configuration (region + credentials). *)
 type ses_config = {
   region : string;
   access_key_id : string;
   secret_access_key : string;
 }
 
+(** Email delivery adapter. [Log] prints to stdout, others send via network. *)
 type adapter =
   | Log
   | SMTP of smtp_config
@@ -43,12 +48,14 @@ type adapter =
   | Zeptomail of zeptomail_config
   | SES of ses_config
 
+(** Mailer configuration: sender identity and delivery adapter. *)
 type config = {
   from_email : string;
   from_name : string;
   adapter : adapter;
 }
 
+(** An email message with recipients, subject, HTML body, and plain text fallback. *)
 type mail = {
   to_ : (string * string) list;  (* (name, email) pairs *)
   subject : string;
@@ -60,6 +67,7 @@ type mail = {
 
 let _config : config option ref = ref None
 
+(** Configure the mailer with sender info and delivery adapter. Must be called before [send]. *)
 let setup cfg = _config := Some cfg
 
 let get_config () =
@@ -385,6 +393,7 @@ let send_log ~from_email ~from_name mail =
 
 (* ── Public API ────────────────────────────────────────────────── *)
 
+(** Send an email using the configured adapter. Returns [Ok ()] or [Error msg]. *)
 let send mail =
   let cfg = get_config () in
   match cfg.adapter with

@@ -1,6 +1,6 @@
-(* WebSocket implementation — RFC 6455 *)
-(* Ported from reference websocket.ml, Base→stdlib *)
+(** WebSocket implementation (RFC 6455) with frame parsing, masking, keepalive, and rate limiting. *)
 
+(** WebSocket frame opcodes. *)
 module Opcode = struct
   type t =
     | Continuation
@@ -30,6 +30,7 @@ module Opcode = struct
     | Unknown n -> n
 end
 
+(** A single WebSocket frame with fin bit, opcode, and payload. *)
 module Frame = struct
   type t = {
     fin : bool;
@@ -43,6 +44,7 @@ module Frame = struct
   let ping payload = { fin = true; opcode = Ping; payload }
 end
 
+(** A WebSocket connection wrapping an EIO bidirectional flow. *)
 type t = {
   flow : Eio.Flow.two_way_ty Eio.Resource.t;
   reader : Eio.Buf_read.t;
@@ -104,8 +106,10 @@ end
 
 let _max_frame_size = ref (10 * 1024 * 1024)  (* 10 MB default *)
 
+(** Raised when a received frame exceeds the maximum frame size. *)
 exception Frame_too_large
 
+(** Read a single WebSocket frame. Returns [None] on connection close. *)
 let read_frame ws =
   if ws.closed then None
   else
@@ -153,6 +157,7 @@ let read_frame ws =
              in
              Some Frame.{ fin; opcode; payload })
 
+(** Write a WebSocket frame. No-op if the connection is closed. *)
 let write_frame ws frame =
   if ws.closed then ()
   else
@@ -162,20 +167,25 @@ let write_frame ws frame =
     let header = make_header first_byte len in
     write_bytes ws.flow (header ^ payload)
 
+(** Send a text message over the WebSocket. *)
 let send ws text =
   write_frame ws (Frame.text text)
 
+(** Send a JSON value as a text message. *)
 let send_json ws json =
   send ws (Yojson.Safe.to_string json)
 
+(** Send a close frame and mark the connection as closed. *)
 let close ws =
   if not ws.closed then begin
     write_frame ws (Frame.close ());
     ws.closed <- true
   end
 
+(** Check whether the WebSocket connection is still open. *)
 let is_open ws = not ws.closed
 
+(** Receive the next text/binary message, handling ping/pong/close internally. *)
 let receive ws =
   let rec loop () =
     match read_frame ws with
@@ -198,6 +208,7 @@ let receive ws =
   in
   loop ()
 
+(** Receive and parse the next message as JSON. Returns [None] on close or parse error. *)
 let receive_json ws =
   match receive ws with
   | None -> None
@@ -205,6 +216,7 @@ let receive_json ws =
       (try Some (Yojson.Safe.from_string text)
        with Yojson.Json_error _ -> None)
 
+(** Perform the WebSocket upgrade handshake. Returns [Ok ws] or [Error reason]. *)
 let handshake headers flow reader =
   let find_header name =
     List.find_map
@@ -228,6 +240,7 @@ let handshake headers flow reader =
 
 (* ── Rate limiting ─────────────────────────────────────────────────── *)
 
+(** Token-bucket rate limiter for WebSocket messages. *)
 type rate_limiter = {
   mutable tokens : float;
   mutable last_refill : float;
@@ -235,10 +248,12 @@ type rate_limiter = {
   refill_rate : float;  (* tokens per second *)
 }
 
+(** Create a rate limiter with configurable burst size and refill rate (tokens/sec). *)
 let create_limiter ?(max_tokens = 100.0) ?(refill_rate = 100.0) () =
   { tokens = max_tokens; last_refill = Unix.gettimeofday ();
     max_tokens; refill_rate }
 
+(** Check and consume one token. Returns [true] if allowed, [false] if rate-limited. *)
 let rate_limit_allow limiter =
   let now = Unix.gettimeofday () in
   let elapsed = now -. limiter.last_refill in
@@ -252,6 +267,7 @@ let rate_limit_allow limiter =
 
 (* ── Keepalive ────────────────────────────────────────────────────── *)
 
+(** Start a keepalive fiber that sends pings and closes on pong timeout. *)
 let start_keepalive ~sw ~sleep ?(interval = 30.0) ?(timeout = 10.0) ws =
   Eio.Fiber.fork ~sw (fun () ->
     let rec loop () =

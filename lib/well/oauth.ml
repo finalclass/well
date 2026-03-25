@@ -1,5 +1,5 @@
-(* Well.OAuth — OAuth 2.0 with PKCE for Google, GitHub, Microsoft, Facebook *)
-(* Security: PKCE S256, state bound to session, single-use, 10-min expiry *)
+(** Well.OAuth -- OAuth 2.0 client with PKCE S256 for Google, GitHub, Microsoft, and Facebook.
+    State is session-bound, single-use, with 10-minute expiry. *)
 
 (* ── Types ──────────────────────────────────────────────────────── *)
 
@@ -8,6 +8,7 @@ type oauth_response =
   | OHtml of string * int
   | ORedirectWithRegenerate of string
 
+(** OAuth provider configuration: endpoints, client credentials, and scopes. *)
 type provider_config = {
   name : string;
   client_id : string;
@@ -19,6 +20,7 @@ type provider_config = {
   is_oidc : bool;
 }
 
+(** User info returned by an OAuth provider after authentication. *)
 type provider_user = {
   uid : string;
   email : string option;
@@ -129,6 +131,7 @@ let code_challenge verifier =
 
 (* ── Provider configs ───────────────────────────────────────────── *)
 
+(** Create a Google OAuth provider config (OpenID Connect). *)
 let google ~client_id ~client_secret =
   { name = "google"; client_id; client_secret;
     scopes = ["openid"; "email"; "profile"];
@@ -137,6 +140,7 @@ let google ~client_id ~client_secret =
     userinfo_url = "https://openidconnect.googleapis.com/v1/userinfo";
     is_oidc = true }
 
+(** Create a GitHub OAuth provider config. *)
 let github ~client_id ~client_secret =
   { name = "github"; client_id; client_secret;
     scopes = ["user:email"; "read:user"];
@@ -145,6 +149,7 @@ let github ~client_id ~client_secret =
     userinfo_url = "https://api.github.com/user";
     is_oidc = false }
 
+(** Create a Microsoft OAuth provider config (Azure AD, OpenID Connect). *)
 let microsoft ~client_id ~client_secret =
   { name = "microsoft"; client_id; client_secret;
     scopes = ["openid"; "email"; "profile"; "User.Read"];
@@ -153,6 +158,7 @@ let microsoft ~client_id ~client_secret =
     userinfo_url = "https://graph.microsoft.com/v1.0/me";
     is_oidc = true }
 
+(** Create a Facebook OAuth provider config. *)
 let facebook ~client_id ~client_secret =
   { name = "facebook"; client_id; client_secret;
     scopes = ["email"; "public_profile"];
@@ -192,6 +198,7 @@ let ensure_table () =
 
 (* ── Identity queries ───────────────────────────────────────────── *)
 
+(** Find the user_id linked to a provider identity, if any. *)
 let find_identity ~provider ~provider_uid =
   ensure_table ();
   Auth.with_db (fun db ->
@@ -209,6 +216,7 @@ let find_identity ~provider ~provider_uid =
       let _ = Sqlite3.finalize stmt in
       None)
 
+(** Create or update an OAuth identity record linking a provider UID to a user. *)
 let create_identity ~user_id ~provider ~provider_uid ?email ?name ?avatar_url () =
   ensure_table ();
   Auth.with_db (fun db ->
@@ -235,6 +243,7 @@ let create_identity ~user_id ~provider ~provider_uid ?email ?name ?avatar_url ()
     let _ = Sqlite3.finalize stmt in
     ())
 
+(** List all OAuth identities linked to a user as [(provider, provider_uid)] pairs. *)
 let user_identities ~user_id =
   ensure_table ();
   Auth.with_db (fun db ->
@@ -618,6 +627,7 @@ let callback_handler (provider : provider_config) (req : Types.request) =
 
 (* ── Public API ─────────────────────────────────────────────────── *)
 
+(** Set up OAuth routes for the given providers. Registers [/auth/:provider] and callback routes. *)
 let setup ~base_url providers =
   _base_url := base_url;
   _providers := providers;
@@ -628,5 +638,6 @@ let setup ~base_url providers =
       (callback_handler provider);
   ) providers
 
+(** Return the names of all configured OAuth providers. *)
 let configured_providers () =
   List.map (fun (p : provider_config) -> p.name) !_providers

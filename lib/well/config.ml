@@ -1,4 +1,5 @@
-(* Well.Config — project configuration from well.toml + env var overrides *)
+(** Well.Config -- project configuration from well.toml with env var overrides.
+    Dotted keys map to env vars: ["server.port"] becomes [SERVER_PORT]. *)
 
 (* ── Project root discovery ──────────────────────────────────────── *)
 
@@ -14,11 +15,13 @@ let _project_root = lazy (
   search (Sys.getcwd ())
 )
 
+(** Return the project root (directory containing well.toml), or cwd if not found. *)
 let project_root () =
   match Lazy.force _project_root with
   | Some dir -> dir
   | None -> Sys.getcwd ()
 
+(** Return the project root as [Some dir] or [None] if well.toml is not found. *)
 let project_root_opt () = Lazy.force _project_root
 
 (* ── TOML loading ────────────────────────────────────────────────── *)
@@ -80,6 +83,7 @@ let get_raw key =
 
 (* ── Typed getters ───────────────────────────────────────────────── *)
 
+(** Get a string config value by dotted key. Raises if not found and no default. *)
 let get_string ?default key =
   match get_raw key, default with
   | Some s, _ -> s
@@ -88,8 +92,10 @@ let get_string ?default key =
     failwith (Printf.sprintf "Well.Config: key %S not found (set %s or add to well.toml)"
       key (env_var_of_key key))
 
+(** Get a string config value, returning [None] if not found. *)
 let get_string_opt key = get_raw key
 
+(** Get an integer config value. Raises if not found and no default, or if not parseable. *)
 let get_int ?default key =
   match get_raw key, default with
   | Some s, _ ->
@@ -101,11 +107,13 @@ let get_int ?default key =
     failwith (Printf.sprintf "Well.Config: key %S not found (set %s or add to well.toml)"
       key (env_var_of_key key))
 
+(** Get an integer config value, returning [None] if not found or not parseable. *)
 let get_int_opt key =
   match get_raw key with
   | Some s -> (try Some (int_of_string s) with Failure _ -> None)
   | None -> None
 
+(** Get a boolean config value. Accepts true/false/1/0/yes/no. *)
 let get_bool ?default key =
   let parse s =
     match String.lowercase_ascii s with
@@ -120,6 +128,7 @@ let get_bool ?default key =
     failwith (Printf.sprintf "Well.Config: key %S not found (set %s or add to well.toml)"
       key (env_var_of_key key))
 
+(** Get a boolean config value, returning [None] if not found or not parseable. *)
 let get_bool_opt key =
   match get_raw key with
   | Some s ->
@@ -129,6 +138,7 @@ let get_bool_opt key =
      | _ -> None)
   | None -> None
 
+(** Get a float config value. Raises if not found and no default, or if not parseable. *)
 let get_float ?default key =
   match get_raw key, default with
   | Some s, _ ->
@@ -140,6 +150,7 @@ let get_float ?default key =
     failwith (Printf.sprintf "Well.Config: key %S not found (set %s or add to well.toml)"
       key (env_var_of_key key))
 
+(** Get a float config value, returning [None] if not found or not parseable. *)
 let get_float_opt key =
   match get_raw key with
   | Some s -> (try Some (float_of_string s) with Failure _ -> None)

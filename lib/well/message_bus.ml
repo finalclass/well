@@ -1,8 +1,13 @@
-(* MessageBus — SQLite-backed persistent pub/sub with wildcard matching *)
+(** MessageBus — SQLite-backed persistent pub/sub with wildcard matching.
+
+    Events are stored in [_well_events] table for replay and pruning.
+    Supports typed topics, keyed topics, and ephemeral (in-memory only) events. *)
+
 (* IDesign Method: "message bus is merely a queued Pub/Sub" *)
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
+(** A raw event as stored in SQLite. *)
 type event = {
   id : int;
   channel : string;
@@ -33,6 +38,7 @@ let ensure_tables db =
     Atomic.set _tables_created true
   end
 
+(** Initialize the events table in the framework database. Idempotent. *)
 let init () = Db.with_well_db ensure_tables
 
 (* ── Wildcard matching ─────────────────────────────────────────────── *)
@@ -50,6 +56,8 @@ let matches_pattern pattern channel =
 (* ── Replay mode ─────────────────────────────────────────────────── *)
 
 let replay_mode = ref false
+
+(** Returns [true] while a [replay] call is in progress. *)
 let is_replaying () = !replay_mode
 
 (* ── Subscriber registry ──────────────────────────────────────────── *)
@@ -65,6 +73,9 @@ type subscriber = {
 
 let subscribers : (int, subscriber) Hashtbl.t = Hashtbl.create 16
 
+(** Subscribe to events matching [pattern] (trailing [*] for wildcard).
+    Returns a subscription id for [unsubscribe]. If [~live_only] is true,
+    the callback is skipped during replay. *)
 let subscribe ?(live_only = false) pattern cb =
   Mutex.lock _mu;
   let id = incr _next_id; !_next_id in
@@ -72,6 +83,7 @@ let subscribe ?(live_only = false) pattern cb =
   Mutex.unlock _mu;
   id
 
+(** Remove a subscription by its id. *)
 let unsubscribe id =
   Mutex.lock _mu;
   Hashtbl.remove subscribers id;
@@ -96,6 +108,9 @@ let notify event =
 
 (* ── Publish ───────────────────────────────────────────────────────── *)
 
+(** Publish an event to [channel] with JSON [payload]. Returns the event id.
+    If [~ephemeral] is true, the event is broadcast to subscribers but not
+    persisted to SQLite (returns 0). Forced ephemeral during replay. *)
 let publish ?(ephemeral = false) channel payload =
   let now = Unix.gettimeofday () in
   let ephemeral = ephemeral || !replay_mode in
@@ -130,9 +145,12 @@ let publish ?(ephemeral = false) channel payload =
 
 (* ── Replay ────────────────────────────────────────────────────────── *)
 
+(** Reset internal state. Called during shutdown. *)
 let close () =
   Atomic.set _tables_created false
 
+(** Replay persisted events from SQLite matching [pattern], starting after
+    [since_id]. Sets [replay_mode] during execution. *)
 let replay ?(since_id = 0) pattern cb =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -172,6 +190,8 @@ let replay ?(since_id = 0) pattern cb =
 
 (* ── Prune ────────────────────────────────────────────────────────── *)
 
+(** Delete persisted events with id <= [keep_since_id]. Returns the number
+    of deleted rows. *)
 let prune ~keep_since_id () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -184,30 +204,36 @@ let prune ~keep_since_id () =
 
 (* ── Typed topic descriptor ────────────────────────────────────────── *)
 
+(** A deserialized event carrying a typed value. *)
 type 'a typed_event = {
   id : int;
   value : 'a;
   created_at : float;
 }
 
+(** A typed topic descriptor binding a channel name to serialization functions. *)
 type 'a topic = {
   t_channel : string;
   to_yojson : 'a -> Yojson.Safe.t;
   of_yojson : Yojson.Safe.t -> ('a, string) result;
 }
 
+(** Create a typed topic for the given channel with serialization functions. *)
 let make_topic channel to_yojson of_yojson =
   { t_channel = channel; to_yojson; of_yojson }
 
+(** Publish a typed value to a topic. Serializes via [t.to_yojson]. *)
 let publish_typed ?(ephemeral = false) t value =
   publish ~ephemeral t.t_channel (t.to_yojson value)
 
+(** Subscribe to a typed topic. Events that fail deserialization are silently dropped. *)
 let subscribe_typed ?live_only t f =
   subscribe ?live_only t.t_channel (fun event ->
     match t.of_yojson event.payload with
     | Ok v -> f { id = event.id; value = v; created_at = event.created_at }
     | Error _ -> ())
 
+(** Replay persisted events for a typed topic, starting after [since_id]. *)
 let replay_typed ?(since_id = 0) t f =
   replay ~since_id t.t_channel (fun event ->
     match t.of_yojson event.payload with
@@ -216,14 +242,18 @@ let replay_typed ?(since_id = 0) t f =
 
 (* ── Keyed topics (channel:key) ──────────────────────────────────── *)
 
+(** Publish to a keyed topic. The channel becomes [topic:key]. *)
 let publish_keyed_typed ?(ephemeral = false) t ~key value =
   publish ~ephemeral (t.t_channel ^ ":" ^ key) (t.to_yojson value)
 
+(** A typed event with its key extracted from the channel suffix. *)
 type 'a keyed_event = {
   key : string;
   event : 'a typed_event;
 }
 
+(** Subscribe to all keys of a keyed topic using wildcard [topic:*].
+    The key is extracted from the channel name and passed in [keyed_event]. *)
 let subscribe_keyed_typed ?live_only t f =
   let pattern = t.t_channel ^ ":*" in
   let prefix_len = String.length t.t_channel + 1 in
@@ -237,6 +267,7 @@ let subscribe_keyed_typed ?live_only t f =
 
 (* ── Once (subscribe, fire once, auto-unsubscribe) ───────────────── *)
 
+(** Subscribe to [channel], fire the callback once, then auto-unsubscribe. *)
 let once channel cb =
   let sub_id = ref 0 in
   sub_id := subscribe channel (fun event ->

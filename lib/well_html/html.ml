@@ -1,5 +1,9 @@
+(** HTML generation library with full HTML5 tag coverage, XSS protection, and LiveView support. *)
+
+(** An HTML node. Coerces to [Well.response] via [:>] in route handlers. *)
 type node = [ `Html of string ]
 
+(** Escape HTML special characters (ampersand, angle brackets, double quotes) for safe embedding. *)
 let escape_html s =
   let buf = Buffer.create (String.length s) in
   String.iter
@@ -32,6 +36,7 @@ let bool_attrs_to_string attrs =
   in
   String.concat "" parts
 
+(** Concatenate a list of nodes into a single HTML string. *)
 let cat (children : node list) =
   String.concat "" (List.map (fun (`Html s) -> s) children)
 
@@ -129,7 +134,10 @@ let _el ~void name
   end else
     `Html (Printf.sprintf "<%s%s>%s</%s>" name attr_str (cat children) name)
 
+(** Create a normal HTML element (with closing tag). *)
 let tag = _el ~void:false
+
+(** Create a void/self-closing HTML element (e.g. [<input />]). *)
 let void_tag = _el ~void:true
 
 (* ── Document ────────────────────────────────────────────────────── *)
@@ -297,13 +305,18 @@ let noscript = tag "noscript"
 let template = tag "template"
 let slot = tag "slot"
 
+(** Create an escaped text node (XSS-safe). *)
 let txt s : node = `Html (escape_html s)
+
+(** Create a raw/unescaped HTML node. Use with caution. *)
 let raw s : node = `Html s
 
+(** Render a hidden CSRF token input field. *)
 let csrf_input token : node =
   `Html (Printf.sprintf {|<input type="hidden" name="_csrf_token" value="%s" />|}
            (escape_html token))
 
+(** Render a field error message span, or empty if no error for the field. *)
 let field_error errors field_name : node =
   match List.assoc_opt field_name errors with
   | Some msg ->
@@ -313,6 +326,7 @@ let field_error errors field_name : node =
 
 (* ── LiveView support ─────────────────────────────────────────────── *)
 
+(** Extract the raw HTML string from a node. *)
 let element_to_string (`Html s : node) : string = s
 
 (* ── Keyed list support ──────────────────────────────────────────── *)
@@ -340,6 +354,7 @@ let inject_lv_key key html =
      ^ after
    with Not_found -> html)
 
+(** Render a keyed list for LiveView diffing. Each item gets a [data-lv-key] attribute. *)
 let each ~id ?(tag_name = "div") items ~key render_fn : node =
   let keyed_items =
     List.map

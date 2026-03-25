@@ -1,18 +1,28 @@
-(* cdp.ml — Chrome DevTools Protocol client for e2e testing *)
+(** Chrome DevTools Protocol client for end-to-end browser testing.
+    Launches headless Chrome, connects via CDP WebSocket, and provides a high-level API. *)
 
+(** Raised when a CDP operation exceeds its timeout. *)
 exception Timeout
+
+(** Raised when no Chrome/Chromium binary is found on the system. *)
 exception Chrome_not_found
+
+(** Raised on CDP protocol errors (failed commands, connection issues). *)
 exception Cdp_error of string
+
+(** Raised when a click or fill target element cannot be found on the page. *)
 exception Element_not_found of string
 
 (* ── Types ────────────────────────────────────────────── *)
 
+(** Handle to a launched Chrome process. *)
 type browser = {
   pid : int;
   port : int;
   user_data_dir : string;
 }
 
+(** A CDP session connected to a browser tab via WebSocket. *)
 type t = {
   browser : browser;
   ic : in_channel;
@@ -235,6 +245,7 @@ end
 
 (* ── Public API ───────────────────────────────────────── *)
 
+(** Launch Chrome and connect via CDP. Returns a session for the initial tab. *)
 let launch ?(headless = true) () =
   Random.self_init ();
   let chrome = find_chrome () in
@@ -294,6 +305,7 @@ let launch ?(headless = true) () =
   ignore (send t "Runtime.enable" (`Assoc []));
   t
 
+(** Close the browser, kill the process, and clean up the temp directory. *)
 let close t =
   if not t.closed then begin
     t.closed <- true;
@@ -305,6 +317,7 @@ let close t =
     (try rm_rf t.browser.user_data_dir with _ -> ())
   end
 
+(** Open a new browser tab and return a CDP session for it. *)
 let new_tab t =
   let result = send t "Target.createTarget"
     (`Assoc [("url", `String "about:blank")]) in
@@ -321,6 +334,7 @@ let new_tab t =
   ignore (send tab "Runtime.enable" (`Assoc []));
   tab
 
+(** Navigate to a URL and wait for the page to fully load. *)
 let goto t url =
   let result = send t "Page.navigate" (`Assoc [("url", `String url)]) in
   (match Yojson.Safe.Util.member "errorText" result with
@@ -336,11 +350,13 @@ let goto t url =
   in
   wait 0
 
+(** Get the current page URL. *)
 let get_url t =
   match eval t "window.location.href" with
   | `String url -> url
   | _ -> ""
 
+(** Wait until the page body contains the given text. *)
 let wait_for_text ?(timeout = 10.0) t text =
   let deadline = Unix.gettimeofday () +. timeout in
   let js = Printf.sprintf
@@ -354,6 +370,7 @@ let wait_for_text ?(timeout = 10.0) t text =
   in
   loop ()
 
+(** Wait until a CSS selector matches an element on the page. *)
 let wait_for_selector ?(timeout = 10.0) t selector =
   let deadline = Unix.gettimeofday () +. timeout in
   let js = Printf.sprintf "!!document.querySelector(%s)" (js_str selector) in
@@ -366,6 +383,7 @@ let wait_for_selector ?(timeout = 10.0) t selector =
   in
   loop ()
 
+(** Click an element by text content, ARIA role, or CSS selector. *)
 let click t ?text ?role ?name ?selector () =
   let js = match text, role, name, selector with
     | Some txt, _, _, _ ->
@@ -443,6 +461,7 @@ let click t ?text ?role ?name ?selector () =
     in
     raise (Element_not_found (Printf.sprintf "click: %s" what))
 
+(** Fill an input field by label text or CSS selector. *)
 let fill t ?label ?selector value =
   let js = match label, selector with
     | Some lbl, _ ->
@@ -505,6 +524,7 @@ let fill t ?label ?selector value =
     in
     raise (Element_not_found (Printf.sprintf "fill: %s" what))
 
+(** Dump the accessibility tree as a text string of "role: name" lines. *)
 let accessibility_tree t =
   let result = send t "Accessibility.getFullAXTree" (`Assoc []) in
   let nodes = Yojson.Safe.Util.(member "nodes" result |> to_list) in
@@ -523,6 +543,7 @@ let accessibility_tree t =
   ) nodes;
   Buffer.contents buf
 
+(** Set a cookie in the browser. *)
 let set_cookie t ~name ~value ?(domain = "") ?(path = "/") () =
   let url =
     if domain = "" then
@@ -539,11 +560,14 @@ let set_cookie t ~name ~value ?(domain = "") ?(path = "/") () =
   in
   ignore (send t "Network.setCookie" (`Assoc params))
 
+(** Clear all browser cookies. *)
 let clear_cookies t =
   ignore (send t "Network.clearBrowserCookies" (`Assoc []))
 
+(** Evaluate arbitrary JavaScript and return the result as JSON. *)
 let eval_js t js = eval t js
 
+(** Capture a screenshot as base64 PNG. Optionally saves to disk at [path]. *)
 let screenshot t ?(path = "") () =
   let result = send t "Page.captureScreenshot"
     (`Assoc [("format", `String "png")]) in

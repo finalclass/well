@@ -1,7 +1,9 @@
-(* well_test — Jest-like testing framework for OCaml *)
+(** Jest-like testing framework for OCaml with describe/it blocks,
+    rich matchers, snapshot testing, and parallel-safe output. *)
 
 (* === Types === *)
 
+(** Outcome of a single test case. *)
 type test_result =
   | Pass
   | Fail of string
@@ -27,6 +29,7 @@ type test_suite = {
 
 let _default_timeout = ref 5.0
 
+(** Set the default timeout for all tests (in seconds). *)
 let default_timeout t = _default_timeout := t
 
 exception Test_timeout of float
@@ -75,23 +78,29 @@ exception Assertion_failed of string
 
 type 'a expectation = { value : 'a; negated : bool }
 
+(** Create an expectation from a value. Chain with matchers like [to_equal_int]. *)
 let expect value = { value; negated = false }
+
+(** Negate an expectation (e.g. [expect x |> not_ |> to_equal_int 5]). *)
 let not_ exp = { exp with negated = true }
 
 let fail_with exp message =
   let prefix = if exp.negated then "Expected NOT " else "Expected " in
   raise (Assertion_failed (prefix ^ message))
 
+(** Assert string equality. *)
 let to_equal_string expected exp =
   let equal = exp.value = expected in
   if (equal && exp.negated) || ((not equal) && not exp.negated) then
     fail_with exp (Printf.sprintf "\"%s\" to equal \"%s\"" exp.value expected)
 
+(** Assert integer equality. *)
 let to_equal_int expected exp =
   let equal = exp.value = expected in
   if (equal && exp.negated) || ((not equal) && not exp.negated) then
     fail_with exp (Printf.sprintf "%d to equal %d" exp.value expected)
 
+(** Assert float equality within [epsilon]. *)
 let to_equal_float ?(epsilon = 0.0001) expected exp =
   let equal = abs_float (exp.value -. expected) < epsilon in
   if (equal && exp.negated) || ((not equal) && not exp.negated) then
@@ -102,6 +111,7 @@ let to_equal_bool expected exp =
   if (equal && exp.negated) || ((not equal) && not exp.negated) then
     fail_with exp (Printf.sprintf "%b to equal %b" exp.value expected)
 
+(** Assert the value is [true]. *)
 let to_be_true exp =
   if (exp.value && exp.negated) || ((not exp.value) && not exp.negated) then
     fail_with exp "value to be true"
@@ -110,11 +120,13 @@ let to_be_false exp =
   if ((not exp.value) && exp.negated) || (exp.value && not exp.negated) then
     fail_with exp "value to be false"
 
+(** Assert the value is [Some _]. *)
 let to_be_some exp =
   let is_some = match exp.value with Some _ -> true | None -> false in
   if (is_some && exp.negated) || ((not is_some) && not exp.negated) then
     fail_with exp "value to be Some"
 
+(** Assert the value is [None]. *)
 let to_be_none exp =
   let is_none = match exp.value with None -> true | Some _ -> false in
   if (is_none && exp.negated) || ((not is_none) && not exp.negated) then
@@ -143,6 +155,7 @@ let to_be_less_than_float threshold exp =
     fail_with exp
       (Printf.sprintf "%f to be less than %f" exp.value threshold)
 
+(** Assert the string contains a substring. *)
 let to_contain substring exp =
   let len_sub = String.length substring in
   let len_s = String.length exp.value in
@@ -159,6 +172,7 @@ let to_contain substring exp =
     fail_with exp
       (Printf.sprintf "\"%s\" to contain \"%s\"" exp.value substring)
 
+(** Assert the string matches a regex pattern. *)
 let to_match pattern exp =
   let matches =
     try
@@ -169,6 +183,7 @@ let to_match pattern exp =
   if (matches && exp.negated) || ((not matches) && not exp.negated) then
     fail_with exp (Printf.sprintf "\"%s\" to match /%s/" exp.value pattern)
 
+(** Assert the list has the expected length. *)
 let to_have_length expected_len exp =
   let actual_len = List.length exp.value in
   let equal = actual_len = expected_len in
@@ -177,6 +192,7 @@ let to_have_length expected_len exp =
       (Printf.sprintf "list to have length %d but got %d" expected_len
          actual_len)
 
+(** Assert the function raises any exception. *)
 let to_raise exp =
   let raised =
     try
@@ -187,6 +203,7 @@ let to_raise exp =
   if (raised && exp.negated) || ((not raised) && not exp.negated) then
     fail_with exp "function to raise an exception"
 
+(** Assert the function raises an exception with the given message. *)
 let to_raise_with expected_msg exp =
   let message =
     try
@@ -312,6 +329,7 @@ let show_diff expected actual =
     (fun line -> _bprintf "  %s\n" (Color.red ("- " ^ line)))
     actual_lines
 
+(** Assert the value matches a stored snapshot. Creates new snapshot on first run. *)
 let to_match_snapshot exp =
   let actual = exp.value in
   let suite_name =
@@ -356,6 +374,7 @@ let to_match_snapshot exp =
              (Printf.sprintf "Snapshot mismatch for \"%s\"" key))
       end
 
+(** Define a test suite with a name and a block of [it] test cases. *)
 let describe ?timeout name fn =
   let suite =
     {
@@ -374,6 +393,7 @@ let describe ?timeout name fn =
   state.current_suite <- prev_suite;
   state.suites <- suite :: state.suites
 
+(** Define a test case within a [describe] block. *)
 let it ?timeout name fn =
   match state.current_suite with
   | None -> failwith "it() must be called inside describe()"
@@ -381,28 +401,34 @@ let it ?timeout name fn =
       let test = { name; fn; timeout_s = timeout; result = None; duration_ms = 0.0 } in
       suite.tests <- test :: suite.tests
 
+(** Alias for [it]. *)
 let test = it
 
+(** Register a function to run before each test in the current suite. *)
 let before_each fn =
   match state.current_suite with
   | None -> failwith "before_each() must be called inside describe()"
   | Some suite -> suite.before_each <- Some fn
 
+(** Register a function to run after each test in the current suite. *)
 let after_each fn =
   match state.current_suite with
   | None -> failwith "after_each() must be called inside describe()"
   | Some suite -> suite.after_each <- Some fn
 
+(** Register a function to run once before all tests in the current suite. *)
 let before_all fn =
   match state.current_suite with
   | None -> failwith "before_all() must be called inside describe()"
   | Some suite -> suite.before_all <- Some fn
 
+(** Register a function to run once after all tests in the current suite. *)
 let after_all fn =
   match state.current_suite with
   | None -> failwith "after_all() must be called inside describe()"
   | Some suite -> suite.after_all <- Some fn
 
+(** Mark a test as skipped (will be reported but not executed). *)
 let skip name _fn =
   match state.current_suite with
   | None -> failwith "skip() must be called inside describe()"
@@ -518,6 +544,7 @@ let run_suite ~(filter : string option) ~ci_mode (suite : test_suite) =
   if not ci_mode then _bprint_newline ();
   (match suite.after_all with Some fn -> fn () | None -> ())
 
+(** Summary of a test run. *)
 type run_result = {
   total : int;
   passed : int;
@@ -526,6 +553,7 @@ type run_result = {
   duration_ms : float;
 }
 
+(** Run all registered test suites. Pass [~source_file:__FILE__] for snapshot support. *)
 let run ?(filter = None) ?ci_mode ?source_file () =
   let ci_mode =
     match ci_mode with
@@ -625,11 +653,13 @@ let run ?(filter = None) ?ci_mode ?source_file () =
     duration_ms;
   }
 
+(** Exit with code 0 if all tests passed, 1 otherwise. *)
 let exit_with_result result =
   if result.failed > 0 then exit 1 else exit 0
 
 (* === Reset state (for testing the test framework) === *)
 
+(** Reset all test state (for testing the test framework itself). *)
 let reset () =
   state.suites <- [];
   state.current_suite <- None;

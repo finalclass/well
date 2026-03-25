@@ -1,4 +1,8 @@
-(* Well.Auth — authentication, user profiles, OTP, brute-force protection *)
+(** Authentication, user management, OTP, and brute-force protection.
+
+    Uses PBKDF2-SHA256 for password hashing. All data stored in the shared
+    framework SQLite database ([well.sqlite]). *)
+
 (* Uses PBKDF2-SHA256 for password hashing, SQLite for storage *)
 
 (* ── Forward refs (wired by well.ml) ────────────────────────────── *)
@@ -14,6 +18,7 @@ let _session_delete_ref : (string -> string -> unit) ref =
 
 (* ── Types ─────────────────────────────────────────────────────── *)
 
+(** A registered user record. *)
 type user = {
   id : int;
   email : string;
@@ -27,6 +32,7 @@ type user = {
 
 (* ── Configuration ────────────────────────────────────────────── *)
 
+(** Mutable auth configuration (OTP lifetimes, brute-force thresholds). *)
 type config = {
   mutable otp_lifetime_seconds : int;
   mutable otp_max_active : int;
@@ -43,6 +49,7 @@ let _config = {
   login_failure_window_seconds = 3600;
 }
 
+(** Override default auth settings. Only provided parameters are changed. *)
 let configure
     ?otp_lifetime_seconds
     ?otp_max_active
@@ -60,6 +67,7 @@ let configure
 
 let _tables_created = Atomic.make false
 
+(** Create auth tables in [well.sqlite] if they do not exist yet. Idempotent. *)
 let ensure_tables db =
   if not (Atomic.get _tables_created) then begin
     let _ = Sqlite3.exec db
@@ -173,11 +181,13 @@ let get_dummy_hash () =
   end;
   !_dummy_hash
 
+(** Hash a password with PBKDF2-SHA256 and a random 16-byte salt. *)
 let hash_password password =
   let salt = Mirage_crypto_rng.generate 16 in
   let hash = pbkdf2 ~password ~salt ~iterations in
   Printf.sprintf "pbkdf2-sha256$%d$%s$%s" iterations (hex_encode salt) (hex_encode hash)
 
+(** Verify [password] against a stored [hash]. Uses constant-time comparison. *)
 let verify_password ~password ~hash =
   match String.split_on_char '$' hash with
   | ["pbkdf2-sha256"; iter_s; salt_hex; hash_hex] ->
@@ -201,9 +211,11 @@ let verify_password ~password ~hash =
 
 (* ── Email normalization ───────────────────────────────────────── *)
 
+(** Trim and lowercase an email address. *)
 let normalize_email email =
   String.lowercase_ascii (String.trim email)
 
+(** Basic structural validation of an email address. *)
 let validate_email email =
   let len = String.length email in
   if len = 0 || len > 254 then false
@@ -284,6 +296,7 @@ let _forgive_attempts db ~email =
 
 (* ── Core API ──────────────────────────────────────────────────── *)
 
+(** Register a new user with email and password. Returns [Error] on validation failure or duplicate email. *)
 let register ~email ~password ?(first_name = "") ?(last_name = "") () =
   let email = normalize_email email in
   if String.length password < 8 then
@@ -322,6 +335,7 @@ let register ~email ~password ?(first_name = "") ?(last_name = "") () =
       let _ = Sqlite3.finalize stmt in
       Error "Email already taken"
 
+(** Authenticate a user by email and password. Enforces brute-force limits. *)
 let login ~email ~password ?(ip = "") () =
   let email = normalize_email email in
   (* Cap password length to prevent DoS via PBKDF2 on huge input *)
@@ -365,6 +379,7 @@ let login ~email ~password ?(ip = "") () =
         _record_attempt db ~email ~ip ~is_valid:false;
         Error "Invalid email or password"
 
+(** Look up a user by integer [id]. Returns [None] if not found. *)
 let get_user id =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -380,10 +395,12 @@ let get_user id =
     let _ = Sqlite3.finalize stmt in
     None
 
+(** Clear the current user from the session. *)
 let logout (req : Types.request) =
   !_session_delete_ref req.session_id "user_id";
   !_session_delete_ref req.session_id "user_name"
 
+(** Authenticate and store the user id in the session on success. *)
 let login_and_set_session (req : Types.request) ~email ~password =
   let ip = match List.assoc_opt "x-forwarded-for" req.headers with
     | Some v -> (match String.split_on_char ',' v with h :: _ -> String.trim h | [] -> "")
@@ -397,11 +414,13 @@ let login_and_set_session (req : Types.request) ~email ~password =
 
 (* ── Helpers for OAuth ─────────────────────────────────────────── *)
 
+(** Open the framework database with auth tables ensured, then call [f]. *)
 let with_db f =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
   f db
 
+(** Find a user by exact email (case-insensitive). *)
 let find_user_by_email email =
   let email = normalize_email email in
   Db.with_well_db @@ fun db ->
@@ -418,6 +437,7 @@ let find_user_by_email email =
     let _ = Sqlite3.finalize stmt in
     None
 
+(** Create a user with no password (for OAuth / OTP-only flows). *)
 let create_user_without_password ~email =
   let email = normalize_email email in
   if not (validate_email email) then
@@ -450,6 +470,7 @@ let create_user_without_password ~email =
 
 (* ── Profile management ──────────────────────────────────────── *)
 
+(** Update profile fields for a user. Only provided fields are changed. *)
 let edit_profile ~id ?first_name ?last_name ?language ?phone_number () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -474,6 +495,7 @@ let edit_profile ~id ?first_name ?last_name ?language ?phone_number () =
     let _ = Sqlite3.finalize stmt in
     Ok ()
 
+(** Set or clear the archived flag on a user. *)
 let archive_user ~id ~is_archived () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -485,6 +507,7 @@ let archive_user ~id ~is_archived () =
   let _ = Sqlite3.finalize stmt in
   ()
 
+(** Query users with optional filters: [current] id, [ids] list, [email] substring. *)
 let find_users ?current ?ids ?email ?(include_archived = false) () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -537,6 +560,7 @@ let find_users ?current ?ids ?email ?(include_archived = false) () =
 
 (* ── OTP (One-Time Password) ─────────────────────────────────── *)
 
+(** Generate a one-time password for [email]. Returns the code string on success. *)
 let initiate_otp ~email () =
   let email = normalize_email email in
   if not (validate_email email) then
@@ -575,6 +599,7 @@ let initiate_otp ~email () =
       let _ = Sqlite3.finalize stmt in
       Ok code
 
+(** Verify an OTP code. On success, returns the user (auto-created if new). *)
 let verify_otp ~email ~code ?(ip = "") () =
   let email = normalize_email email in
   Db.with_well_db @@ fun db ->
@@ -632,6 +657,7 @@ let verify_otp ~email ~code ?(ip = "") () =
 
 (* ── User settings ───────────────────────────────────────────── *)
 
+(** Retrieve JSON settings for a user. Returns [None] if no settings stored. *)
 let get_settings ~user_id () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -649,6 +675,7 @@ let get_settings ~user_id () =
     let _ = Sqlite3.finalize stmt in
     None
 
+(** Store JSON settings for a user (insert or replace). *)
 let set_settings ~user_id ~settings () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -663,12 +690,14 @@ let set_settings ~user_id ~settings () =
 
 (* ── Login attempt management ────────────────────────────────── *)
 
+(** Forgive all failed login attempts for [email], resetting the lockout counter. *)
 let reset_attempts ~email () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
   let email = normalize_email email in
   _forgive_attempts db ~email
 
+(** Count recent failed login attempts for [email] within the configured window. *)
 let login_attempts ~email () =
   let email = normalize_email email in
   Db.with_well_db @@ fun db ->
@@ -677,6 +706,7 @@ let login_attempts ~email () =
 
 (* ── Grants ────────────────────────────────────────────────────── *)
 
+(** Grant a named permission to a user. No-op if already granted. *)
 let grant ~user_id name =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -688,6 +718,7 @@ let grant ~user_id name =
   let _ = Sqlite3.finalize stmt in
   ()
 
+(** Revoke a named permission from a user. *)
 let revoke ~user_id name =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -699,6 +730,7 @@ let revoke ~user_id name =
   let _ = Sqlite3.finalize stmt in
   ()
 
+(** Check whether a user holds a specific grant. *)
 let has_grant ~user_id name =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -710,6 +742,7 @@ let has_grant ~user_id name =
   let _ = Sqlite3.finalize stmt in
   found
 
+(** List all grant names held by a user, sorted alphabetically. *)
 let user_grants ~user_id =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -725,8 +758,11 @@ let user_grants ~user_id =
 
 (* ── Middleware ─────────────────────────────────────────────────── *)
 
+(** Raised by {!require_grant} when the user is missing or lacks the grant. *)
 exception Auth_denied of int * string
 
+(** Middleware: wrap a handler to require the session user holds [grant_name].
+    Raises {!Auth_denied} with 401 or 403 on failure. *)
 let require_grant grant_name (handler : Types.request -> _) (req : Types.request) =
   let user_id_opt = !_session_get_ref req.session_id "user_id" in
   match user_id_opt with
@@ -742,6 +778,7 @@ let require_grant grant_name (handler : Types.request -> _) (req : Types.request
 
 (* ── CRUD ─────────────────────────────────────────────────────── *)
 
+(** List all users, optionally filtering by email substring and archive status. *)
 let list_users ?(search = "") ?(include_archived = false) () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -764,6 +801,7 @@ let list_users ?(search = "") ?(include_archived = false) () =
   let _ = Sqlite3.finalize stmt in
   List.rev !results
 
+(** Permanently delete a user and their grants and settings. *)
 let delete_user id =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -781,6 +819,7 @@ let delete_user id =
   let _ = Sqlite3.finalize stmt3 in
   ()
 
+(** Change a user's email address. Returns [Error] if invalid or already taken. *)
 let update_email id new_email =
   let new_email = normalize_email new_email in
   if not (validate_email new_email) then
@@ -799,6 +838,7 @@ let update_email id new_email =
       let _ = Sqlite3.finalize stmt in
       Error "Email already taken"
 
+(** Set a new password for a user. Validates minimum length. *)
 let set_password id password =
   if String.length password < 8 then
     Error "Password must be at least 8 characters"
@@ -815,6 +855,7 @@ let set_password id password =
     let _ = Sqlite3.finalize stmt in
     Ok ()
 
+(** Create a user for seeding (no email validation, minimal password check). *)
 let create_seed_user ~login ~password =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -835,6 +876,7 @@ let create_seed_user ~login ~password =
       let _ = Sqlite3.finalize stmt in
       Error "User already exists"
 
+(** Check whether any user in the system holds the given grant. *)
 let has_any_grant name =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -845,6 +887,7 @@ let has_any_grant name =
   let _ = Sqlite3.finalize stmt in
   found
 
+(** Count how many users hold the given grant. *)
 let count_grant_holders name =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -858,6 +901,7 @@ let count_grant_holders name =
   let _ = Sqlite3.finalize stmt in
   n
 
+(** Return all [(user_id, grant_name)] pairs, ordered by user then grant. *)
 let all_grants () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
@@ -874,5 +918,6 @@ let all_grants () =
 
 (* ── Lifecycle ─────────────────────────────────────────────────── *)
 
+(** Reset internal state so tables are re-created on next use. *)
 let close () =
   Atomic.set _tables_created false

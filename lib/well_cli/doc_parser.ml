@@ -31,16 +31,14 @@ let strip_doc_delimiters lines =
   | [] -> ""
   | _ ->
     let text = String.concat "\n" lines in
-    (* Remove (** prefix *)
+    let len = String.length text in
     let text =
-      let len = String.length text in
       if len >= 3 && String.sub text 0 3 = "(**" then
         String.sub text 3 (len - 3)
       else text
     in
-    (* Remove trailing *) *)
+    let len = String.length text in
     let text =
-      let len = String.length text in
       if len >= 2 && String.sub text (len - 2) 2 = "*)" then
         String.sub text 0 (len - 2)
       else text
@@ -274,6 +272,14 @@ let parse_file path =
         in_doc_comment := false
     end
     else if String.length trimmed >= 3 && String.sub trimmed 0 3 = "(**" then begin
+      (* If we already have a pending doc before any declaration, save it as module doc *)
+      if !pending_doc <> [] && not !found_first_decl && !module_doc_text = "" then begin
+        let raw = List.rev !pending_doc in
+        let text = strip_doc_delimiters raw in
+        let lines_split = String.split_on_char '\n' text in
+        let cleaned = List.map trim_doc_line lines_split in
+        module_doc_text := String.trim (String.concat "\n" cleaned)
+      end;
       (* Start of doc comment *)
       pending_doc := [ trimmed ];
       (* Check if single-line doc comment *)
@@ -384,7 +390,7 @@ let parse_file path =
       if not !consumed then
         (match parse_let trimmed with
          | Some name ->
-           if not !found_first_decl && doc_text <> "" then begin
+           if not !found_first_decl && doc_text <> "" && !module_doc_text = "" then begin
              (* First doc comment before any declaration = module doc *)
              module_doc_text := doc_text;
            end;
@@ -404,7 +410,7 @@ let parse_file path =
          | None -> ());
 
       (* If we have a pending doc and nothing consumed it, check if it's module-level *)
-      if not !consumed && doc_text <> "" && not !found_first_decl then
+      if not !consumed && doc_text <> "" && not !found_first_decl && !module_doc_text = "" then
         module_doc_text := doc_text;
 
       (* Clear pending doc if we hit a non-blank, non-doc line *)

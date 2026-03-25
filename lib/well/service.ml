@@ -1,10 +1,15 @@
-(* Service — Concurrent, stateless RPC dispatch with fiber-per-request *)
+(** Service -- concurrent, stateless RPC dispatch with fiber-per-request.
+    Services register handler specs and are dispatched via HTTP routes or Unix socket. *)
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
+(** Parameter metadata for RPC introspection. *)
 type param_info = { pname : string; ptype : string; poptional : bool }
+
+(** RPC endpoint metadata: name, parameter types, and return type. *)
 type rpc_info = { rname : string; params : param_info list; returns : param_info list; returns_name : string }
 
+(** Service specification: name, RPC handler, and supported endpoints. *)
 type spec = {
   name : string;
   handler : string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t;
@@ -16,6 +21,7 @@ type spec = {
 (* Both Service (direct) and Actor (via mailbox) register here.
    HTTP routes, socket, health — all dispatch through this table. *)
 
+(** Unified dispatch entry for both services and actors. *)
 type handler_entry = {
   dispatch : string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t;
   rpcs : rpc_info list;
@@ -44,9 +50,11 @@ let _ws_rate_limit : float ref = ref 100.0
 
 let pending_specs : spec list ref = ref []
 
+(** Register a service spec to be started when [Well.run] is called. *)
 let register spec =
   pending_specs := spec :: !pending_specs
 
+(** Mark a service to be exposed over HTTP at [/rpc/:service/:rpc]. *)
 let expose name =
   exposed_services := name :: !exposed_services
 
@@ -56,6 +64,7 @@ let register_handler name entry =
 
 (* ── Dispatch ─────────────────────────────────────────────────────── *)
 
+(** Dispatch an RPC call to a named service or actor. *)
 let dispatch_by_name name rpc ctx payload =
   match Hashtbl.find_opt handlers name with
   | None -> `Assoc [("error", `String (name ^ " is not registered"))]
@@ -105,6 +114,7 @@ let start_all ~sw:_ =
 
 (* ── Health ────────────────────────────────────────────────────────── *)
 
+(** Return the health status of all registered services. *)
 let health () =
   let result = ref [] in
   Hashtbl.iter (fun name entry ->
@@ -119,6 +129,7 @@ let health () =
 (* Actor can override health entries *)
 let _actor_health : (unit -> (string * string) list) ref = ref (fun () -> [])
 
+(** Return health of all services, with actor-specific overrides applied. *)
 let full_health () =
   let base = health () in
   let actor_statuses = !_actor_health () in
@@ -131,6 +142,7 @@ let full_health () =
 
 (* ── Unix socket transport (local IPC) ────────────────────────────── *)
 
+(** List all registered services with their RPC names. *)
 let list_services () =
   let result = ref [] in
   Hashtbl.iter (fun name entry ->
@@ -139,6 +151,7 @@ let list_services () =
   ) handlers;
   List.sort (fun (a, _) (b, _) -> String.compare a b) !result
 
+(** Return JSON schema of all services with parameter and return type info. *)
 let describe_services () =
   let result = ref [] in
   Hashtbl.iter (fun name entry ->
@@ -238,6 +251,7 @@ let handle_socket_client flow _addr =
    | End_of_file | Eio.Io _ -> ());
   Eio.Flow.close flow
 
+(** Start a Unix domain socket server for local IPC at the given path. *)
 let start_socket ~sw ~net path =
   (try Unix.unlink path with Unix.Unix_error _ -> ());
   let socket = Eio.Net.listen net ~sw ~backlog:16 ~reuse_addr:true
@@ -264,6 +278,7 @@ let start_socket ~sw ~net path =
 
 (* ── Cast (fire-and-forget) ──────────────────────────────────────── *)
 
+(** Fire-and-forget: run [f] in a background fiber. Errors are logged. *)
 let cast f =
   match !_cast_sw with
   | Some sw ->

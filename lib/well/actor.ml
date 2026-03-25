@@ -1,9 +1,11 @@
-(* Actor — Sequential, stateful actor with mailbox and crash isolation *)
+(** Actor -- sequential, stateful actor with mailbox, crash isolation, and supervised restarts. *)
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
 
+(** Restart strategy: [Permanent] always restarts, [Transient] on crash only, [Temporary] never. *)
 type restart = Permanent | Transient | Temporary
 
+(** Current status of a supervised actor. *)
 type child_status =
   | Running
   | Restarting of { attempts : int }
@@ -36,6 +38,7 @@ let supervised_states : (string, supervised) Hashtbl.t = Hashtbl.create 8
 
 (* ── Registration (at module init time) ──────────────────────────── *)
 
+(** Register an actor spec to be started when [Well.run] is called. *)
 let register ?(restart = Permanent) spec =
   pending_specs := (spec, restart) :: !pending_specs
 
@@ -60,6 +63,7 @@ let actor_loop actor =
 
 (* ── Dispatch via mailbox ─────────────────────────────────────────── *)
 
+(** Send an RPC message to a named actor's mailbox and await the reply. *)
 let dispatch name rpc ctx payload =
   match Hashtbl.find_opt actors name with
   | None -> `Assoc [("error", `String (name ^ " is down"))]
@@ -117,6 +121,7 @@ let supervised_run ~sw spec restart =
 
 (* ── Start all actors (called by Well.run) ────────────────────────── *)
 
+(** Start all registered actors as supervised fibers (called by [Well.run]). *)
 let start_all ~sw =
   let specs = List.rev !pending_specs in
   pending_specs := [];
@@ -128,6 +133,7 @@ let start_all ~sw =
 
 (* ── Health ────────────────────────────────────────────────────────── *)
 
+(** Return the health status of all supervised actors. *)
 let health () =
   let result = ref [] in
   Hashtbl.iter (fun name state ->

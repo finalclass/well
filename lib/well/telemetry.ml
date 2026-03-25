@@ -1,4 +1,4 @@
-(* Telemetry — Atomic counters + system metrics for Cap admin *)
+(** Telemetry -- lock-free atomic counters and system metrics for monitoring. *)
 
 (* ── Atomic counters (lock-free hot path) ─────────────────────────── *)
 
@@ -10,6 +10,7 @@ let bus_events_published = Atomic.make 0
 let active_connections = Atomic.make 0
 let active_ws_connections = Atomic.make 0
 
+(** Increment the HTTP request counter. *)
 let incr_requests () = Atomic.incr http_requests
 let incr_errors () = Atomic.incr http_errors_5xx
 let add_latency_us us = ignore (Atomic.fetch_and_add http_latency_sum_us us)
@@ -20,6 +21,7 @@ let decr_active_connections () = ignore (Atomic.fetch_and_add active_connections
 let incr_active_ws () = Atomic.incr active_ws_connections
 let decr_active_ws () = ignore (Atomic.fetch_and_add active_ws_connections (-1))
 
+(** Point-in-time snapshot of all application counters. *)
 type counter_snapshot = {
   total_requests : int;
   errors_5xx : int;
@@ -28,6 +30,7 @@ type counter_snapshot = {
   bus_events : int;
 }
 
+(** Take a snapshot of all application counters. *)
 let snapshot_counters () =
   let total = Atomic.get http_requests in
   let errors = Atomic.get http_errors_5xx in
@@ -44,6 +47,7 @@ let snapshot_counters () =
 let _prev_requests = ref 0
 let _prev_time = ref 0.0
 
+(** Calculate requests per second since last call (delta-based). *)
 let requests_per_sec () =
   let now = Unix.gettimeofday () in
   let cur = Atomic.get http_requests in
@@ -62,6 +66,7 @@ let requests_per_sec () =
 let _prev_cpu_total = ref 0
 let _prev_cpu_time = ref 0.0
 
+(** Current process CPU usage as a percentage (Linux /proc, -1.0 on other platforms). *)
 let cpu_percent () =
   try
     let ic = open_in "/proc/self/stat" in
@@ -90,6 +95,7 @@ let cpu_percent () =
     pct
   with _ -> -1.0
 
+(** Resident set size in kilobytes (Linux /proc, 0 on other platforms). *)
 let rss_kb () =
   try
     let ic = open_in "/proc/self/status" in
@@ -104,6 +110,7 @@ let rss_kb () =
     scan ()
   with _ -> 0
 
+(** System load averages (1m, 5m, 15m) from /proc/loadavg. *)
 let load_average () =
   try
     let ic = open_in "/proc/loadavg" in
@@ -112,6 +119,7 @@ let load_average () =
     Scanf.sscanf line "%f %f %f" (fun a b c -> (a, b, c))
   with _ -> (0.0, 0.0, 0.0)
 
+(** System memory (total, available) in kilobytes from /proc/meminfo. *)
 let system_memory_kb () =
   try
     let ic = open_in "/proc/meminfo" in
@@ -133,6 +141,7 @@ let system_memory_kb () =
     scan ()
   with _ -> (0, 0)
 
+(** Total size of regular files in the data/ directory in bytes. *)
 let data_dir_size_bytes () =
   try
     let dir = "data" in
@@ -154,6 +163,7 @@ let data_dir_size_bytes () =
 
 (* ── System snapshot ──────────────────────────────────────────────── *)
 
+(** Comprehensive system snapshot: CPU, memory, GC stats, load, disk, and uptime. *)
 type system_snapshot = {
   cpu_pct : float;
   rss_mb : float;
@@ -171,6 +181,7 @@ type system_snapshot = {
   uptime_s : float;
 }
 
+(** Collect a full system snapshot (CPU, memory, GC, load, disk, uptime). *)
 let system_snapshot () =
   let gc = Gc.stat () in
   let ws = float_of_int Sys.word_size /. 8.0 in

@@ -1,3 +1,5 @@
+(** Well -- full-stack OCaml web framework. HTTP server, routing, middleware, sessions, and more. *)
+
 let version = "1.3.0"
 
 (* ── Types ─────────────────────────────────────────────────────────── *)
@@ -11,6 +13,7 @@ type stream_config = {
   stream_fn : (string -> unit) -> unit;
 }
 
+(** Polymorphic variant response type. Superset of [Yojson.Safe.t] with HTML, text, redirect, streaming, and custom status/header variants. *)
 type custom = {
   status : int option;
   headers : (string * string) list;
@@ -35,11 +38,19 @@ and response =
 
 (* ── Response constructors ─────────────────────────────────────────── *)
 
+(** Create an HTML response with [text/html] content type. *)
 let html s : response = `Html s
+
+(** Create a plain text response with [text/plain] content type. *)
 let text s : response = `Text s
+
+(** Create a JSON response from a [Yojson.Safe.t] value. *)
 let json (j : Yojson.Safe.t) : response = (j :> response)
+
+(** Create a 302 redirect response to the given URL. *)
 let redirect url : response = `Redirect url
 
+(** Create a streaming response with chunked transfer encoding. *)
 let stream ?(content_type = "application/octet-stream") ?(status = 200)
     ?(headers = []) fn : response =
   `Stream { stream_status = status; stream_content_type = content_type;
@@ -47,11 +58,13 @@ let stream ?(content_type = "application/octet-stream") ?(status = 200)
 
 (* ── Response transformers ─────────────────────────────────────────── *)
 
+(** Set the HTTP status code on a response. Wraps in [`Custom] variant. Pipeable: [html s |> status 201]. *)
 let status code (resp : response) : response =
   match resp with
   | `Custom c -> `Custom { c with status = Some code }
   | _ -> `Custom { status = Some code; headers = []; body = resp }
 
+(** Add a response header. Pipeable: [html s |> header "X-Custom" "value"]. *)
 let header name value (resp : response) : response =
   match resp with
   | `Custom c -> `Custom { c with headers = (name, value) :: c.headers }
@@ -59,16 +72,21 @@ let header name value (resp : response) : response =
 
 (* ── Request helpers ───────────────────────────────────────────────── *)
 
+(** Get a path parameter by name. Returns [""] if not found. *)
 let param req key =
   match List.assoc_opt key req.params with
   | Some v -> v
   | None -> ""
 
+(** Get a query string parameter by name. Returns [None] if not found. *)
 let query req key = List.assoc_opt key req.query
 
 (* ── Middleware types ─────────────────────────────────────────────── *)
 
+(** Request handler function type. *)
 type handler = request -> response
+
+(** Middleware function type. Wraps a handler, can modify request/response. *)
 type middleware = handler -> handler
 
 (* ── Context funktor ─────────────────────────────────────────────── *)
@@ -80,6 +98,7 @@ module type CONTEXT = sig
   val empty : t
 end
 
+(** Type-safe request context functor. Create a typed slot on the request for passing data through middleware. *)
 module Context (C : CONTEXT) : sig
   val get : request -> C.t
   val set : C.t -> request -> request
@@ -104,6 +123,7 @@ end
 
 let global_middlewares : middleware list ref = ref []
 
+(** Register a global middleware applied to all routes. *)
 let use mw = global_middlewares := mw :: !global_middlewares
 
 let apply_middlewares middlewares handler =
@@ -127,6 +147,7 @@ type static_mount = { prefix : string; dir : string }
 
 let static_mounts : static_mount list ref = ref []
 
+(** Mount a directory for static file serving at the given URL prefix. *)
 let static prefix dir =
   let prefix =
     if String.length prefix > 0 && prefix.[String.length prefix - 1] = '/' then
@@ -137,6 +158,7 @@ let static prefix dir =
 
 (* ── MIME types ───────────────────────────────────────────────────── *)
 
+(** Map a file extension (without dot) to its MIME type. Returns ["application/octet-stream"] for unknown extensions. *)
 let ext_to_mime ext =
   match String.lowercase_ascii ext with
   (* Text *)
@@ -217,6 +239,7 @@ let ext_to_mime ext =
   | "webmanifest" -> "application/manifest+json"
   | _ -> "application/octet-stream"
 
+(** Map a MIME type to its canonical file extension. Returns ["bin"] for unknown types. *)
 let mime_to_ext mime =
   match String.lowercase_ascii mime with
   | "text/html" -> "html"
@@ -402,6 +425,7 @@ let current_prefix () =
 let current_scope_middlewares () =
   List.concat_map (fun s -> s.scope_middlewares) (List.rev !scope_stack)
 
+(** Group routes under a shared URL prefix with optional scoped middleware. *)
 let scope ?(middleware = []) prefix f =
   scope_stack := { prefix; scope_middlewares = middleware } :: !scope_stack;
   f ();
@@ -421,15 +445,19 @@ let register ?middleware meth path handler =
 
 (* ── Route registration ────────────────────────────────────────────── *)
 
+(** Register a GET route handler. Path supports [:param] segments and [*wildcard]. *)
 let get ?middleware path handler =
   register ?middleware "GET" path (fun req -> (handler req :> response))
 
+(** Register a POST route handler. *)
 let post ?middleware path handler =
   register ?middleware "POST" path (fun req -> (handler req :> response))
 
+(** Register a PUT route handler. *)
 let put ?middleware path handler =
   register ?middleware "PUT" path (fun req -> (handler req :> response))
 
+(** Register a DELETE route handler. *)
 let delete ?middleware path handler =
   register ?middleware "DELETE" path (fun req -> (handler req :> response))
 
@@ -442,6 +470,7 @@ type ws_route = {
 
 let ws_routes : ws_route list ref = ref []
 
+(** Register a WebSocket route handler. *)
 let ws path handler =
   let segments = parse_segments (split_path path) in
   ws_routes := { ws_segments = segments; ws_handler = handler } :: !ws_routes
@@ -562,19 +591,23 @@ let session_middleware : middleware = fun next req ->
 
 (* ── Session API ─────────────────────────────────────────────────── *)
 
+(** Get a session value by key. Returns [None] if not found. *)
 let session_get req key =
   Session_store.get ~session_id:req.session_id ~key
 
+(** Set a session value for the given key. *)
 let session_set req key value =
   Session_store.set ~session_id:req.session_id ~key ~value
 
+(** Delete a session value by key. *)
 let session_delete req key =
   Session_store.delete ~session_id:req.session_id ~key
 
+(** Clear all session data for the current request's session. *)
 let session_clear req =
   Session_store.clear ~session_id:req.session_id
 
-(* Programmatic session API — no HTTP context required *)
+(** Programmatic session API. No HTTP request context required -- use session IDs directly. *)
 module Session = struct
   let create () = generate_session_id ()
   let get = Session_store.get
@@ -586,6 +619,7 @@ module Session = struct
   let delete_by_value = Session_store.delete_by_value
 end
 
+(** Set session lifetime in seconds. Default is 86400 (24 hours). *)
 let session_lifetime seconds = _session_lifetime := seconds
 
 (* Wire Auth session forward refs *)
@@ -596,6 +630,7 @@ let () =
 
 let _session_regenerate_hook : (string -> string -> unit) ref = ref (fun _ _ -> ())
 
+(** Regenerate the session ID for CSRF protection. Returns [(new_request, set_cookie_fn)]. *)
 let session_regenerate req =
   let old_sid = req.session_id in
   let new_sid = generate_session_id () in
@@ -623,6 +658,7 @@ let () = Oauth._handle_get_ref := (fun path handler ->
 
 (* ── RPC context ─────────────────────────────────────────────────── *)
 
+(** RPC context for cross-service calls. Carries session, user, and locale information. *)
 type rpc_ctx = {
   session_id : string;
   request_id : string;
@@ -672,6 +708,7 @@ let rpc_ctx_of_wire (wire : Yojson.Safe.t) : rpc_ctx =
 
 let _request_id_counter = ref 0
 
+(** Build an RPC context from the current HTTP request, including session data and locale. *)
 let rpc_ctx (req : request) : rpc_ctx =
   incr _request_id_counter;
   let request_id =
@@ -705,10 +742,12 @@ let rpc_ctx (req : request) : rpc_ctx =
 
 (* ── Flash API ───────────────────────────────────────────────────── *)
 
+(** Store a flash message in the session. Available on the next request only. *)
 let put_flash (req : request) kind message =
   Session_store.set ~session_id:req.session_id
     ~key:(_flash_prefix ^ kind) ~value:message
 
+(** Retrieve a flash message by kind. Returns [None] if not set. *)
 let get_flash req kind =
   let key = _flash_prefix ^ kind in
   let entries = Flash_ctx.get req in
@@ -766,6 +805,7 @@ let parse_query path =
 
 (* ── URL decoding ──────────────────────────────────────────────────── *)
 
+(** Decode a URL-encoded (percent-encoded) string. Handles [+] as space. *)
 let url_decode s =
   let buf = Buffer.create (String.length s) in
   let len = String.length s in
@@ -788,12 +828,16 @@ let url_decode s =
 (* ── Body size config ─────────────────────────────────────────────── *)
 
 let _max_body_size = ref (10 * 1024 * 1024) (* 10 MB *)
+
+(** Set the maximum request body size in bytes. Default is 10 MB. *)
 let max_body_size n = _max_body_size := n
 
+(** Raised when a request body exceeds [max_body_size]. *)
 exception Body_too_large
 
 (* ── Multipart parsing ───────────────────────────────────────────── *)
 
+(** An uploaded file from a multipart form submission. *)
 type uploaded_file = {
   filename : string;
   content_type : string;
@@ -801,6 +845,7 @@ type uploaded_file = {
   data : string;
 }
 
+(** Parsed multipart form data containing fields and uploaded files. *)
 type multipart_data = {
   fields : (string * string) list;
   files : (string * uploaded_file) list;
@@ -919,6 +964,7 @@ module Multipart_ctx = Context(struct
   let empty = None
 end)
 
+(** Parse multipart form data from the request. Cached after first call. *)
 let get_multipart req =
   match Multipart_ctx.get req with
   | Some d -> d
@@ -930,16 +976,19 @@ let get_multipart req =
            | None -> { fields = []; files = [] })
       | None -> { fields = []; files = [] }
 
+(** Get a single uploaded file by form field name. Returns [None] if not found. *)
 let file req name =
   let data = get_multipart req in
   List.assoc_opt name data.files
 
+(** Get all uploaded files with the given form field name. *)
 let files req name =
   let data = get_multipart req in
   List.filter_map
     (fun (k, v) -> if k = name then Some v else None)
     data.files
 
+(** Get all uploaded files from the request as [(name, file)] pairs. *)
 let all_files req =
   let data = get_multipart req in
   data.files
@@ -959,6 +1008,7 @@ let parse_urlencoded body =
              in
              Some (url_decode k, url_decode v))
 
+(** Get all form parameters as [(key, value)] pairs. Handles both URL-encoded and multipart forms. *)
 let form_params (req : request) =
   if is_multipart req.headers then
     let data =
@@ -976,6 +1026,7 @@ let form_params (req : request) =
   else
     parse_urlencoded req.body
 
+(** Get a form field value by name. Returns [""] if not found. *)
 let form req key =
   match List.assoc_opt key (form_params req) with
   | Some v -> v
@@ -1492,6 +1543,7 @@ let logger : middleware = fun next req ->
   Log.log ~ctx:(req_ctx req) "%s %s -> %d (%.1fms)" req.meth req.path st dt;
   resp
 
+(** CORS middleware. Configurable allowed origins, methods, headers, and max age. *)
 let cors ?(origins = ["*"])
     ?(methods = ["GET"; "POST"; "PUT"; "DELETE"; "OPTIONS"])
     ?(headers = ["Content-Type"; "Authorization"])
@@ -1527,8 +1579,10 @@ let cors ?(origins = ["*"])
 let _dev_mode = ref true
 let _custom_error_handler : (exn -> request -> response) option ref = ref None
 
+(** Enable or disable dev mode. When enabled, error pages show backtraces and request details. *)
 let dev_mode b = _dev_mode := b
 
+(** Set a custom error handler invoked when a route handler raises an exception. *)
 let on_error fn = _custom_error_handler := Some fn
 
 let dev_error_page exn bt (req : request) =
@@ -1599,8 +1653,10 @@ let generate_csrf_token () =
   String.iter (fun c -> Buffer.add_string buf (Printf.sprintf "%02x" (Char.code c))) bytes;
   Buffer.contents buf
 
+(** Get the CSRF token for the current request. *)
 let csrf_token req = Csrf_ctx.get req
 
+(** CSRF protection middleware. Validates tokens on state-changing requests (POST, PUT, DELETE). *)
 let csrf : middleware = fun next req ->
   let token =
     match Hashtbl.find_opt _csrf_tokens req.session_id with
@@ -1653,6 +1709,7 @@ let _rate_limit_store : (string, float list) Hashtbl.t = Hashtbl.create 256
 let _rate_limit_mu = Mutex.create ()
 let _rate_limit_counter = ref 0
 
+(** Rate limiting middleware. Limits requests per client IP within a sliding time window. *)
 let rate_limit ~max_requests ~window_ms () : middleware = fun next req ->
   (* Skip rate limiting for static file requests *)
   let is_static =
@@ -1711,11 +1768,13 @@ let _auth_key = "user_id"
 
 module Auth_ctx = Context(struct type t = string option let empty = None end)
 
+(** Get the current user ID from the session. Returns [None] if not authenticated. *)
 let current_user req =
   match Auth_ctx.get req with
   | Some _ as v -> v
   | None -> Session_store.get ~session_id:req.session_id ~key:_auth_key
 
+(** Authentication middleware. Redirects unauthenticated users to [login_path]. *)
 let require_auth ?(login_path = "/login") () : middleware = fun next req ->
   let user = Session_store.get ~session_id:req.session_id ~key:_auth_key in
   match user with
@@ -1764,6 +1823,7 @@ let _base64_decode s =
   done;
   Buffer.contents buf
 
+(** Host whitelist middleware. Rejects requests with disallowed Host headers. *)
 let allowed_hosts ~hosts () : middleware = fun next req ->
   let host =
     match List.assoc_opt "host" req.headers with
@@ -1778,6 +1838,7 @@ let allowed_hosts ~hosts () : middleware = fun next req ->
   else
     `Text "Forbidden — invalid Host header" |> status 403
 
+(** HTTP Basic Auth middleware. Calls [check username password] to validate credentials. *)
 let basic_auth ~check ?(realm = "Restricted") () : middleware = fun next req ->
   let authorized =
     match List.assoc_opt "authorization" req.headers with
@@ -1804,6 +1865,7 @@ let basic_auth ~check ?(realm = "Restricted") () : middleware = fun next req ->
 
 (* ── Security headers middleware ──────────────────────────────────── *)
 
+(** Security headers middleware. Adds CSP, X-Frame-Options, HSTS, and other security headers. *)
 let secure_headers
     ?(csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:")
     ?(frame_options = "DENY")
@@ -1821,6 +1883,7 @@ let secure_headers
 
 (* ── Fetch (HTTP client) ───────────────────────────────────────────── *)
 
+(** HTTP client response from [fetch]. *)
 type fetch_response = {
   status : int;
   headers : (string * string) list;
@@ -1967,29 +2030,36 @@ let _fetch_impl =
          ~body:(_ : string) (_ : string) : fetch_response ->
       failwith "Well.fetch: must be called within Well.run")
 
+(** Make an HTTP request. Supports HTTP and HTTPS with system CA certificates. Must be called within [Well.run]. *)
 let fetch ?(method_ = "GET") ?(headers = []) ?(body = "") url =
   !_fetch_impl ~method_ ~headers ~body url
 
 (* ── File operations (via Env) ────────────────────────────────────── *)
 
+(** Write data to a file, creating or truncating it. *)
 let write_file path data =
   Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(Env.cwd () / path) data
 
+(** Read the entire contents of a file as a string. *)
 let read_file path =
   Eio.Path.load Eio.Path.(Env.cwd () / path)
 
+(** Check if a file exists at the given path. *)
 let file_exists path =
   try ignore (Eio.Path.stat ~follow:true Eio.Path.(Env.cwd () / path)); true
   with Eio.Io _ -> false
 
+(** Create a directory. No error if it already exists. *)
 let mkdir path =
   try Eio.Path.mkdir ~perm:0o755 Eio.Path.(Env.cwd () / path)
   with Eio.Io _ -> ()
 
+(** List directory contents, sorted alphabetically. Returns [[]] on error. *)
 let list_dir path =
   try Eio.Path.read_dir Eio.Path.(Env.cwd () / path) |> List.sort String.compare
   with Eio.Io _ -> []
 
+(** Stream a file as a chunked HTTP response. *)
 let stream_file ?(content_type = "application/octet-stream") ?(headers = []) path : response =
   stream ~content_type ~headers (fun write_chunk ->
     let data = read_file path in
@@ -2013,6 +2083,7 @@ let generate_request_id () =
   let t = int_of_float (Unix.gettimeofday () *. 1000.0) in
   Printf.sprintf "%08x%08x" (t land 0xFFFFFFFF) (n land 0xFFFFFFFF)
 
+(** Get the unique request ID from the [X-Request-ID] header. Returns [""] if not set. *)
 let request_id (req : request) =
   match List.assoc_opt "x-request-id" req.headers with
   | Some id -> id
@@ -2025,11 +2096,22 @@ exception Keep_alive_timeout
 let _with_ka_timeout t f = Env.with_timeout t f
 let _keep_alive_timeout = ref 5.0
 let _request_timeout = ref 30.0
+
+(** Set the keep-alive timeout in seconds between requests on the same connection. Default is 5.0. *)
 let keep_alive_timeout n = _keep_alive_timeout := n
+
+(** Set the request processing timeout in seconds. Default is 30.0. *)
 let request_timeout n = _request_timeout := n
+
 let _ws_rate_limit = ref 100.0
+
+(** Set the WebSocket message rate limit (messages per second). Default is 100. *)
 let ws_rate_limit n = _ws_rate_limit := n
+
+(** Set the maximum WebSocket frame size in bytes. *)
 let ws_max_frame_size n = Websocket._max_frame_size := n
+
+(** Set the maximum LiveView file upload size in bytes. *)
 let max_upload_size n = Liveview._max_upload_size := n
 
 (* ── Connection limits ────────────────────────────────────────────── *)
@@ -2037,8 +2119,14 @@ let max_upload_size n = Liveview._max_upload_size := n
 let _max_connections = ref 10_000
 let _max_connections_per_ip = ref 100
 let _max_requests_per_connection = ref 1_000
+
+(** Set the maximum number of concurrent connections. Default is 10,000. *)
 let max_connections n = _max_connections := n
+
+(** Set the maximum number of concurrent connections per IP address. Default is 100. *)
 let max_connections_per_ip n = _max_connections_per_ip := n
+
+(** Set the maximum number of requests per keep-alive connection. Default is 1,000. *)
 let max_requests_per_connection n = _max_requests_per_connection := n
 
 let _conn_count = Atomic.make 0
@@ -2079,6 +2167,7 @@ let conn_release ip =
 
 let _pending_every : (string * float * (unit -> unit)) list ref = ref []
 
+(** Run a function periodically on a background fiber. Starts when [Well.run] is called. *)
 let every ~name ~sleep fn =
   _pending_every := (name, sleep, fn) :: !_pending_every
 
@@ -2102,6 +2191,7 @@ let _start_every ~sw =
 
 (* ── Shutdown state ────────────────────────────────────────────────── *)
 
+(** Raised internally for graceful server shutdown. *)
 exception Shutdown
 let _shutting_down = Atomic.make false
 
@@ -2442,6 +2532,7 @@ let handle_http80 ~domain flow _addr =
   | End_of_file -> (try close_flow () with _ -> ())
   | _ -> (try close_flow () with _ -> ()))
 
+(** Start the HTTP server. Blocks until shutdown signal (SIGTERM/SIGINT). Supports TLS via [~cert]/[~key] or auto-TLS via [~domain]. *)
 let run ?port ?(workers = 0) ?cert ?key ?domain
     ?(acme_staging = false) ?(disable_cap = false) () =
   let port = match port with
@@ -2809,6 +2900,7 @@ let run ?port ?(workers = 0) ?cert ?key ?domain
 
 (* ── Test server ──────────────────────────────────────────────────── *)
 
+(** Start a test server on a random port. Calls [f port] with the actual port number. *)
 let with_test_server ?(port = 0) ?(disable_cap = false) f =
   Random.self_init ();
   let test_port = if port > 0 then port else 40000 + Random.int 20000 in
@@ -3002,6 +3094,7 @@ let list_routes () =
 
 (* ── LiveView registration ─────────────────────────────────────────── *)
 
+(** Register a LiveView page at the given path. Handles both HTTP GET and WebSocket connections. *)
 let live path (module View : Liveview.VIEW) =
   let endpoint = "/live" ^ path in
   Liveview.register endpoint (module View)
@@ -3036,30 +3129,72 @@ let () = Liveview._resolve_route := (fun req url ->
 
 (* ── Re-export submodules ─────────────────────────────────────────── *)
 
+(** EIO environment access (net, fs, clock, cwd). *)
 module Env = Env
+
+(** Structured logging with context. *)
 module Log = Log
+
+(** ACME (Let's Encrypt) automatic TLS certificate provisioning. *)
 module Acme = Acme
+
+(** Cap admin panel hooks. *)
 module Cap_hook = Cap_hook
+
+(** SQLite database with auto-migration and schema registry. *)
 module Db = Db
+
+(** Form builder with validation and CSRF protection. *)
 module Form = Form
+
+(** RFC 6455 WebSocket implementation. *)
 module Websocket = Websocket
+
+(** LiveView server-side reactive UI engine. *)
 module LiveView = Liveview
+
+(** Background service registry with health checks and supervision. *)
 module Service = Service
+
+(** Supervised stateful actors with message passing. *)
 module Actor = Actor
+
+(** SQLite-backed persistent pub/sub with typed topics. *)
 module MessageBus = Message_bus
+
+(** WebSocket channel authorization gateway. *)
 module Channel = Channel
+
+(** User authentication (login, logout, registration). *)
 module Auth = Auth
+
+(** OAuth client for third-party login (Google, GitHub, etc.). *)
 module OAuth = Oauth
+
+(** OAuth provider -- issue tokens and authorize third-party apps. *)
 module OAuthProvider = Oauth_provider
+
+(** Email sending via SMTP and HTTP APIs. *)
 module Mailer = Mailer
+
+(** S3-compatible object storage client. *)
 module S3 = S3
+
+(** Server telemetry and Prometheus metrics. *)
 module Telemetry = Telemetry
+
+(** Configuration from [well.toml] with environment variable overrides. *)
 module Config = Config
+
+(** TOML file reader and writer. *)
 module Toml = Toml
+
+(** Chrome DevTools Protocol client for end-to-end testing. *)
 module Cdp = Cdp
 
 (* ── URL encoding ──────────────────────────────────────────────── *)
 
+(** URL-encode (percent-encode) a string. *)
 let url_encode str =
   let buf = Buffer.create (String.length str * 3) in
   String.iter (fun c ->
@@ -3074,6 +3209,7 @@ let url_encode str =
 
 (* ── Env convenience re-exports ───────────────────────────────────── *)
 
+(** Get the EIO environment. Must be called within [Well.run]. *)
 let env = Env.get
 let net = Env.net
 let clock = Env.clock
@@ -3081,36 +3217,58 @@ let cwd = Env.cwd
 let fs = Env.fs
 let sleep = Env.sleep
 
+(** Typed pub/sub topic. Phantom type ensures type-safe publish/subscribe. *)
 type 'a topic = 'a Message_bus.topic
+
+(** A typed event received from a topic subscription. *)
 type 'a event = 'a Message_bus.typed_event = { id : int; value : 'a; created_at : float }
 
+(** Create a typed pub/sub topic with channel name and serialization functions. *)
 let topic = Message_bus.make_topic
+
+(** Log a message. Alias for [Well.Log.log]. *)
 let log = Log.log
 
+(** Get the channel name string of a topic. *)
 let topic_name (t : _ topic) = t.Message_bus.t_channel
+
+(** Publish a typed value to a topic. Use [~ephemeral:true] to skip SQLite persistence. *)
 let publish ?ephemeral t v = ignore (Message_bus.publish_typed ?ephemeral t v)
+
+(** Subscribe to a typed topic. Returns a subscription ID. *)
 let subscribe ?live_only t f = Message_bus.subscribe_typed ?live_only t f
+
+(** Check if the MessageBus is currently replaying events. *)
 let is_replaying = Message_bus.is_replaying
+
+(** Replay persisted events from a topic, optionally since a given event ID. *)
 let replay ?since_id t f = Message_bus.replay_typed ?since_id t f
+
+(** Prune old events from the MessageBus SQLite log. *)
 let prune = Message_bus.prune
 
 (* ── Keyed pub/sub (channel:key) ─────────────────────────────────── *)
 
+(** A keyed event includes the key that was used to publish, along with the event data. *)
 type 'a keyed_event = 'a Message_bus.keyed_event = {
   key : string;
   event : 'a event;
 }
 
+(** Publish a typed value to a keyed topic ([channel:key]). *)
 let publish_keyed ?ephemeral t ~key v =
   ignore (Message_bus.publish_keyed_typed ?ephemeral t ~key v)
 
+(** Subscribe to all keys of a keyed topic. Callback receives [keyed_event] with the key. *)
 let subscribe_keyed ?live_only t f =
   Message_bus.subscribe_keyed_typed ?live_only t f
 
 (* ── Request/reply over bus ──────────────────────────────────────── *)
 
+(** Raised when a [request] call exceeds its timeout. *)
 exception Request_timeout
 
+(** Request/reply pattern over the message bus. Publishes a command and blocks until a response arrives or timeout. *)
 let request ~cmd ~reply ~key ?(timeout = 5.0) value =
   let result = Atomic.make None in
   let reply_channel = reply.Message_bus.t_channel ^ ":" ^ key in
