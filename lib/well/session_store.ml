@@ -1,9 +1,7 @@
 (* Session store — uses shared well.sqlite pool *)
 
-let _tables_created = Atomic.make false
-
-let ensure_table db =
-  if not (Atomic.get _tables_created) then begin
+let ensure_table, _reset_tables =
+  Db.once_resettable (fun db ->
     let _ =
       Sqlite3.exec db
         {|CREATE TABLE IF NOT EXISTS _well_sessions (
@@ -14,8 +12,7 @@ let ensure_table db =
             PRIMARY KEY (session_id, key)
           )|}
     in
-    Atomic.set _tables_created true
-  end
+    ())
 
 let get ~session_id ~key =
   Db.with_well_db @@ fun db ->
@@ -172,4 +169,4 @@ let cleanup ?(max_age_days = 30) () =
   ()
 
 let close () =
-  Atomic.set _tables_created false
+  _reset_tables ()

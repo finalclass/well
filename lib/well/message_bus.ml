@@ -17,10 +17,8 @@ type event = {
 
 (* ── SQLite — uses shared well.sqlite ─────────────────────────────── *)
 
-let _tables_created = Atomic.make false
-
-let ensure_tables db =
-  if not (Atomic.get _tables_created) then begin
+let ensure_tables, _reset_tables =
+  Db.once_resettable (fun db ->
     let _ =
       Sqlite3.exec db
         {|CREATE TABLE IF NOT EXISTS _well_events (
@@ -35,8 +33,7 @@ let ensure_tables db =
         {|CREATE INDEX IF NOT EXISTS idx_well_events_channel
           ON _well_events(channel)|}
     in
-    Atomic.set _tables_created true
-  end
+    ())
 
 (** Initialize the events table in the framework database. Idempotent. *)
 let init () = Db.with_well_db ensure_tables
@@ -147,7 +144,7 @@ let publish ?(ephemeral = false) channel payload =
 
 (** Reset internal state. Called during shutdown. *)
 let close () =
-  Atomic.set _tables_created false
+  _reset_tables ()
 
 (** Replay persisted events from SQLite matching [pattern], starting after
     [since_id]. Sets [replay_mode] during execution. *)

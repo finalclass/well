@@ -162,13 +162,13 @@ let () =
 
   (* Multiple params *)
   Well.get "/t/prod/users/:user_id/posts/:post_id" (fun req ->
-    let uid = Well.param req "user_id" in
-    let pid = Well.param req "post_id" in
+    let uid = Option.value ~default:"" (Well.param req "user_id") in
+    let pid = Option.value ~default:"" (Well.param req "post_id") in
     Well.text (uid ^ ":" ^ pid));
 
   (* URL-encoded param values *)
   Well.get "/t/prod/echo/:val_" (fun req ->
-    Well.text (Well.param req "val_"));
+    Well.text (Option.value ~default:"" (Well.param req "val_")));
 
   (* Body echo *)
   Well.post "/t/prod/echo-body" (fun req ->
@@ -192,23 +192,23 @@ let () =
 
   (* Session tests *)
   Well.get "/t/prod/session-set" (fun req ->
-    Well.session_set req "test_key" "test_value";
+    Well.Session.set ~session_id:req.session_id ~key:"test_key" ~value:"test_value";
     Well.text "set");
 
   Well.get "/t/prod/session-get" (fun req ->
-    let v = match Well.session_get req "test_key" with
+    let v = match Well.Session.get ~session_id:req.session_id ~key:"test_key" with
       | Some v -> v | None -> "empty" in
     Well.text v);
 
   Well.get "/t/prod/session-delete" (fun req ->
-    Well.session_delete req "test_key";
+    Well.Session.delete ~session_id:req.session_id ~key:"test_key";
     Well.text "deleted");
 
   Well.get "/t/prod/session-id" (fun req ->
     Well.text req.session_id);
 
   Well.get "/t/prod/session-regen" (fun req ->
-    Well.session_set req "keep_this" "yes";
+    Well.Session.set ~session_id:req.session_id ~key:"keep_this" ~value:"yes";
     let (_new_req, set_cookie) = Well.session_regenerate req in
     Well.text "regenerated" |> set_cookie);
 
@@ -271,7 +271,7 @@ let () =
   (* Scope tests *)
   Well.scope "/t/prod/api" (fun () ->
     Well.get "/users" (fun _req -> Well.text "users list");
-    Well.get "/users/:id" (fun req -> Well.text ("user " ^ Well.param req "id"));
+    Well.get "/users/:id" (fun req -> Well.text ("user " ^ Option.value ~default:"" (Well.param req "id")));
     Well.scope "/admin" (fun () ->
       Well.get "/stats" (fun _req -> Well.text "admin stats"));
   );

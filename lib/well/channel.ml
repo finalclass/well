@@ -46,7 +46,7 @@ let find_channel_def topic =
 type handler_msg =
   | WsMsg of Yojson.Safe.t
   | WsClosed
-  | BusEvent of Message_bus.event
+  | InfoMsg of Message_bus.event
 
 (* ── WebSocket handler ─────────────────────────────────────────────── *)
 
@@ -99,7 +99,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
               List.map
                 (fun pattern ->
                   Message_bus.subscribe pattern (fun event ->
-                    Eio.Stream.add unified (BusEvent event)))
+                    Eio.Stream.add unified (InfoMsg event)))
                 result.subscribe
             in
             Hashtbl.replace client_subs topic sub_ids;
@@ -170,7 +170,7 @@ let handler (req : Types.request) (ws : Websocket.t) =
               | None -> send_error ch "no matching channel");
              loop ()
          | _ -> loop ())
-    | BusEvent event ->
+    | InfoMsg event ->
         let evt_name =
           try
             match event.payload with

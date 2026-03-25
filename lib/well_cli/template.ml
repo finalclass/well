@@ -212,7 +212,7 @@ let home_page name =
   Printf.sprintf
     {|Well.get "/" @@ fun req ->
 let open Html in
-let user_id = Well.session_get req "user_id" in
+let user_id = Well.Session.get ~session_id:req.session_id ~key:"user_id" in
 let auth_section = match user_id with
   | Some uid ->
       let display = match Well.Auth.get_user (int_of_string uid) with
@@ -245,7 +245,7 @@ in
 (* Request/reply demo — keyed pub/sub over MessageBus *)
 ;;
 Well.post "/api/echo" @@ fun req ->
-let text = Well.form req "text" in
+let text = Option.value ~default:"" (Well.form req "text") in
 let key = string_of_float (Unix.gettimeofday ()) in
 let result = Well.request ~cmd:Events.echo_cmd ~reply:Events.echo_result
                ~key { text } in
@@ -453,8 +453,8 @@ let result = Note_access.list ~ctx ~limit:0 in
 
 Well.post ~middleware:auth "/notes" @@ fun req ->
 let ctx = Well.rpc_ctx req in
-let title = Well.form req "title" in
-let body = Well.form req "body" in
+let title = Option.value ~default:"" (Well.form req "title") in
+let body = Option.value ~default:"" (Well.form req "body") in
 if title <> "" then
   ignore (Note_access.create ~ctx ~title ~body);
 Well.redirect "/notes"
@@ -495,9 +495,9 @@ let oauth_section =
 ;;
 
 Well.post "/login" @@ fun req ->
-let email = Well.form req "email" in
-let password = Well.form req "password" in
-let raw_return = Well.form req "return_to" in
+let email = Option.value ~default:"" (Well.form req "email") in
+let password = Option.value ~default:"" (Well.form req "password") in
+let raw_return = Option.value ~default:"" (Well.form req "return_to") in
 (* Validate return_to is relative path — prevent open redirect *)
 let return_to =
   if raw_return = "" then "/"
@@ -537,8 +537,8 @@ let error = Well.get_flash req "error" in
 ;;
 
 Well.post "/signup" @@ fun req ->
-let email = Well.form req "email" in
-let password = Well.form req "password" in
+let email = Option.value ~default:"" (Well.form req "email") in
+let password = Option.value ~default:"" (Well.form req "password") in
 match Well.Auth.register ~email ~password () with
 | Ok _user ->
   (match Well.Auth.login_and_set_session req ~email ~password with
@@ -2577,14 +2577,14 @@ let upload_page _name =
   {|let upload_dir = "data/uploads"
 
 let ensure_dir () =
-  if not (Well.file_exists upload_dir) then
-    Well.mkdir upload_dir
+  if not (Sys.file_exists upload_dir) then
+    Sys.mkdir upload_dir 0o755
 ;;
 
 Well.get "/upload" @@ fun req ->
 let open Html in
 let token = Well.csrf_token req in
-let files = Well.list_dir upload_dir in
+let files = try Array.to_list (Sys.readdir upload_dir) with Sys_error _ -> [] in
 <Layout title="Upload">
 <div>
   <h1>(txt "Upload — File Upload Demo")</h1>
@@ -2622,17 +2622,19 @@ match Well.file req "file" with
       String.map (fun c -> if c = '/' || c = '\\' || c = '\x00' then '_' else c) f.filename
     in
     let path = Filename.concat upload_dir safe_name in
-    Well.write_file path f.data;
+    let oc = open_out_bin path in
+    output_string oc f.data;
+    close_out oc;
     Well.redirect "/upload"
 ;;
 
 Well.get "/upload/download/:name" @@ fun req ->
-let name = Well.param req "name" in
+let name = Option.value ~default:"" (Well.param req "name") in
 let safe_name =
   String.map (fun c -> if c = '/' || c = '\\' || c = '\x00' then '_' else c) name
 in
 let path = Filename.concat upload_dir safe_name in
-if not (Well.file_exists path) then
+if not (Sys.file_exists path) then
   Well.text "Not found" |> Well.status 404
 else
   Well.stream_file
@@ -3260,9 +3262,9 @@ Response types coerce automatically:
 ### Request Helpers
 
 ```ocaml
-Well.param : request -> string -> string             (* path param, "" if missing *)
+Well.param : request -> string -> string option      (* path param *)
 Well.query : request -> string -> string option      (* query param *)
-Well.form  : request -> string -> string             (* form field, "" if missing *)
+Well.form  : request -> string -> string option      (* form field *)
 Well.form_params : request -> (string * string) list (* all form fields *)
 Well.file  : request -> string -> uploaded_file option (* single file upload *)
 Well.files : request -> string -> uploaded_file list   (* multiple files *)
@@ -3292,18 +3294,18 @@ let open Html in
 
 (* JSON API with path params *)
 Well.get "/users/:id" @@ fun req ->
-let id = Well.param req "id" in
+let id = Option.value ~default:"" (Well.param req "id") in
 Well.json (`Assoc [("id", `String id)])
 
 (* Form handling *)
 Well.post "/items" @@ fun req ->
-let name = Well.form req "name" in
+let name = Option.value ~default:"" (Well.form req "name") in
 (* ... process ... *)
 Well.redirect "/items"
 
 (* Wildcard catch-all *)
 Well.get "/files/*path" @@ fun req ->
-let path = Well.param req "path" in  (* "docs/readme.txt" *)
+let path = Option.value ~default:"" (Well.param req "path") in  (* "docs/readme.txt" *)
 serve_file path
 
 (* Per-route middleware *)
@@ -3607,7 +3609,8 @@ well.pushLive(["UpdateFilter", "active"], "/live/dashboard");
 
 (* Server side: consume uploaded file *)
 match Well.LiveView.consume_upload upload_id with
-| Some (filename, content_type, data) -> Well.write_file ("data/" ^ filename) data
+| Some (filename, content_type, data) ->
+    let oc = open_out_bin ("data/" ^ filename) in output_string oc data; close_out oc
 | None -> ()
 ```
 
@@ -4019,10 +4022,10 @@ Well.scope ~middleware:[Well.require_auth ()] "/admin" (fun () ->
 SQLite-backed, thread-safe session store.
 
 ```ocaml
-Well.session_get : request -> string -> string option
-Well.session_set : request -> string -> string -> unit
-Well.session_delete : request -> string -> unit
-Well.session_clear : request -> unit
+Well.Session.get : session_id:string -> key:string -> string option
+Well.Session.set : session_id:string -> key:string -> value:string -> unit
+Well.Session.delete : session_id:string -> key:string -> unit
+Well.Session.clear : session_id:string -> unit
 Well.session_regenerate : request -> (request * (response -> response))
 (* Returns new request + response transformer that sets new cookie *)
 ```
@@ -4113,8 +4116,8 @@ Example:
 ```ocaml
 (* Login page *)
 Well.post "/login" @@ fun req ->
-let email = Well.form req "email" in
-let password = Well.form req "password" in
+let email = Option.value ~default:"" (Well.form req "email") in
+let password = Option.value ~default:"" (Well.form req "password") in
 match Well.Auth.login_and_set_session req ~email ~password with
 | Ok _user -> Well.redirect "/"
 | Error msg -> render_login_page ~error:msg
@@ -4404,12 +4407,14 @@ Websocket.is_open : t -> bool
 
 ## File I/O
 
+Use standard OCaml / EIO for file operations:
+
 ```ocaml
-Well.write_file : string -> string -> unit
-Well.read_file : string -> string
-Well.file_exists : string -> bool
-Well.mkdir : string -> unit
-Well.list_dir : string -> string list
+Sys.file_exists : string -> bool
+Sys.readdir : string -> string array
+Sys.mkdir : string -> int -> unit
+(* For writing: open_out_bin / output_string / close_out *)
+(* For reading: open_in_bin / really_input_string / close_in *)
 Well.ext_to_mime : string -> string  (* "jpg" → "image/jpeg" *)
 ```
 
@@ -4759,7 +4764,7 @@ Automatically uploads via base64 chunks over WebSocket.
 
 ```ocaml
 (* URL-encoded form data *)
-let title = Well.form req "title" in
+let title = Option.value ~default:"" (Well.form req "title") in
 let all_params = Well.form_params req in
 
 (* CSRF token in forms — REQUIRED for POST *)
@@ -4778,7 +4783,8 @@ Well.post "/upload" @@ fun req ->
 match Well.file req "file" with
 | None -> Well.redirect "/upload"
 | Some f ->
-    Well.write_file ("data/uploads/" ^ f.filename) f.data;
+    let oc = open_out_bin ("data/uploads/" ^ f.filename) in
+    output_string oc f.data; close_out oc;
     Well.redirect "/upload"
 
 (* Multiple files *)

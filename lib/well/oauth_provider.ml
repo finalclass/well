@@ -157,11 +157,7 @@ let parse_form_body body =
 
 (* ── Database — authorization codes in well.sqlite ───────────── *)
 
-let _tables_created = Atomic.make false
-
-let ensure_tables db =
-  if not (Atomic.get _tables_created)
-  then begin
+let ensure_tables = Db.once (fun db ->
     let _ =
       Sqlite3.exec
         db
@@ -174,8 +170,7 @@ let ensure_tables db =
           created_at REAL NOT NULL
         )|}
     in
-    Atomic.set _tables_created true
-  end
+    ())
 
 (* ── Code store ─────────────────────────────────────────────────── *)
 

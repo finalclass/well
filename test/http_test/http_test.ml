@@ -51,8 +51,8 @@ let () =
       params; query; session_id = "test"; _context = [] }
   in
 
-  check "param returns value" (Well.param (mk_req ~params:[("id", "42")] ()) "id" = "42");
-  check "param missing" (Well.param (mk_req ()) "id" = "");
+  check "param returns value" (Well.param (mk_req ~params:[("id", "42")] ()) "id" = Some "42");
+  check "param missing" (Well.param (mk_req ()) "id" = None);
   check "query returns Some" (Well.query (mk_req ~query:[("page", "2")] ()) "page" = Some "2");
   check "query missing" (Well.query (mk_req ()) "page" = None);
 
@@ -63,7 +63,7 @@ let () =
   Well.delete "/t/delete" (fun _req -> Well.text "deleted");
   Well.get "/t/json" (fun _req -> Well.json (`Assoc [("ok", `Bool true)]));
   Well.get "/t/201" (fun _req -> Well.text "created" |> Well.status 201);
-  Well.get "/t/users/:id" (fun req -> Well.text (Well.param req "id"));
+  Well.get "/t/users/:id" (fun req -> Well.text (Option.value ~default:"" (Well.param req "id")));
   Well.get "/t/search" (fun req ->
     let q = match Well.query req "q" with Some v -> v | None -> "none" in
     Well.text q);

@@ -65,11 +65,8 @@ let configure
 
 (* ── Database — uses shared well.sqlite pool ─────────────────── *)
 
-let _tables_created = Atomic.make false
-
 (** Create auth tables in [well.sqlite] if they do not exist yet. Idempotent. *)
-let ensure_tables db =
-  if not (Atomic.get _tables_created) then begin
+let ensure_tables, _reset_tables = Db.once_resettable (fun db ->
     let _ = Sqlite3.exec db
       {|CREATE TABLE IF NOT EXISTS _well_users (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,8 +116,7 @@ let ensure_tables db =
           user_id INTEGER PRIMARY KEY,
           settings TEXT NOT NULL DEFAULT '{}'
         )|} in
-    Atomic.set _tables_created true
-  end
+    ())
 
 (* ── Hex helpers ───────────────────────────────────────────────── *)
 
@@ -920,4 +916,4 @@ let all_grants () =
 
 (** Reset internal state so tables are re-created on next use. *)
 let close () =
-  Atomic.set _tables_created false
+  _reset_tables ()

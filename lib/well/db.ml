@@ -198,6 +198,32 @@ let auto_migrate db =
 
 (* ── Data directory ───────────────────────────────────────────────── *)
 
+(** Create a one-shot initializer guarded by an [Atomic.t] flag.
+    Returns a function [Sqlite3.db -> unit] that executes [f] only once. *)
+let once f =
+  let done_ = Atomic.make false in
+  fun db ->
+    if not (Atomic.get done_) then begin
+      f db;
+      Atomic.set done_ true
+    end
+
+(** Reset a one-shot guard (for test teardown). Takes the guard function and
+    sets its internal flag to [false]. Not possible with [once] — use
+    {!once_resettable} instead if reset is needed. *)
+
+(** Like {!once} but also returns a reset function. *)
+let once_resettable f =
+  let done_ = Atomic.make false in
+  let run db =
+    if not (Atomic.get done_) then begin
+      f db;
+      Atomic.set done_ true
+    end
+  in
+  let reset () = Atomic.set done_ false in
+  (run, reset)
+
 (** Directory for SQLite database files. Defaults to ["data"], overridable via config. *)
 let data_dir = ref (Config.get_string ~default:"data" "well.db.data_dir")
 

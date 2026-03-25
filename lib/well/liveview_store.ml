@@ -1,9 +1,7 @@
 (* LiveView persistent storage — uses shared well.sqlite pool *)
 
-let _tables_created = Atomic.make false
-
-let ensure_table db =
-  if not (Atomic.get _tables_created) then begin
+let ensure_table, _reset_tables =
+  Db.once_resettable (fun db ->
     let _ =
       Sqlite3.exec db
         {|CREATE TABLE IF NOT EXISTS _well_liveview_state (
@@ -15,8 +13,7 @@ let ensure_table db =
             PRIMARY KEY (user_id, topic)
           )|}
     in
-    Atomic.set _tables_created true
-  end
+    ())
 
 let save ~user_id ~topic ~endpoint ~model_json =
   Db.with_well_db @@ fun db ->
@@ -87,4 +84,4 @@ let cleanup ?(max_age_days = 30) () =
   ()
 
 let close () =
-  Atomic.set _tables_created false
+  _reset_tables ()
