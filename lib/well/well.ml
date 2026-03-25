@@ -128,7 +128,7 @@ let () = Channel._register_ws_route := Router.ws
 
 (* ── Session config ───────────────────────────────────────────────── *)
 
-let _session_lifetime = ref 86400
+let _session_lifetime = ref 86400.0
 
 (* ── Session cookie ───────────────────────────────────────────────── *)
 
@@ -226,9 +226,9 @@ module Session = struct
   let delete_by_value = Session_store.delete_by_value
 end
 
-(** Set session lifetime in seconds. Default is 86400 (24 hours). *)
+(** Set session lifetime in seconds. Default is 86400.0 (24 hours). *)
 let session_lifetime seconds =
-  if seconds < 0 then invalid_arg "Well.session_lifetime: must be non-negative";
+  if seconds < 0.0 then invalid_arg "Well.session_lifetime: must be non-negative";
   _session_lifetime := seconds
 
 (* Wire Auth session forward refs *)
@@ -1141,7 +1141,7 @@ open struct
         Env.sleep 3600.0;
         (try
            let max_age_days =
-             max 1 ((!_session_lifetime + 86399) / 86400)
+             max 1 (int_of_float (ceil (!_session_lifetime /. 86400.0)))
            in
            Session_store.cleanup ~max_age_days () with _ -> ());
         (try Liveview.cleanup_sessions () with _ -> ());
@@ -1470,7 +1470,7 @@ type 'a topic = 'a Message_bus.topic
 type 'a event = 'a Message_bus.typed_event = { id : int; value : 'a; created_at : float }
 
 (** Create a typed pub/sub topic with channel name and serialization functions. *)
-let topic = Message_bus.make_topic
+let topic = Message_bus.topic
 
 (** Log a message. Alias for [Well.Log.log]. *)
 let log = Log.log

@@ -27,14 +27,9 @@ let attrs_to_string attrs =
   in
   String.concat "" parts
 
-let bool_attrs_to_string attrs =
-  let parts =
-    List.filter_map
-      (fun (k, v) ->
-        if v then Some (Printf.sprintf " %s" k) else None)
-      attrs
-  in
-  String.concat "" parts
+let bool_attrs_to_string bools =
+  if bools = [] then ""
+  else " " ^ String.concat " " bools
 
 (** Concatenate a list of nodes into a single HTML string. *)
 let cat (children : node list) =
@@ -43,91 +38,10 @@ let cat (children : node list) =
 (* ── Shared element constructor ───────────────────────────────────── *)
 
 let _el ~void name
-    (* Global attributes *)
-    ?(id = "") ?(class_ = "") ?(lang = "") ?(title = "") ?(style = "")
-    ?(role = "") ?(tabindex = "") ?(dir = "")
-    (* LiveView attributes *)
-    ?(data_lv_click = "") ?(data_lv_submit = "") ?(data_lv_change = "")
-    ?(data_lv_debounce = "") ?(data_lv_throttle = "")
-    ?(data_lv_hook = "") ?(data_lv_navigate = "") ?(data_lv_patch = "")
-    ?(data_lv_confirm = "")
-    (* Link / navigation *)
-    ?(href = "") ?(target = "") ?(rel = "") ?(download = "")
-    (* Media *)
-    ?(src = "") ?(alt = "") ?(width = "") ?(height = "")
-    ?(loading = "") ?(srcset = "") ?(sizes = "")
-    ?(poster = "") ?(preload = "") ?(crossorigin = "") ?(integrity = "")
-    (* Form *)
-    ?(action = "") ?(method_ = "") ?(type_ = "") ?(placeholder = "")
-    ?(value = "") ?(name_ = "") ?(enctype = "") ?(accept = "")
-    ?(for_ = "") ?(autocomplete = "") ?(min = "") ?(max = "")
-    ?(step = "") ?(pattern = "") ?(maxlength = "") ?(minlength = "")
-    ?(rows = "") ?(cols = "") ?(wrap = "") ?(size = "")
-    ?(formaction = "") ?(formmethod = "")
-    (* Meta *)
-    ?(charset = "") ?(content = "") ?(http_equiv = "") ?(media = "")
-    (* Table *)
-    ?(colspan = "") ?(rowspan = "") ?(scope = "")
-    (* Time *)
-    ?(datetime = "")
-    (* List *)
-    ?(start = "")
-    (* Boolean attributes *)
-    ?(hidden = false) ?(disabled = false) ?(readonly = false)
-    ?(required = false) ?(checked = false) ?(selected = false)
-    ?(multiple = false) ?(autofocus = false) ?(novalidate = false)
-    ?(open_ = false) ?(defer = false) ?(async_ = false)
-    ?(autoplay = false) ?(controls = false) ?(loop = false) ?(muted = false)
-    ?(draggable = false) ?(reversed = false)
-    (* Escape hatch for aria-*, data-*, and any other attributes *)
     ?(attrs : (string * string) list = [])
     ?(bool_attrs : string list = [])
-    (* Children *)
     ?(children : node list = []) () : node =
-  let str_attrs =
-    [ ("id", id); ("class", class_); ("lang", lang); ("title", title);
-      ("style", style); ("role", role); ("tabindex", tabindex); ("dir", dir);
-      ("data-lv-click", data_lv_click); ("data-lv-submit", data_lv_submit);
-      ("data-lv-change", data_lv_change);
-      ("data-lv-debounce", data_lv_debounce);
-      ("data-lv-throttle", data_lv_throttle);
-      ("data-lv-hook", data_lv_hook);
-      ("data-lv-navigate", data_lv_navigate);
-      ("data-lv-patch", data_lv_patch);
-      ("data-lv-confirm", data_lv_confirm);
-      ("href", href); ("target", target); ("rel", rel);
-      ("download", download);
-      ("src", src); ("alt", alt); ("width", width); ("height", height);
-      ("loading", loading); ("srcset", srcset); ("sizes", sizes);
-      ("poster", poster); ("preload", preload);
-      ("crossorigin", crossorigin); ("integrity", integrity);
-      ("action", action); ("method", method_); ("type", type_);
-      ("placeholder", placeholder); ("value", value); ("name", name_);
-      ("enctype", enctype); ("accept", accept); ("for", for_);
-      ("autocomplete", autocomplete); ("min", min); ("max", max);
-      ("step", step); ("pattern", pattern); ("maxlength", maxlength);
-      ("minlength", minlength); ("rows", rows); ("cols", cols);
-      ("wrap", wrap); ("size", size);
-      ("formaction", formaction); ("formmethod", formmethod);
-      ("charset", charset); ("content", content);
-      ("http-equiv", http_equiv); ("media", media);
-      ("colspan", colspan); ("rowspan", rowspan); ("scope", scope);
-      ("datetime", datetime); ("start", start);
-    ] @ attrs
-  in
-  let bool_pairs =
-    [ ("hidden", hidden); ("disabled", disabled); ("readonly", readonly);
-      ("required", required); ("checked", checked); ("selected", selected);
-      ("multiple", multiple); ("autofocus", autofocus);
-      ("novalidate", novalidate);
-      ("open", open_); ("defer", defer); ("async", async_);
-      ("autoplay", autoplay); ("controls", controls); ("loop", loop);
-      ("muted", muted); ("draggable", draggable); ("reversed", reversed);
-    ] @ List.map (fun k -> (k, true)) bool_attrs
-  in
-  let attr_str =
-    attrs_to_string str_attrs ^ bool_attrs_to_string bool_pairs
-  in
+  let attr_str = attrs_to_string attrs ^ bool_attrs_to_string bool_attrs in
   if void then begin
     ignore children;
     `Html (Printf.sprintf "<%s%s />" name attr_str)
@@ -142,30 +56,8 @@ let void_tag = _el ~void:true
 
 (* ── Document ────────────────────────────────────────────────────── *)
 
-let html ?id ?class_ ?lang ?title ?style ?role ?tabindex ?dir
-    ?data_lv_click ?data_lv_submit ?data_lv_change ?data_lv_debounce
-    ?data_lv_throttle ?data_lv_hook ?data_lv_navigate ?data_lv_patch
-    ?data_lv_confirm ?href ?target ?rel ?download ?src ?alt ?width ?height
-    ?loading ?srcset ?sizes ?poster ?preload ?crossorigin ?integrity
-    ?action ?method_ ?type_ ?placeholder ?value ?name_ ?enctype ?accept
-    ?for_ ?autocomplete ?min ?max ?step ?pattern ?maxlength ?minlength
-    ?rows ?cols ?wrap ?size ?formaction ?formmethod ?charset ?content
-    ?http_equiv ?media ?colspan ?rowspan ?scope ?datetime ?start
-    ?hidden ?disabled ?readonly ?required ?checked ?selected ?multiple
-    ?autofocus ?novalidate ?open_ ?defer ?async_ ?autoplay ?controls
-    ?loop ?muted ?draggable ?reversed ?attrs ?bool_attrs ?children () =
-  let (`Html inner) = tag "html" ?id ?class_ ?lang ?title ?style ?role
-    ?tabindex ?dir ?data_lv_click ?data_lv_submit ?data_lv_change
-    ?data_lv_debounce ?data_lv_throttle ?data_lv_hook ?data_lv_navigate
-    ?data_lv_patch ?data_lv_confirm ?href ?target ?rel ?download ?src ?alt
-    ?width ?height ?loading ?srcset ?sizes ?poster ?preload ?crossorigin
-    ?integrity ?action ?method_ ?type_ ?placeholder ?value ?name_ ?enctype
-    ?accept ?for_ ?autocomplete ?min ?max ?step ?pattern ?maxlength
-    ?minlength ?rows ?cols ?wrap ?size ?formaction ?formmethod ?charset
-    ?content ?http_equiv ?media ?colspan ?rowspan ?scope ?datetime ?start
-    ?hidden ?disabled ?readonly ?required ?checked ?selected ?multiple
-    ?autofocus ?novalidate ?open_ ?defer ?async_ ?autoplay ?controls
-    ?loop ?muted ?draggable ?reversed ?attrs ?bool_attrs ?children () in
+let html ?attrs ?bool_attrs ?children () =
+  let (`Html inner) = tag "html" ?attrs ?bool_attrs ?children () in
   `Html ("<!DOCTYPE html>\n" ^ inner)
 let head = tag "head"
 let title = tag "title"

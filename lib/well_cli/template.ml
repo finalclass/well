@@ -218,27 +218,27 @@ let auth_section = match user_id with
       let display = match Well.Auth.get_user (int_of_string uid) with
         | Some u -> u.email
         | None -> uid in
-      <div class_="auth-status">
+      <div attrs=[("class", "auth-status")]>
         (txt ("Logged in as " ^ display ^ " "))
-        <form action="/logout" method_="POST" class_="inline-form">
+        <form attrs=[("action", "/logout"); ("method", "POST"); ("class", "inline-form")]>
           (csrf_input (Well.csrf_token req))
-          <button type_="submit">(txt "Logout")</button>
+          <button attrs=[("type", "submit")]>(txt "Logout")</button>
         </form>
       </div>
   | None ->
-      <p class_="auth-status"><a href="/login">(txt "Login")</a> (txt " | ") <a href="/signup">(txt "Sign up")</a></p>
+      <p attrs=[("class", "auth-status")]><a attrs=[("href", "/login")]>(txt "Login")</a> (txt " | ") <a attrs=[("href", "/signup")]>(txt "Sign up")</a></p>
 in
 <Layout title="%s">
 <div>
     <h1>(txt "Welcome to %s")</h1>
     <p>(txt "Edit lib/pages/home_page.mlx to get started.")</p>
     auth_section
-    <p><a href="/counter">(txt "Counter — LiveView demo")</a></p>
-    <p><a href="/dashboard">(txt "Dashboard — LiveView communication demo")</a></p>
-    <p><a href="/notes">(txt "Notes — SQLite demo (login required)")</a></p>
-    <p><a href="/tasks">(txt "Tasks — Contract/RPC demo")</a></p>
-    <p><a href="/upload">(txt "Upload — File upload demo")</a></p>
-    <p class_="request-id">(txt ("Request: " ^ Request_id.get req))</p>
+    <p><a attrs=[("href", "/counter")]>(txt "Counter — LiveView demo")</a></p>
+    <p><a attrs=[("href", "/dashboard")]>(txt "Dashboard — LiveView communication demo")</a></p>
+    <p><a attrs=[("href", "/notes")]>(txt "Notes — SQLite demo (login required)")</a></p>
+    <p><a attrs=[("href", "/tasks")]>(txt "Tasks — Contract/RPC demo")</a></p>
+    <p><a attrs=[("href", "/upload")]>(txt "Upload — File upload demo")</a></p>
+    <p attrs=[("class", "request-id")]>(txt ("Request: " ^ Request_id.get req))</p>
 </div>
 </Layout>
 
@@ -257,12 +257,12 @@ let layout name =
   Printf.sprintf
     {|let createElement ?title:(page_title = "") ?(children = []) () =
   let open Html in
-  <html lang="en">
+  <html attrs=[("lang", "en")]>
     <head>
-      <meta charset="utf-8" />
-      <meta name_="viewport" content="width=device-width, initial-scale=1.0" />
+      <meta attrs=[("charset", "utf-8")] />
+      <meta attrs=[("name", "viewport"); ("content", "width=device-width, initial-scale=1.0")] />
       <title>(txt page_title)</title>
-      <link rel="stylesheet" href="/static/app.css" />
+      <link attrs=[("rel", "stylesheet"); ("href", "/static/app.css")] />
       (Well.LiveView.live_preconnect_script ())
     </head>
     <body>
@@ -270,7 +270,7 @@ let layout name =
       <footer>
         <p>(txt "Powered by %s & well")</p>
       </footer>
-      <script type_="module" src="/static/well.js" />
+      <script attrs=[("type", "module"); ("src", "/static/well.js")] />
     </body>
   </html>
 |}
@@ -432,13 +432,13 @@ let result = Note_access.list ~ctx ~limit:0 in
 <div>
   <h1>(txt "Notes")</h1>
   <p>(txt "Type-safe SQLite queries, validated at compile time.")</p>
-  <form action="/notes" method_="POST" class_="notes-form">
+  <form attrs=[("action", "/notes"); ("method", "POST"); ("class", "notes-form")]>
     (csrf_input (Well.csrf_token req))
-    <input type_="text" name_="title" placeholder="Title" />
-    <input type_="text" name_="body" placeholder="Write something..." />
-    <button type_="submit">(txt "Add note")</button>
+    <input attrs=[("type", "text"); ("name", "title"); ("placeholder", "Title")] />
+    <input attrs=[("type", "text"); ("name", "body"); ("placeholder", "Write something...")] />
+    <button attrs=[("type", "submit")]>(txt "Add note")</button>
   </form>
-  <ul class_="notes-list">
+  <ul attrs=[("class", "notes-list")]>
     (result.notes |> List.map (fun (n : Note_access.Note.t) ->
       <li>
         <strong>(txt n.title)</strong>
@@ -446,7 +446,7 @@ let result = Note_access.list ~ctx ~limit:0 in
       </li>
     ) |> cat |> raw)
   </ul>
-  <p><a href="/">(txt "← Back")</a></p>
+  <p><a attrs=[("href", "/")]>(txt "← Back")</a></p>
 </div>
 </Layout>
 ;;
@@ -468,28 +468,28 @@ let error = Well.get_flash req "error" in
 let providers = Well.OAuth.configured_providers () in
 let oauth_section =
   if providers = [] then txt ""
-  else div ~class_:"oauth-section" ~children:(
-    [div ~class_:"oauth-divider" ~children:[span ~children:[txt "lub"] ()] ()] @
+  else div ~attrs:[("class", "oauth-section")] ~children:(
+    [div ~attrs:[("class", "oauth-divider")] ~children:[span ~children:[txt "lub"] ()] ()] @
     List.map (fun name ->
-      a ~href:("/auth/" ^ name ^ "?return_to=" ^ Well.url_encode return_to)
-        ~class_:("oauth-btn oauth-btn-" ^ name)
+      a ~attrs:[("href", "/auth/" ^ name ^ "?return_to=" ^ Well.url_encode return_to);
+                ("class", "oauth-btn oauth-btn-" ^ name)]
         ~children:[txt (String.capitalize_ascii name)] ()
     ) providers
   ) () in
 <Layout title="Login">
 <div>
   <h1>(txt "Login")</h1>
-  (match error with Some msg -> <p class_="form-error">(txt msg)</p> | None -> (txt ""))
-  <form action="/login" method_="POST" class_="auth-form">
+  (match error with Some msg -> <p attrs=[("class", "form-error")]>(txt msg)</p> | None -> (txt ""))
+  <form attrs=[("action", "/login"); ("method", "POST"); ("class", "auth-form")]>
     (csrf_input (Well.csrf_token req))
-    <input type_="hidden" name_="return_to" value=return_to />
-    <input type_="text" name_="email" placeholder="Email" />
-    <input type_="text" name_="password" placeholder="Password" />
-    <button type_="submit">(txt "Login")</button>
+    <input attrs=[("type", "hidden"); ("name", "return_to"); ("value", return_to)] />
+    <input attrs=[("type", "text"); ("name", "email"); ("placeholder", "Email")] />
+    <input attrs=[("type", "text"); ("name", "password"); ("placeholder", "Password")] />
+    <button attrs=[("type", "submit")]>(txt "Login")</button>
   </form>
   oauth_section
-  <p>(txt "Don't have an account? ") <a href="/signup">(txt "Sign up")</a></p>
-  <p><a href="/">(txt "← Back")</a></p>
+  <p>(txt "Don't have an account? ") <a attrs=[("href", "/signup")]>(txt "Sign up")</a></p>
+  <p><a attrs=[("href", "/")]>(txt "← Back")</a></p>
 </div>
 </Layout>
 ;;
@@ -523,15 +523,15 @@ let error = Well.get_flash req "error" in
 <Layout title="Sign Up">
 <div>
   <h1>(txt "Sign Up")</h1>
-  (match error with Some msg -> <p class_="form-error">(txt msg)</p> | None -> (txt ""))
-  <form action="/signup" method_="POST" class_="auth-form">
+  (match error with Some msg -> <p attrs=[("class", "form-error")]>(txt msg)</p> | None -> (txt ""))
+  <form attrs=[("action", "/signup"); ("method", "POST"); ("class", "auth-form")]>
     (csrf_input (Well.csrf_token req))
-    <input type_="text" name_="email" placeholder="Email" />
-    <input type_="text" name_="password" placeholder="Password (min 8 chars)" />
-    <button type_="submit">(txt "Sign Up")</button>
+    <input attrs=[("type", "text"); ("name", "email"); ("placeholder", "Email")] />
+    <input attrs=[("type", "text"); ("name", "password"); ("placeholder", "Password (min 8 chars)")] />
+    <button attrs=[("type", "submit")]>(txt "Sign Up")</button>
   </form>
-  <p>(txt "Already have an account? ") <a href="/login">(txt "Login")</a></p>
-  <p><a href="/">(txt "← Back")</a></p>
+  <p>(txt "Already have an account? ") <a attrs=[("href", "/login")]>(txt "Login")</a></p>
+  <p><a attrs=[("href", "/")]>(txt "← Back")</a></p>
 </div>
 </Layout>
 ;;
@@ -613,22 +613,22 @@ let temporary_assigns model = model
 
 let view model =
   let open Html in
-  <div class_="counter">
-    <div class_="counter-display">
+  <div attrs=[("class", "counter")]>
+    <div attrs=[("class", "counter-display")]>
       (txt (string_of_int model.count))
     </div>
-    <div class_="counter-controls">
-      <button data_lv_click="Decrement" class_="counter-btn">
+    <div attrs=[("class", "counter-controls")]>
+      <button attrs=[("data-lv-click", "Decrement"); ("class", "counter-btn")]>
         (txt "-")
       </button>
-      <button data_lv_click="Increment" class_="counter-btn">
+      <button attrs=[("data-lv-click", "Increment"); ("class", "counter-btn")]>
         (txt "+")
       </button>
-      <button data_lv_click="Reset" class_="counter-btn secondary">
+      <button attrs=[("data-lv-click", "Reset"); ("class", "counter-btn secondary")]>
         (txt "Reset")
       </button>
     </div>
-    <div class_="counter-step">
+    <div attrs=[("class", "counter-step")]>
       (txt "Step: ") (txt (string_of_int model.step))
     </div>
   </div>
@@ -642,7 +642,7 @@ let open Html in
   <h1>(txt "Counter — LiveView Demo")</h1>
   <p>(txt "Real-time server-side state with WebSocket updates.")</p>
   <Well.LiveView name="counter" />
-  <p><a href="/">(txt "Back")</a></p>
+  <p><a attrs=[("href", "/")]>(txt "Back")</a></p>
 </div>
 </Layout>
 |}
@@ -687,19 +687,19 @@ let temporary_assigns model = model
 
 let view model =
   let open Html in
-  <div class_="activity-log">
+  <div attrs=[("class", "activity-log")]>
     <h2>(txt "Activity Log")</h2>
-    <p class_="activity-hint">
+    <p attrs=[("class", "activity-hint")]>
       (txt (string_of_int (List.length model.entries)))
       (txt " events captured")
     </p>
     (each ~id:"log-entries" ~tag_name:"ul" model.entries
        ~key:(fun e -> string_of_int e.id)
        (fun e ->
-         <li class_="log-entry">
-           <span class_=("log-action " ^ e.action)>(txt e.action)</span>
+         <li attrs=[("class", "log-entry")]>
+           <span attrs=[("class", "log-action " ^ e.action)]>(txt e.action)</span>
            (txt " → ")
-           <span class_="log-value">(txt (string_of_int e.value))</span>
+           <span attrs=[("class", "log-value")]>(txt (string_of_int e.value))</span>
          </li>))
   </div>
 |}
@@ -711,16 +711,16 @@ let open Html in
 <div>
   <h1>(txt "Dashboard — LiveView Communication")</h1>
   <p>(txt "Two LiveViews on one page. Counter publishes events, Activity Log subscribes via Well.MessageBus.")</p>
-  <div class_="dashboard-grid">
-    <div class_="dashboard-panel">
+  <div attrs=[("class", "dashboard-grid")]>
+    <div attrs=[("class", "dashboard-panel")]>
       <h2>(txt "Counter")</h2>
       <Well.LiveView name="counter" />
     </div>
-    <div class_="dashboard-panel">
+    <div attrs=[("class", "dashboard-panel")]>
       <Well.LiveView name="activity_log" />
     </div>
   </div>
-  <p><a href="/">(txt "← Back")</a></p>
+  <p><a attrs=[("href", "/")]>(txt "← Back")</a></p>
 </div>
 </Layout>
 |}
@@ -2467,11 +2467,11 @@ let open Html in
 <div>
   <h1>(txt "Tasks — Contract/RPC Demo")</h1>
   <p>(txt "Service contracts with TypeScript client and SQLite backend.")</p>
-  <div id="tasks-app" class_="tasks-container">
-    <p class_="loading">(txt "Loading...")</p>
+  <div attrs=[("id", "tasks-app"); ("class", "tasks-container")]>
+    <p attrs=[("class", "loading")]>(txt "Loading...")</p>
   </div>
-  <p><a href="/">(txt "← Back")</a></p>
-  <script src="/static/tasks.js" />
+  <p><a attrs=[("href", "/")]>(txt "← Back")</a></p>
+  <script attrs=[("src", "/static/tasks.js")] />
 </div>
 </Layout>
 |}
@@ -2589,26 +2589,26 @@ let files = try Array.to_list (Sys.readdir upload_dir) with Sys_error _ -> [] in
 <div>
   <h1>(txt "Upload — File Upload Demo")</h1>
   <p>(txt "Multipart form-data upload with streaming download.")</p>
-  <form action="/upload" method_="POST" enctype="multipart/form-data" class_="upload-form">
+  <form attrs=[("action", "/upload"); ("method", "POST"); ("enctype", "multipart/form-data"); ("class", "upload-form")]>
     (csrf_input token)
-    <label for_="file" class_="upload-label">(txt "Choose a file")</label>
-    <input type_="file" name_="file" id="file" />
-    <button type_="submit">(txt "Upload")</button>
+    <label attrs=[("for", "file"); ("class", "upload-label")]>(txt "Choose a file")</label>
+    <input attrs=[("type", "file"); ("name", "file"); ("id", "file")] />
+    <button attrs=[("type", "submit")]>(txt "Upload")</button>
   </form>
   (match files with
-   | [] -> <p class_="upload-empty">(txt "No files uploaded yet.")</p>
+   | [] -> <p attrs=[("class", "upload-empty")]>(txt "No files uploaded yet.")</p>
    | _ ->
      <div>
        <h2>(txt "Uploaded files")</h2>
-       <ul class_="upload-list">
+       <ul attrs=[("class", "upload-list")]>
          (files |> List.map (fun name ->
            <li>
-             <a href=("/upload/download/" ^ name)>(txt name)</a>
+             <a attrs=[("href", "/upload/download/" ^ name)]>(txt name)</a>
            </li>
          ) |> cat |> raw)
        </ul>
      </div>)
-  <p><a href="/">(txt "\xe2\x86\x90 Back")</a></p>
+  <p><a attrs=[("href", "/")]>(txt "\xe2\x86\x90 Back")</a></p>
 </div>
 </Layout>
 ;;
@@ -3066,8 +3066,8 @@ Rules:
 
 - **No `empty` node** — use `(txt "")` when you need to render nothing (e.g. in else branches)
 - **`textarea` children must be `node`** — use `<textarea>(txt value)</textarea>`, NOT `<textarea>value</textarea>` (bare variable is string, not node) and NOT `<textarea>"default"</textarea>` (literal string is also not node)
-- **All attribute values are strings** — use `value=(string_of_int n)` for numbers
-- **`_` suffix for OCaml keywords** — `class_`, `type_`, `method_`, `name_`, `for_`
+- **All attribute values are strings** — use `attrs=[("value", string_of_int n)]` for numbers
+- **All attributes use `attrs=[...]` and `bool_attrs=[...]`** — no labeled attribute params
 
 ---
 
@@ -3089,30 +3089,18 @@ val element_to_string : node -> string
 
 ### Tag Functions
 
-All tag functions share the same optional labeled parameters:
+All tag functions accept two optional attribute parameters:
 
-**String attributes** (default `""`):
-- **Global**: `?id`, `?class_`, `?lang`, `?title`, `?style`, `?role`, `?tabindex`, `?dir`
-- **LiveView**: `?data_lv_click`, `?data_lv_submit`, `?data_lv_change`, `?data_lv_debounce`, `?data_lv_throttle`, `?data_lv_hook`, `?data_lv_navigate`, `?data_lv_patch`
-- **Link**: `?href`, `?target`, `?rel`, `?download`
-- **Media**: `?src`, `?alt`, `?width`, `?height`, `?loading`, `?srcset`, `?sizes`, `?poster`, `?preload`, `?crossorigin`, `?integrity`
-- **Form**: `?action`, `?method_`, `?type_`, `?placeholder`, `?value`, `?name_`, `?enctype`, `?accept`, `?for_`, `?autocomplete`, `?min`, `?max`, `?step`, `?pattern`, `?maxlength`, `?minlength`, `?rows`, `?cols`, `?wrap`, `?size`, `?formaction`, `?formmethod`
-- **Meta**: `?charset`, `?content`, `?http_equiv`, `?media`
-- **Table**: `?colspan`, `?rowspan`, `?scope`
-- **Other**: `?datetime`, `?start`
+- `?attrs:(string * string) list` — all string attributes (class, id, href, data-lv-click, etc.)
+- `?bool_attrs:string list` — all boolean attributes (hidden, disabled, checked, etc.)
 
-**Boolean attributes** (default `false`):
-`?hidden`, `?disabled`, `?readonly`, `?required`, `?checked`, `?selected`, `?multiple`, `?autofocus`, `?novalidate`, `?open_`, `?defer`, `?async_`, `?autoplay`, `?controls`, `?loop`, `?muted`, `?draggable`, `?reversed`
-
-**Escape hatch** for `aria-*`, `data-*`, and any unlisted attributes:
-- `?attrs:(string * string) list` — extra string attributes
-- `?bool_attrs:string list` — extra boolean attributes
+Use standard HTML attribute names as strings: `"class"`, `"type"`, `"method"`, `"name"`, `"for"`, `"data-lv-click"`, `"data-lv-submit"`, etc.
 
 ```ocaml
 <button
-  ~attrs:[("aria-label", "Close"); ("data-tooltip", "Dismiss")]
-  ~bool_attrs:["data-lv-ignore"; "aria-expanded"]
-  data_lv_click="close">"X"</button>
+  attrs=[("class", "btn"); ("data-lv-click", "close");
+         ("aria-label", "Close"); ("data-tooltip", "Dismiss")]
+  bool_attrs=["aria-expanded"]>"X"</button>
 ```
 
 **All tags** (full HTML5 coverage):
@@ -3326,16 +3314,16 @@ Well.stream ~content_type:"text/csv" (fun write ->
 (* layout.mlx *)
 let createElement ?title:(page_title = "") ?(children = []) () =
   let open Html in
-  <html lang="en">
+  <html attrs=[("lang", "en")]>
     <head>
-      <meta charset="utf-8" />
+      <meta attrs=[("charset", "utf-8")] />
       <title>(txt page_title)</title>
-      <link rel="stylesheet" href="/static/app.css" />
+      <link attrs=[("rel", "stylesheet"); ("href", "/static/app.css")] />
       (Well.LiveView.live_preconnect_script ())
     </head>
     <body>
       <main>(children |> cat |> raw)</main>
-      <script type_="module" src="/static/well.js" />
+      <script attrs=[("type", "module"); ("src", "/static/well.js")] />
     </body>
   </html>
 ```
@@ -3404,8 +3392,8 @@ let view model =
   let open Html in
   <div>
     <span>(txt (string_of_int model.count))</span>
-    <button data_lv_click="Increment">(txt "+")</button>
-    <button data_lv_click="Decrement">(txt "-")</button>
+    <button attrs=[("data-lv-click", "Increment")]>(txt "+")</button>
+    <button attrs=[("data-lv-click", "Decrement")]>(txt "-")</button>
   </div>
 ```
 
@@ -3463,15 +3451,15 @@ The `name` must match the path from `Well.live` (without leading `/`).
 
 | Attribute | Description | Wire format |
 |-----------|-------------|-------------|
-| `data_lv_click="Msg"` | Click sends msg (no args) | `["Msg"]` |
-| `data_lv_click={|["Msg","val"]|}` | Click with payload (JSON array in attr) | `["Msg", "val"]` |
-| `data_lv_submit="Msg"` | Form submit (fields as object) | `["Msg", {field: value, ...}]` |
-| `data_lv_change="Msg"` | Input change (single value) | `["Msg", input_value]` |
-| `data_lv_debounce="300"` | Debounce (ms) | — |
-| `data_lv_throttle="300"` | Throttle (ms) | — |
-| `data_lv_navigate="/path"` | Live navigation (pushState) | — |
-| `data_lv_patch="/path?q=x"` | Update query params only | — |
-| `data_lv_hook="HookName"` | Attach JS hook | — |
+| `attrs=[("data-lv-click", "Msg")]` | Click sends msg (no args) | `["Msg"]` |
+| `attrs=[("data-lv-click", {|["Msg","val"]|})]` | Click with payload (JSON array in attr) | `["Msg", "val"]` |
+| `attrs=[("data-lv-submit", "Msg")]` | Form submit (fields as object) | `["Msg", {field: value, ...}]` |
+| `attrs=[("data-lv-change", "Msg")]` | Input change (single value) | `["Msg", input_value]` |
+| `attrs=[("data-lv-debounce", "300")]` | Debounce (ms) | — |
+| `attrs=[("data-lv-throttle", "300")]` | Throttle (ms) | — |
+| `attrs=[("data-lv-navigate", "/path")]` | Live navigation (pushState) | — |
+| `attrs=[("data-lv-patch", "/path?q=x")]` | Update query params only | — |
+| `attrs=[("data-lv-hook", "HookName")]` | Attach JS hook | — |
 
 ### Variant encoding (ppx_deriving_yojson)
 
@@ -3487,17 +3475,17 @@ Otherwise the string is wrapped in `["string"]`.
 
 ```ocaml
 (* No payload — simple variant *)
-<button data_lv_click="Increment">(txt "+")</button>
+<button attrs=[("data-lv-click", "Increment")]>(txt "+")</button>
 (* sends: ["Increment"] → decoded as: Increment *)
 
 (* With payload — encode JSON array in attribute *)
-<button data_lv_click=(Printf.sprintf {|["SetPage", "%s"]|} (Html.escape_html page))>
+<button attrs=[("data-lv-click", Printf.sprintf {|["SetPage", "%s"]|} (Html.escape_html page))]>
   (txt page)
 </button>
 (* sends: ["SetPage", "cennik.html"] → decoded as: SetPage "cennik.html" *)
 
 (* Static payload — use raw JSON string *)
-<button data_lv_click={|["SelectTab", "settings"]|}>(txt "Settings")</button>
+<button attrs=[("data-lv-click", {|["SelectTab", "settings"]|})]>(txt "Settings")</button>
 ```
 
 ### Form submissions (`data_lv_submit`)
@@ -3518,10 +3506,10 @@ type msg = SubmitComment of string * string [@@deriving yojson]
 
 Input `name` attributes must match record field names:
 ```ocaml
-<form data_lv_submit="SubmitComment">
-  <input type_="text" name_="author" placeholder="Name" />
-  <textarea name_="body">(txt "")</textarea>
-  <button type_="submit">(txt "Send")</button>
+<form attrs=[("data-lv-submit", "SubmitComment")]>
+  <input attrs=[("type", "text"); ("name", "author"); ("placeholder", "Name")] />
+  <textarea attrs=[("name", "body")]>(txt "")</textarea>
+  <button attrs=[("type", "submit")]>(txt "Send")</button>
 </form>
 ```
 
@@ -3539,7 +3527,7 @@ let view model =
     (if model.items = [] then
       <p>(txt "Nothing here")</p>
     else
-      <div class_="list">
+      <div attrs=[("class", "list")]>
         (each ~id:"items" model.items
           ~key:(fun item -> string_of_int item.id)
           (fun item -> ...))
@@ -3605,7 +3593,7 @@ well.pushLive(["UpdateFilter", "active"], "/live/dashboard");
 
 ```ocaml
 (* MLX: file input with hook *)
-<input type_="file" data_lv_hook="FileUpload" />
+<input attrs=[("type", "file"); ("data-lv-hook", "FileUpload")] />
 
 (* Server side: consume uploaded file *)
 match Well.LiveView.consume_upload upload_id with
@@ -3638,8 +3626,7 @@ let temporary_assigns model = model
 let view model =
   let open Html in
   <div>
-    <input type_="text" placeholder="Search..."
-      value=model.query data_lv_change="Search" data_lv_debounce="300" />
+    <input attrs=[("type", "text"); ("placeholder", "Search..."); ("value", model.query); ("data-lv-change", "Search"); ("data-lv-debounce", "300")] />
     <p>(txt model.empty_msg)</p>
     <div>(each ~id:"results" model.results
       ~key:(fun r -> string_of_int r.id)
@@ -4768,15 +4755,15 @@ let title = Option.value ~default:"" (Well.form req "title") in
 let all_params = Well.form_params req in
 
 (* CSRF token in forms — REQUIRED for POST *)
-<form action="/submit" method_="POST">
+<form attrs=[("action", "/submit"); ("method", "POST")]>
   (csrf_input (Well.csrf_token req))
-  <input type_="text" name_="title" />
-  <button type_="submit">(txt "Submit")</button>
+  <input attrs=[("type", "text"); ("name", "title")] />
+  <button attrs=[("type", "submit")]>(txt "Submit")</button>
 </form>
 
 (* Textarea — children must be node, not bare string *)
-<textarea name_="body">(txt "")</textarea>
-<textarea name_="body">(txt some_variable)</textarea>
+<textarea attrs=[("name", "body")]>(txt "")</textarea>
+<textarea attrs=[("name", "body")]>(txt some_variable)</textarea>
 
 (* File upload — multipart *)
 Well.post "/upload" @@ fun req ->

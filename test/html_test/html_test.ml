@@ -52,11 +52,11 @@ let () =
         expect s |> to_equal_string "<div></div>"
       );
       it "renders div with id" (fun () ->
-        let (`Html s) = Html.div ~id:"main" () in
+        let (`Html s) = Html.div ~attrs:[("id", "main")] () in
         expect s |> to_equal_string {|<div id="main"></div>|}
       );
       it "renders div with class" (fun () ->
-        let (`Html s) = Html.div ~class_:"container" () in
+        let (`Html s) = Html.div ~attrs:[("class", "container")] () in
         expect s |> to_equal_string {|<div class="container"></div>|}
       );
       it "renders div with children" (fun () ->
@@ -84,27 +84,32 @@ let () =
 
     describe "tag attributes" (fun () ->
       it "renders href on anchor" (fun () ->
-        let (`Html s) = Html.a ~href:"/home" ~children:[Html.txt "Home"] () in
+        let (`Html s) = Html.a ~attrs:[("href", "/home")] ~children:[Html.txt "Home"] () in
         expect s |> to_contain {|href="/home"|}
       );
       it "renders data-lv-click" (fun () ->
-        let (`Html s) = Html.button ~data_lv_click:"increment" ~children:[Html.txt "+"] () in
+        let (`Html s) = Html.button ~attrs:[("data-lv-click", "increment")] ~children:[Html.txt "+"] () in
         expect s |> to_contain {|data-lv-click="increment"|}
       );
       it "renders form with method and action" (fun () ->
-        let (`Html s) = Html.form ~action:"/submit" ~method_:"POST" () in
+        let (`Html s) = Html.form ~attrs:[("action", "/submit"); ("method", "POST")] () in
         expect s |> to_contain {|action="/submit"|};
         expect s |> to_contain {|method="POST"|}
       );
       it "omits empty attributes" (fun () ->
-        let (`Html s) = Html.div ~id:"x" () in
+        let (`Html s) = Html.div ~attrs:[("id", "x")] () in
         expect s |> not_ |> to_contain "class="
+      );
+      it "renders boolean attributes" (fun () ->
+        let (`Html s) = Html.input ~attrs:[("type", "text")] ~bool_attrs:["required"; "autofocus"] () in
+        expect s |> to_contain "required";
+        expect s |> to_contain "autofocus"
       );
     );
 
     describe "void_tag" (fun () ->
       it "renders meta as self-closing" (fun () ->
-        let (`Html s) = Html.meta ~charset:"utf-8" () in
+        let (`Html s) = Html.meta ~attrs:[("charset", "utf-8")] () in
         expect s |> to_contain {|<meta|};
         expect s |> to_contain {|charset="utf-8"|};
         expect s |> to_contain "/>"

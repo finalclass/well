@@ -104,7 +104,7 @@ let () =
 
     describe "typed topics" (fun () ->
       let my_topic =
-        Well.MessageBus.make_topic "typed.test"
+        Well.MessageBus.topic "typed.test"
           (fun s -> `String s)
           (function `String s -> Ok s | _ -> Error "expected string")
       in

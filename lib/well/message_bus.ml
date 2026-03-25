@@ -216,7 +216,7 @@ type 'a topic = {
 }
 
 (** Create a typed topic for the given channel with serialization functions. *)
-let make_topic channel to_yojson of_yojson =
+let topic channel to_yojson of_yojson =
   { t_channel = channel; to_yojson; of_yojson }
 
 (** Publish a typed value to a topic. Serializes via [t.to_yojson]. *)

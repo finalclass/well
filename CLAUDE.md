@@ -159,8 +159,10 @@ type node = [ `Html of string ]
 val escape_html : string -> string
 val txt : string -> node             (* escaped text node *)
 val raw : string -> node             (* raw/unescaped HTML *)
-val tag : string -> ... -> ?children:node list -> unit -> node
-val void_tag : string -> ... -> ?children:node list -> unit -> node
+val tag : string -> ?attrs:(string * string) list -> ?bool_attrs:string list
+       -> ?children:node list -> unit -> node
+val void_tag : string -> ?attrs:(string * string) list -> ?bool_attrs:string list
+            -> ?children:node list -> unit -> node
 ```
 
 Full HTML5 tag coverage. All elements are partial applications of `tag`/`void_tag`:
@@ -187,33 +189,14 @@ Void elements (`input`, `img`, `br`, `hr`, `meta`, `link`, `source`, `track`,
 Tag functions return `node = [`Html of string]` — a concrete polymorphic variant
 that coerces to `Well.response` via `:>` in route handlers (automatic).
 
-**Labeled attributes** (optional, on all elements):
-- Global: `id`, `class_`, `lang`, `title`, `style`, `role`, `tabindex`, `dir`
-- LiveView: `data_lv_click`, `data_lv_submit`, `data_lv_change`,
-  `data_lv_debounce`, `data_lv_throttle`, `data_lv_hook`, `data_lv_navigate`, `data_lv_patch`,
-  `data_lv_confirm`
-- Link: `href`, `target`, `rel`, `download`
-- Media: `src`, `alt`, `width`, `height`, `loading`, `srcset`, `sizes`,
-  `poster`, `preload`, `crossorigin`, `integrity`
-- Form: `action`, `method_`, `type_`, `placeholder`, `value`, `name_`, `enctype`,
-  `accept`, `for_`, `autocomplete`, `min`, `max`, `step`, `pattern`, `maxlength`,
-  `minlength`, `rows`, `cols`, `wrap`, `size`, `formaction`, `formmethod`
-- Meta: `charset`, `content`, `http_equiv`, `media`
-- Table: `colspan`, `rowspan`, `scope`
-- Other: `datetime`, `start`
-- Bool: `hidden`, `disabled`, `readonly`, `required`, `checked`, `selected`,
-  `multiple`, `autofocus`, `novalidate`, `open_`, `defer`, `async_`,
-  `autoplay`, `controls`, `loop`, `muted`, `draggable`, `reversed`
-
-**Escape hatch** for `aria-*`, `data-*`, and any unlisted attributes:
-- `?attrs:(string * string) list` — extra string attributes
-- `?bool_attrs:string list` — extra boolean attributes
+**Attributes** — all string-based, passed via two optional params on every element:
+- `?attrs:(string * string) list` — key-value string attributes (class, id, href, data-lv-click, aria-*, etc.)
+- `?bool_attrs:string list` — boolean attributes (hidden, disabled, required, checked, etc.)
 
 ```ocaml
 <button
-  ~attrs:[("aria-label", "Close"); ("data-tooltip", "Dismiss")]
-  ~bool_attrs:["aria-expanded"]
-  data_lv_click="close">"X"</button>
+  attrs=[("class", "btn"); ("data-lv-click", "close"); ("aria-label", "Close")]
+  bool_attrs=["autofocus"]>"X"</button>
 ```
 
 No dependencies (no external libs).
@@ -275,9 +258,9 @@ let page ~title ~children =
   </html>
 
 let counter ~count =
-  <div class_="counter">
+  <div attrs=[("class", "counter")]>
     <span>(txt (string_of_int count))</span>
-    <button data_lv_click="increment">"+"</button>
+    <button attrs=[("data-lv-click", "increment")]>"+"</button>
   </div>
 ```
 

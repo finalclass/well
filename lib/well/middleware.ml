@@ -147,8 +147,16 @@ let generate_csrf_token () =
 (** Get the CSRF token for the current request. *)
 let csrf_token req = Csrf_ctx.get req
 
+let _csrf_warned_no_session = Atomic.make false
+
 (** CSRF protection middleware. Validates tokens on state-changing requests (POST, PUT, DELETE). *)
 let csrf : middleware = fun next req ->
+  if req.session_id = "" && not (Atomic.get _csrf_warned_no_session) then begin
+    Atomic.set _csrf_warned_no_session true;
+    Log.log ~level:"warn" "CSRF middleware: request has no session_id. \
+      Make sure session middleware (Well.use session_middleware or equivalent) \
+      is registered BEFORE Well.use Well.csrf."
+  end;
   let token =
     match Hashtbl.find_opt _csrf_tokens req.session_id with
     | Some t -> t
