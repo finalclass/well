@@ -207,7 +207,7 @@ let cleanup_csrf_tokens () =
 
 let _rate_limit_store : (string, float list) Hashtbl.t = Hashtbl.create 256
 let _rate_limit_mu = Mutex.create ()
-let _rate_limit_counter = ref 0
+let _rate_limit_counter = Atomic.make 0
 
 (** Rate limiting middleware. Limits requests per client IP within a sliding time window. *)
 let rate_limit ~max_requests ~window_ms () : middleware = fun next req ->
@@ -233,9 +233,9 @@ let rate_limit ~max_requests ~window_ms () : middleware = fun next req ->
   let allowed =
     Mutex.lock _rate_limit_mu;
     Fun.protect ~finally:(fun () -> Mutex.unlock _rate_limit_mu) (fun () ->
-      incr _rate_limit_counter;
-      if !_rate_limit_counter >= 100 then begin
-        _rate_limit_counter := 0;
+      let count = Atomic.fetch_and_add _rate_limit_counter 1 in
+      if count >= 99 then begin
+        Atomic.set _rate_limit_counter 0;
         let cutoff = now -. window in
         Hashtbl.filter_map_inplace
           (fun _k timestamps ->

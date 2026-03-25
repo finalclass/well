@@ -102,7 +102,7 @@ val status : int -> response -> response
 val header : string -> string -> response -> response
 
 (* Request helpers *)
-val param : request -> string -> string         (* path param, "" if missing *)
+val param : request -> string -> string option  (* path param *)
 val query : request -> string -> string option  (* query param *)
 
 (* Route registration — handler returns any subtype of response, coerced via :> *)
@@ -111,10 +111,14 @@ val post : string -> (request -> [< response]) -> unit
 val put : string -> (request -> [< response]) -> unit
 val delete : string -> (request -> [< response]) -> unit
 
+(* Channel registration — flat API *)
+val channel : ?on_push:(...) -> string -> (request -> string -> (join_result, string) result) -> unit
+
 (* Server entry point — blocks forever *)
-val run : ?port:int -> ?cert:string -> ?key:string -> unit -> unit
-(* default port 4000, listens on 0.0.0.0 *)
+val run : ?port:int -> ?workers:int -> ?cert:string -> ?key:string -> ?domain:string -> unit -> unit
+(* default port 4000, listens on localhost (HTTP) or 0.0.0.0 (ACME) *)
 (* ~cert and ~key: paths to PEM files for TLS/HTTPS — both required together *)
+(* ~domain: auto-TLS via Let's Encrypt (ACME) — cannot combine with ~cert/~key *)
 ```
 
 **Response type** — polymorphic variant, superset of `Yojson.Safe.t`:

@@ -105,6 +105,23 @@ type fetch_response = Fetch.fetch_response = {
 (** Make an HTTP request. Supports HTTP and HTTPS with system CA certificates. Must be called within [Well.run]. *)
 let fetch = Fetch.fetch
 
+(* ── Re-exports: Channel ─────────────────────────────────────────── *)
+
+(** Result of a successful channel join: topics to subscribe and optional initial state. *)
+type join_result = Channel.join_result = {
+  subscribe : string list;
+  initial_state : Yojson.Safe.t option;
+}
+
+(** Result of a push handler: optional reply to sender and optional broadcast. *)
+type push_result = Channel.push_result = {
+  reply : Yojson.Safe.t option;
+  broadcast : (string * Yojson.Safe.t) option;
+}
+
+(** Register a channel with a topic pattern and join authorization callback. *)
+let channel = Channel.channel
+
 (* Wire up LiveView + Channel WS route registration *)
 let () = Liveview._register_ws_route := Router.ws
 let () = Channel._register_ws_route := Router.ws
@@ -376,134 +393,21 @@ let max_body_size n =
   if n < 0 then invalid_arg "Well.max_body_size: must be non-negative";
   _max_body_size := n
 
-(** Raised when a request body exceeds [max_body_size]. *)
-exception Body_too_large
+exception Body_too_large = Http_parse.Body_too_large
 
-(* ── Multipart parsing ───────────────────────────────────────────── *)
+(* ── Multipart parsing (delegated to Multipart module) ────────────── *)
 
-(** An uploaded file from a multipart form submission. *)
-type uploaded_file = {
+type uploaded_file = Multipart.uploaded_file = {
   filename : string;
   content_type : string;
   size : int;
   data : string;
 }
 
-(** Parsed multipart form data containing fields and uploaded files. *)
-type multipart_data = {
+type multipart_data = Multipart.multipart_data = {
   fields : (string * string) list;
   files : (string * uploaded_file) list;
 }
-
-open struct
-  let extract_boundary content_type =
-    let ct = String.lowercase_ascii content_type in
-    if not (try ignore (Str.search_forward (Str.regexp_string "multipart/form-data") ct 0); true
-            with Not_found -> false)
-    then None
-    else
-      match Str.search_forward (Str.regexp_case_fold {|boundary=\([^ ;]*\)|}) content_type 0 with
-      | _ -> Some (Str.matched_group 1 content_type)
-      | exception Not_found -> None
-
-  let is_multipart headers =
-    match List.assoc_opt "content-type" headers with
-    | Some ct -> extract_boundary ct <> None
-    | None -> false
-
-  let find_substring ~needle haystack start =
-    let nlen = String.length needle in
-    let hlen = String.length haystack in
-    if nlen = 0 then Some start
-    else
-      let limit = hlen - nlen in
-      let rec search i =
-        if i > limit then None
-        else if String.sub haystack i nlen = needle then Some i
-        else search (i + 1)
-      in
-      search start
-
-  let parse_disposition header_val =
-    let name =
-      match Str.search_forward (Str.regexp {|name="\([^"]*\)"|}) header_val 0 with
-      | _ -> Some (Str.matched_group 1 header_val)
-      | exception Not_found -> None
-    in
-    let filename =
-      match Str.search_forward (Str.regexp {|filename="\([^"]*\)"|}) header_val 0 with
-      | _ -> Some (Str.matched_group 1 header_val)
-      | exception Not_found -> None
-    in
-    (name, filename)
-
-  let parse_multipart boundary body =
-    let delim = "--" ^ boundary in
-    let fields = ref [] in
-    let files = ref [] in
-    let start =
-      match find_substring ~needle:delim body 0 with
-      | Some i -> i + String.length delim
-      | None -> String.length body
-    in
-    let close_delim = "\r\n" ^ delim in
-    let rec process pos =
-      if pos >= String.length body then ()
-      else
-        let pos =
-          if pos + 2 <= String.length body && String.sub body pos 2 = "\r\n"
-          then pos + 2
-          else pos
-        in
-        if pos + 2 <= String.length body && String.sub body pos 2 = "--"
-        then ()
-        else
-          match find_substring ~needle:"\r\n\r\n" body pos with
-          | None -> ()
-          | Some hdr_end ->
-              let headers_str = String.sub body pos (hdr_end - pos) in
-              let part_body_start = hdr_end + 4 in
-              let part_body_end =
-                match find_substring ~needle:close_delim body part_body_start with
-                | Some i -> i
-                | None -> String.length body
-              in
-              let part_body = String.sub body part_body_start (part_body_end - part_body_start) in
-              let part_headers =
-                String.split_on_char '\n' headers_str
-                |> List.filter_map (fun line ->
-                       let line = String.trim line in
-                       match String.index_opt line ':' with
-                       | None -> None
-                       | Some i ->
-                           let k = String.sub line 0 i |> String.lowercase_ascii in
-                           let v = String.sub line (i + 1) (String.length line - i - 1)
-                                   |> String.trim in
-                           Some (k, v))
-              in
-              (match List.assoc_opt "content-disposition" part_headers with
-               | Some disp ->
-                   let name, filename = parse_disposition disp in
-                   (match name, filename with
-                    | Some n, Some fn ->
-                        let ct =
-                          match List.assoc_opt "content-type" part_headers with
-                          | Some v -> v
-                          | None -> "application/octet-stream"
-                        in
-                        files := (n, { filename = fn; content_type = ct;
-                                       size = String.length part_body;
-                                       data = part_body }) :: !files
-                    | Some n, None ->
-                        fields := (n, part_body) :: !fields
-                    | _ -> ())
-               | None -> ());
-              let next = part_body_end + String.length close_delim in
-              process next
-    in
-    process start;
-    { fields = List.rev !fields; files = List.rev !files }
-end
 
 module Multipart_ctx = Context(struct
   type t = multipart_data option
@@ -517,8 +421,8 @@ let get_multipart req =
   | None ->
       match List.assoc_opt "content-type" req.headers with
       | Some ct ->
-          (match extract_boundary ct with
-           | Some b -> parse_multipart b req.body
+          (match Multipart.extract_boundary ct with
+           | Some b -> Multipart.parse b req.body
            | None -> { fields = []; files = [] })
       | None -> { fields = []; files = [] }
 
@@ -558,15 +462,15 @@ end
 
 (** Get all form parameters as [(key, value)] pairs. Handles both URL-encoded and multipart forms. *)
 let form_params (req : request) =
-  if is_multipart req.headers then
+  if Multipart.is_multipart req.headers then
     let data =
       match Multipart_ctx.get req with
       | Some d -> d
       | None ->
           match List.assoc_opt "content-type" req.headers with
           | Some ct ->
-              (match extract_boundary ct with
-               | Some b -> parse_multipart b req.body
+              (match Multipart.extract_boundary ct with
+               | Some b -> Multipart.parse b req.body
                | None -> { fields = []; files = [] })
           | None -> { fields = []; files = [] }
     in
@@ -578,235 +482,23 @@ let form_params (req : request) =
 let form req key = List.assoc_opt key (form_params req)
 
 (** Extract the boundary string from a multipart/form-data Content-Type header. *)
-let extract_boundary = extract_boundary
+let extract_boundary = Multipart.extract_boundary
 
 (** Parse a multipart/form-data body given the boundary string. *)
-let parse_multipart = parse_multipart
+let parse_multipart = Multipart.parse
 
 (* Wire middleware form_params forward ref *)
 let () = Middleware._form_params_fn := form_params
 
-(* ── Raw HTTP/1.1 parsing ─────────────────────────────────────────── *)
+(* ── HTTP parsing & writing (delegated to Http_parse module) ──────── *)
 
-let read_line_crlf reader =
-  let line = Eio.Buf_read.line reader in
-  if String.length line > 0 && line.[String.length line - 1] = '\r' then
-    String.sub line 0 (String.length line - 1)
-  else line
+exception Headers_too_large = Http_parse.Headers_too_large
 
-let parse_request_line reader =
-  let line = read_line_crlf reader in
-  match String.split_on_char ' ' line with
-  | [ meth; path; _version ] -> (meth, path)
-  | _ -> ("GET", "/")
-
-exception Headers_too_large
-
-let _max_header_count = 100
-let _max_header_bytes = 64 * 1024
-
-let parse_headers reader =
-  let rec go acc count total_bytes =
-    let line = read_line_crlf reader in
-    if line = "" then List.rev acc
-    else
-      let total_bytes = total_bytes + String.length line + 2 in
-      let count = count + 1 in
-      if count > _max_header_count || total_bytes > _max_header_bytes then
-        raise Headers_too_large
-      else
-        match String.index_opt line ':' with
-        | None -> go acc count total_bytes
-        | Some i ->
-            let name = String.sub line 0 i |> String.lowercase_ascii in
-            let value =
-              String.sub line (i + 1) (String.length line - i - 1)
-              |> String.trim
-            in
-            go ((name, value) :: acc) count total_bytes
-  in
-  go [] 0 0
-
-let read_chunked_body reader =
-  let buf = Buffer.create 4096 in
-  let total = ref 0 in
-  let rec loop () =
-    let line = read_line_crlf reader in
-    let size_str =
-      match String.index_opt line ';' with
-      | Some i -> String.sub line 0 i
-      | None -> line
-    in
-    match int_of_string_opt ("0x" ^ String.trim size_str) with
-    | None | Some 0 -> Buffer.contents buf
-    | Some n ->
-        total := !total + n;
-        if !total > !_max_body_size then raise Body_too_large;
-        Buffer.add_string buf (Eio.Buf_read.take n reader);
-        (try ignore (read_line_crlf reader) with _ -> ());
-        loop ()
-  in
-  loop ()
-
-let read_body reader headers =
-  let is_chunked =
-    match List.assoc_opt "transfer-encoding" headers with
-    | Some v -> String.lowercase_ascii (String.trim v) = "chunked"
-    | None -> false
-  in
-  if is_chunked then read_chunked_body reader
-  else
-    match List.assoc_opt "content-length" headers with
-    | None -> ""
-    | Some len_str -> (
-        match int_of_string_opt len_str with
-        | None -> ""
-        | Some len ->
-            if len <= 0 then ""
-            else if len > !_max_body_size then raise Body_too_large
-            else Eio.Buf_read.take len reader)
-
-(* ── Gzip compression ─────────────────────────────────────────────── *)
-
-open struct
-  let gzip_compress data =
-    let len = String.length data in
-    let buf = Buffer.create (len / 2) in
-    Buffer.add_string buf "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03";
-    let pos = ref 0 in
-    Zlib.compress ~level:6 ~header:false
-      (fun zbuf ->
-        let n = min (Bytes.length zbuf) (len - !pos) in
-        if n > 0 then Bytes.blit_string data !pos zbuf 0 n;
-        pos := !pos + n;
-        n)
-      (fun zbuf zlen ->
-        Buffer.add_subbytes buf zbuf 0 zlen);
-    let crc = Zlib.update_crc_string 0l data 0 len in
-    let add_le32 v =
-      Buffer.add_char buf (Char.chr (Int32.to_int v land 0xff));
-      Buffer.add_char buf (Char.chr (Int32.to_int (Int32.shift_right_logical v 8) land 0xff));
-      Buffer.add_char buf (Char.chr (Int32.to_int (Int32.shift_right_logical v 16) land 0xff));
-      Buffer.add_char buf (Char.chr (Int32.to_int (Int32.shift_right_logical v 24) land 0xff))
-    in
-    add_le32 crc;
-    add_le32 (Int32.of_int (len land 0xffffffff));
-    Buffer.contents buf
-
-  let accepts_gzip headers =
-    match List.assoc_opt "accept-encoding" headers with
-    | None -> false
-    | Some v ->
-        String.split_on_char ',' v
-        |> List.exists (fun p ->
-               let p = String.trim p in
-               let enc =
-                 match String.index_opt p ';' with
-                 | Some i -> String.trim (String.sub p 0 i)
-                 | None -> p
-               in
-               String.lowercase_ascii enc = "gzip")
-
-  let should_compress content_type body_len =
-    body_len >= 860
-    &&
-    let base_mime =
-      match String.index_opt content_type ';' with
-      | Some i -> String.trim (String.sub content_type 0 i)
-      | None -> content_type
-    in
-    Url.is_text_mime base_mime
-
-  let maybe_compress headers resolved =
-    if resolved.r_body = "" then resolved
-    else if resolved.r_status = 206 || resolved.r_status = 304 then resolved
-    else if not (accepts_gzip headers) then resolved
-    else
-      let ct =
-        match List.assoc_opt "Content-Type" resolved.r_headers with
-        | Some v -> v
-        | None -> ""
-      in
-      if not (should_compress ct (String.length resolved.r_body)) then resolved
-      else
-        let compressed = gzip_compress resolved.r_body in
-        { resolved with
-          r_body = compressed;
-          r_headers =
-            ("Content-Encoding", "gzip")
-            :: ("Vary", "Accept-Encoding")
-            :: resolved.r_headers;
-        }
-end
-
-(* ── Response writing ──────────────────────────────────────────────── *)
-
-let status_text = function
-  | 200 -> "OK"
-  | 201 -> "Created"
-  | 204 -> "No Content"
-  | 301 -> "Moved Permanently"
-  | 302 -> "Found"
-  | 304 -> "Not Modified"
-  | 400 -> "Bad Request"
-  | 401 -> "Unauthorized"
-  | 403 -> "Forbidden"
-  | 404 -> "Not Found"
-  | 206 -> "Partial Content"
-  | 405 -> "Method Not Allowed"
-  | 408 -> "Request Timeout"
-  | 413 -> "Payload Too Large"
-  | 416 -> "Range Not Satisfiable"
-  | 429 -> "Too Many Requests"
-  | 431 -> "Request Header Fields Too Large"
-  | 500 -> "Internal Server Error"
-  | code -> string_of_int code
-
-let write_response ?(keep_alive=false) ?(head=false) flow resolved =
-  let buf = Buffer.create 256 in
-  Buffer.add_string buf
-    (Printf.sprintf "HTTP/1.1 %d %s\r\n" resolved.r_status
-       (status_text resolved.r_status));
-  List.iter
-    (fun (k, v) ->
-      Buffer.add_string buf (Printf.sprintf "%s: %s\r\n" k v))
-    resolved.r_headers;
-  Buffer.add_string buf
-    (Printf.sprintf "Content-Length: %d\r\n"
-       (String.length resolved.r_body));
-  if keep_alive then
-    Buffer.add_string buf "Connection: keep-alive\r\n"
-  else
-    Buffer.add_string buf "Connection: close\r\n";
-  Buffer.add_string buf "\r\n";
-  if not head then Buffer.add_string buf resolved.r_body;
-  Eio.Flow.copy_string (Buffer.contents buf) flow
-
-let write_stream_response flow cfg extra_headers =
-  let buf = Buffer.create 256 in
-  Buffer.add_string buf
-    (Printf.sprintf "HTTP/1.1 %d %s\r\n" cfg.stream_status
-       (status_text cfg.stream_status));
-  Buffer.add_string buf
-    (Printf.sprintf "Content-Type: %s\r\n" cfg.stream_content_type);
-  Buffer.add_string buf "Transfer-Encoding: chunked\r\n";
-  List.iter
-    (fun (k, v) ->
-      Buffer.add_string buf (Printf.sprintf "%s: %s\r\n" k v))
-    (cfg.stream_headers @ extra_headers);
-  Buffer.add_string buf "Connection: close\r\n";
-  Buffer.add_string buf "\r\n";
-  Eio.Flow.copy_string (Buffer.contents buf) flow;
-  let write_chunk data =
-    if String.length data > 0 then begin
-      let chunk =
-        Printf.sprintf "%x\r\n%s\r\n" (String.length data) data
-      in
-      Eio.Flow.copy_string chunk flow
-    end
-  in
-  cfg.stream_fn write_chunk;
-  Eio.Flow.copy_string "0\r\n\r\n" flow
+let parse_request_line = Http_parse.parse_request_line
+let parse_headers = Http_parse.parse_headers
+let read_body reader headers = Http_parse.read_body ~max_body_size:!_max_body_size reader headers
+let write_response = Http_parse.write_response
+let write_stream_response = Http_parse.write_stream_response
 
 (* ── Request ID ───────────────────────────────────────────────────── *)
 
@@ -1114,7 +806,7 @@ let handle_connection flow _addr =
           write_stream_response flow cfg (("X-Request-ID", req_id) :: extra_hdrs);
           `Close
       | None ->
-          let resolved = maybe_compress hdrs (resolve resp) in
+          let resolved = Compress.maybe_compress hdrs (resolve resp) in
           let resolved = { resolved with r_headers = ("X-Request-ID", req_id) :: resolved.r_headers } in
           if resolved.r_status >= 500 then Telemetry.incr_errors ();
           let ka = not wants_close in
@@ -1405,6 +1097,23 @@ open struct
       `Text (Buffer.contents buf)
       |> header "Content-Type" "text/plain; version=0.0.4; charset=utf-8")
 
+  let init_services ~sw =
+    Service._register_post_json :=
+      (fun path handler ->
+        Router.register "POST" path (fun req ->
+          let result_json = handler req in
+          `Custom { status = Some 200;
+                    headers = [("Content-Type", "application/json")];
+                    body = `Text result_json }));
+    Service._build_rpc_ctx :=
+      (fun req -> rpc_ctx_to_wire (rpc_ctx req));
+    Service._cast_sw := Some sw;
+    Service.start_all ~sw;
+    Actor.start_all ~sw;
+    Message_bus.init ();
+    Channel.ensure_ws_route ();
+    register_health_routes ()
+
   let wire_cap ~disable_cap =
     if not disable_cap then begin
       Cap_hook._register_cap_get := (fun path handler ->
@@ -1481,26 +1190,12 @@ let run ?port ?(workers = 0) ?cert ?key ?domain
     in
     Sys.set_signal Sys.sigterm (Sys.Signal_handle signal_handler);
     Sys.set_signal Sys.sigint (Sys.Signal_handle signal_handler);
-    Service._register_post_json :=
-      (fun path handler ->
-        Router.register "POST" path (fun req ->
-          let result_json = handler req in
-          `Custom { status = Some 200;
-                    headers = [("Content-Type", "application/json")];
-                    body = `Text result_json }));
-    Service._build_rpc_ctx :=
-      (fun req -> rpc_ctx_to_wire (rpc_ctx req));
-    Service._cast_sw := Some sw;
-    Service.start_all ~sw;
-    Actor.start_all ~sw;
+    init_services ~sw;
+    wire_cap ~disable_cap;
     _start_every ~sw;
     (try Unix.mkdir "data" 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
     Service.start_socket ~sw ~net "data/well.sock";
-    Message_bus.init ();
-    Channel.ensure_ws_route ();
-    register_health_routes ();
     start_cleanup_fiber ~sw;
-    wire_cap ~disable_cap;
     let tls_cfg =
       match domain with
       | Some dom when port = 443 ->
@@ -1629,21 +1324,7 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
   wire_forward_refs net;
   Mirage_crypto_rng_unix.use_default ();
   Eio.Switch.run @@ fun sw ->
-  Service._register_post_json :=
-    (fun path handler ->
-      Router.register "POST" path (fun req ->
-        let result_json = handler req in
-        `Custom { status = Some 200;
-                  headers = [("Content-Type", "application/json")];
-                  body = `Text result_json }));
-  Service._build_rpc_ctx :=
-    (fun req -> rpc_ctx_to_wire (rpc_ctx req));
-  Service._cast_sw := Some sw;
-  Service.start_all ~sw;
-  Actor.start_all ~sw;
-  Message_bus.init ();
-  Channel.ensure_ws_route ();
-  register_health_routes ();
+  init_services ~sw;
   wire_cap ~disable_cap;
   let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, test_port) in
   let socket =
@@ -1769,21 +1450,6 @@ module Toml = Toml
 
 (** Chrome DevTools Protocol client for end-to-end testing. *)
 module Cdp = Cdp
-
-(** Route registration, matching, scoping, and introspection. *)
-module Router = Router
-
-(** Built-in middleware: logging, CORS, CSRF, rate limiting, auth, security headers. *)
-module Middleware = Middleware
-
-(** URL encoding/decoding, MIME type mapping, and path utilities. *)
-module Url = Url
-
-(** Static file serving with ETag caching and range requests. *)
-module Static = Static_serve
-
-(** HTTP client with TLS support. *)
-module Fetch_ = Fetch
 
 (* ── Env convenience re-exports ───────────────────────────────────── *)
 
