@@ -1153,7 +1153,7 @@ open struct
 end
 
 (** Start the HTTP server. Blocks until shutdown signal (SIGTERM/SIGINT). Supports TLS via [~cert]/[~key] or auto-TLS via [~domain]. *)
-let run ?port ?(workers = 0) ?cert ?key ?domain
+let run ?port ?(workers = 0) ?cert ?key ?domain ?host
     ?(acme_staging = false) ?(disable_cap = false) () =
   let port = match port with
     | Some p -> p
@@ -1229,8 +1229,13 @@ let run ?port ?(workers = 0) ?cert ?key ?domain
           else None
     in
     let bind_addr =
-      if acme_mode then Eio.Net.Ipaddr.V4.any
-      else Eio.Net.Ipaddr.V4.loopback
+      match host with
+      | Some ("0.0.0.0" | "0") -> Eio.Net.Ipaddr.V4.any
+      | Some ("localhost" | "127.0.0.1") -> Eio.Net.Ipaddr.V4.loopback
+      | Some h -> failwith (Printf.sprintf "Unsupported host: %s (use \"0.0.0.0\" or \"localhost\")" h)
+      | None ->
+        if acme_mode then Eio.Net.Ipaddr.V4.any
+        else Eio.Net.Ipaddr.V4.loopback
     in
     let addr = `Tcp (bind_addr, port) in
     let socket =
@@ -1238,8 +1243,11 @@ let run ?port ?(workers = 0) ?cert ?key ?domain
     in
     _tls_active := tls_cfg <> None;
     let scheme = if !_tls_active then "https" else "http" in
-    let host = if acme_mode then "0.0.0.0" else "localhost" in
-    Log.log "listening on %s://%s:%d%s" scheme host port
+    let host_str = match host with
+      | Some h -> h
+      | None -> if acme_mode then "0.0.0.0" else "localhost"
+    in
+    Log.log "listening on %s://%s:%d%s" scheme host_str port
       (if workers > 0 then Printf.sprintf " (%d workers)" workers else "");
     let inner_handler =
       match domain with
