@@ -1159,6 +1159,10 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
     | Some p -> p
     | None -> Config.get_int ~default:4000 "well.port"
   in
+  let host = match host with
+    | Some _ -> host
+    | None -> Config.get_string_opt "well.host"
+  in
   Printexc.record_backtrace true;
   let acme_mode = domain <> None in
   (match domain, cert, key with
