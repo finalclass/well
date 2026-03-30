@@ -25,7 +25,7 @@ type browser = {
 (** A CDP session connected to a browser tab via WebSocket. *)
 type t = {
   browser : browser;
-  ic : in_channel;
+  fd : Unix.file_descr;
   oc : out_channel;
   mutable next_id : int;
   mutable closed : bool;
@@ -69,14 +69,43 @@ open struct
     close_in_noerr ic;
     Buffer.contents buf
 
+  (* ── Raw I/O helpers (unbuffered, select-based timeout) ──── *)
+
+  let ws_read_timeout = 30.0
+
+  let raw_read_bytes fd n =
+    let buf = Bytes.create n in
+    let rec loop off remaining =
+      if remaining = 0 then buf
+      else
+        match Unix.select [fd] [] [] ws_read_timeout with
+        | _ :: _, _, _ ->
+          let got = Unix.read fd buf off remaining in
+          if got = 0 then raise (Cdp_error "WebSocket connection closed");
+          loop (off + got) (remaining - got)
+        | _ -> raise Timeout
+    in
+    loop 0 n
+
+  let raw_read_byte fd =
+    Char.code (Bytes.get (raw_read_bytes fd 1) 0)
+
+  let raw_read_line fd =
+    let buf = Buffer.create 256 in
+    let rec loop () =
+      let c = Char.chr (raw_read_byte fd) in
+      if c = '\n' then Buffer.contents buf
+      else if c = '\r' then loop ()
+      else (Buffer.add_char buf c; loop ())
+    in
+    loop ()
+
   (* ── WebSocket client (RFC 6455, client-side masking) ──── *)
 
   let ws_connect port path =
-    let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, port) in
-    let ic, oc = Unix.open_connection addr in
-    (* Set receive timeout to prevent blocking forever *)
-    Unix.setsockopt_float (Unix.descr_of_in_channel ic)
-      Unix.SO_RCVTIMEO 30.0;
+    let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    Unix.connect fd (Unix.ADDR_INET (Unix.inet_addr_loopback, port));
+    let oc = Unix.out_channel_of_descr (Unix.dup fd) in
     let key_bytes = Bytes.create 16 in
     for i = 0 to 15 do Bytes.set key_bytes i (Char.chr (Random.int 256)) done;
     let key = Base64.encode_exn (Bytes.to_string key_bytes) in
@@ -89,16 +118,17 @@ open struct
        Sec-WebSocket-Version: 13\r\n\r\n"
       path port key;
     flush oc;
-    let status = input_line ic in
-    let status_trimmed = String.trim status in
-    if String.length status_trimmed < 12
-       || String.sub status_trimmed 9 3 <> "101" then
-      raise (Cdp_error ("WebSocket upgrade failed: " ^ status_trimmed));
+    (* Read upgrade response using raw reads (no buffered in_channel) *)
+    let status = raw_read_line fd in
+    if String.length status < 12
+       || String.sub status 9 3 <> "101" then
+      raise (Cdp_error ("WebSocket upgrade failed: " ^ status));
     let rec skip () =
-      if String.trim (input_line ic) <> "" then skip ()
+      let line = raw_read_line fd in
+      if line <> "" then skip ()
     in
     skip ();
-    (ic, oc)
+    (fd, oc)
 
   let ws_send oc payload =
     let len = String.length payload in
@@ -122,31 +152,26 @@ open struct
     ) payload;
     flush oc
 
-  let ws_recv ic =
-    let first = input_byte ic in
+  let ws_recv fd =
+    let first = raw_read_byte fd in
     let _fin = first land 0x80 <> 0 in
     let opcode = first land 0x0F in
-    let second = input_byte ic in
+    let second = raw_read_byte fd in
     let masked = second land 0x80 <> 0 in
     let len = second land 0x7F in
     let len =
       if len = 126 then
-        (input_byte ic lsl 8) lor input_byte ic
+        (raw_read_byte fd lsl 8) lor raw_read_byte fd
       else if len = 127 then
         let n = ref 0 in
-        for _ = 0 to 7 do n := (!n lsl 8) lor input_byte ic done;
+        for _ = 0 to 7 do n := (!n lsl 8) lor raw_read_byte fd done;
         !n
       else len
     in
     let mask_key =
-      if masked then begin
-        let m = Bytes.create 4 in
-        really_input ic m 0 4;
-        Some m
-      end else None
+      if masked then Some (raw_read_bytes fd 4) else None
     in
-    let data = Bytes.create len in
-    really_input ic data 0 len;
+    let data = raw_read_bytes fd len in
     (match mask_key with
      | Some key ->
        for i = 0 to len - 1 do
@@ -169,7 +194,7 @@ open struct
     ] in
     ws_send t.oc (Yojson.Safe.to_string msg);
     let rec loop () =
-      let opcode, payload = ws_recv t.ic in
+      let opcode, payload = ws_recv t.fd in
       match opcode with
       | 1 (* Text *) ->
         let json = Yojson.Safe.from_string payload in
@@ -328,9 +353,9 @@ let launch ?(headless = true) () =
   let target_id =
     Yojson.Safe.Util.(member "id" target |> to_string)
   in
-  let ic, oc = ws_connect port ws_path in
+  let fd, oc = ws_connect port ws_path in
   let browser = { pid; port; user_data_dir } in
-  let t = { browser; ic; oc; next_id = 1; closed = false; target_id } in
+  let t = { browser; fd; oc; next_id = 1; closed = false; target_id } in
   ignore (send t "Page.enable" (`Assoc []));
   t
 
@@ -340,7 +365,7 @@ let close t =
     t.closed <- true;
     (try ignore (send t "Browser.close" (`Assoc [])) with _ -> ());
     close_out_noerr t.oc;
-    close_in_noerr t.ic;
+    (try Unix.close t.fd with _ -> ());
     (try Unix.kill t.browser.pid Sys.sigterm with _ -> ());
     (try ignore (Unix.waitpid [] t.browser.pid) with _ -> ());
     (try rm_rf t.browser.user_data_dir with _ -> ())
@@ -354,9 +379,9 @@ let new_tab t =
     Yojson.Safe.Util.(member "targetId" result |> to_string)
   in
   let ws_path = Printf.sprintf "/devtools/page/%s" target_id in
-  let ic, oc = ws_connect t.browser.port ws_path in
+  let fd, oc = ws_connect t.browser.port ws_path in
   let tab = {
-    browser = t.browser; ic; oc;
+    browser = t.browser; fd; oc;
     next_id = 1; closed = false; target_id;
   } in
   ignore (send tab "Page.enable" (`Assoc []));
