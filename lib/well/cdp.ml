@@ -304,9 +304,11 @@ let launch ?(headless = true) () =
     | `List (t :: _) -> t
     | _ -> raise (Cdp_error "no targets found")
   in
+  Printf.printf "[CDP] parsing ws_url...\n%!";
   let ws_url =
     Yojson.Safe.Util.(member "webSocketDebuggerUrl" target |> to_string)
   in
+  Printf.printf "[CDP] ws_url=%s\n%!" ws_url;
   (* Extract path from ws://127.0.0.1:PORT/path *)
   let ws_path =
     let s = ws_url in
@@ -317,11 +319,16 @@ let launch ?(headless = true) () =
   let target_id =
     Yojson.Safe.Util.(member "id" target |> to_string)
   in
+  Printf.printf "[CDP] connecting websocket to %s...\n%!" ws_path;
   let ic, oc = ws_connect port ws_path in
+  Printf.printf "[CDP] ws connected!\n%!";
   let browser = { pid; port; user_data_dir } in
   let t = { browser; ic; oc; next_id = 1; closed = false; target_id } in
+  Printf.printf "[CDP] sending Page.enable...\n%!";
   ignore (send t "Page.enable" (`Assoc []));
+  Printf.printf "[CDP] sending Runtime.enable...\n%!";
   ignore (send t "Runtime.enable" (`Assoc []));
+  Printf.printf "[CDP] launch complete!\n%!";
   t
 
 (** Close the browser, kill the process, and clean up the temp directory. *)
