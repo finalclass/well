@@ -165,14 +165,8 @@ open struct
       ("params", params);
     ] in
     ws_send t.oc (Yojson.Safe.to_string msg);
-    let recv_count = ref 0 in
     let rec loop () =
-      incr recv_count;
-      if !recv_count <= 5 then
-        Printf.printf "[CDP send %s] waiting for response (id=%d), recv #%d...\n%!" meth id !recv_count;
       let opcode, payload = ws_recv t.ic in
-      if !recv_count <= 5 then
-        Printf.printf "[CDP send %s] got opcode=%d, len=%d\n%!" meth opcode (String.length payload);
       match opcode with
       | 1 (* Text *) ->
         let json = Yojson.Safe.from_string payload in
@@ -334,12 +328,7 @@ let launch ?(headless = true) () =
   let ic, oc = ws_connect port ws_path in
   let browser = { pid; port; user_data_dir } in
   let t = { browser; ic; oc; next_id = 1; closed = false; target_id } in
-  Printf.printf "[CDP] target: type=%s id=%s\n%!" (try Yojson.Safe.Util.(member "type" target |> to_string) with _ -> "?") target_id;
-  Printf.printf "[CDP] Page.enable...\n%!";
   ignore (send t "Page.enable" (`Assoc []));
-  Printf.printf "[CDP] Runtime.enable...\n%!";
-  ignore (send t "Runtime.enable" (`Assoc []));
-  Printf.printf "[CDP] done\n%!";
   t
 
 (** Close the browser, kill the process, and clean up the temp directory. *)
@@ -368,7 +357,6 @@ let new_tab t =
     next_id = 1; closed = false; target_id;
   } in
   ignore (send tab "Page.enable" (`Assoc []));
-  ignore (send tab "Runtime.enable" (`Assoc []));
   tab
 
 (** Navigate to a URL and wait for the page to fully load. *)
