@@ -70,37 +70,82 @@ open struct
     close_in_noerr ic;
     Buffer.contents buf
 
-  (* ── Raw I/O helpers (unbuffered, select-based timeout) ──── *)
+  (* ── Buffered socket reader ──── *)
+
+  (* Socket read buffer — accumulates data from large Unix.read calls *)
+  type read_buf = {
+    buf : bytes;
+    mutable pos : int;     (* read position *)
+    mutable len : int;     (* valid data end *)
+    sock : Unix.file_descr;
+  }
+
+  let make_read_buf fd = {
+    buf = Bytes.create 65536;
+    pos = 0; len = 0; sock = fd;
+  }
+
+  (* Global read buffer — reassigned on reconnect *)
+  let rbuf = ref (make_read_buf Unix.stdin)
 
   let ws_frame_timeout = ref 30.0
 
-  let raw_read_bytes fd n =
-    let buf = Bytes.create n in
+  let rbuf_available rb = rb.len - rb.pos
+
+  (* Fill the buffer with more data from the socket *)
+  let rbuf_fill rb =
+    (* Compact if needed *)
+    if rb.pos > 0 then begin
+      let avail = rbuf_available rb in
+      if avail > 0 then
+        Bytes.blit rb.buf rb.pos rb.buf 0 avail;
+      rb.pos <- 0;
+      rb.len <- avail
+    end;
+    match Unix.select [rb.sock] [] [] !ws_frame_timeout with
+    | _ :: _, _, _ ->
+      let space = Bytes.length rb.buf - rb.len in
+      let got = Unix.read rb.sock rb.buf rb.len space in
+      if got = 0 then raise (Cdp_error "WebSocket connection closed");
+      rb.len <- rb.len + got;
+      got
+    | _ -> raise Timeout
+
+  (* Read exactly n bytes from the buffer, filling from socket as needed *)
+  let rbuf_read rb n =
+    let result = Bytes.create n in
     let rec loop off remaining =
-      if remaining = 0 then buf
-      else
-        match Unix.select [fd] [] [] !ws_frame_timeout with
-        | _ :: _, _, _ ->
-          let got = Unix.read fd buf off remaining in
-          if got = 0 then raise (Cdp_error "WebSocket connection closed");
-          loop (off + got) (remaining - got)
-        | _ -> raise Timeout
+      if remaining = 0 then result
+      else begin
+        let avail = rbuf_available rb in
+        if avail > 0 then begin
+          let take = min avail remaining in
+          Bytes.blit rb.buf rb.pos result off take;
+          rb.pos <- rb.pos + take;
+          loop (off + take) (remaining - take)
+        end else begin
+          ignore (rbuf_fill rb);
+          loop off remaining
+        end
+      end
     in
     loop 0 n
 
-  let raw_read_byte fd =
-    Char.code (Bytes.get (raw_read_bytes fd 1) 0)
+  let rbuf_read_byte rb =
+    Char.code (Bytes.get (rbuf_read rb 1) 0)
 
-  (** Check if data is available on the socket within the given timeout. *)
-  let ws_has_data fd timeout =
-    match Unix.select [fd] [] [] timeout with
-    | _ :: _, _, _ -> true
-    | _ -> false
+  (** Check if data is available (buffered or on socket) *)
+  let ws_has_data_buf rb timeout =
+    if rbuf_available rb > 0 then true
+    else match Unix.select [rb.sock] [] [] timeout with
+      | _ :: _, _, _ -> true
+      | _ -> false
 
-  let raw_read_line fd =
+  let raw_read_line _fd =
+    let rb = !rbuf in
     let buf = Buffer.create 256 in
     let rec loop () =
-      let c = Char.chr (raw_read_byte fd) in
+      let c = Char.chr (rbuf_read_byte rb) in
       if c = '\n' then Buffer.contents buf
       else if c = '\r' then loop ()
       else (Buffer.add_char buf c; loop ())
@@ -139,6 +184,7 @@ open struct
     if String.length status < 12
        || String.sub status 9 3 <> "101" then
       raise (Cdp_error ("WebSocket upgrade failed: " ^ status));
+    rbuf := make_read_buf fd;
     let rec skip () =
       let line = raw_read_line fd in
       if line <> "" then skip ()
@@ -170,29 +216,30 @@ open struct
     ) payload;
     raw_write_all fd (Buffer.contents buf)
 
-  let ws_recv fd =
+  let ws_recv _fd =
+    let rb = !rbuf in
     if debug then Printf.eprintf "[CDP ws_recv] reading first byte...\n%!";
-    let first = raw_read_byte fd in
+    let first = rbuf_read_byte rb in
     if debug then Printf.eprintf "[CDP ws_recv] first=0x%02x\n%!" first;
     let _fin = first land 0x80 <> 0 in
     let opcode = first land 0x0F in
-    let second = raw_read_byte fd in
+    let second = rbuf_read_byte rb in
     if debug then Printf.eprintf "[CDP ws_recv] second=0x%02x opcode=%d len_indicator=%d\n%!" second opcode (second land 0x7F);
     let masked = second land 0x80 <> 0 in
     let len = second land 0x7F in
     let len =
       if len = 126 then
-        (raw_read_byte fd lsl 8) lor raw_read_byte fd
+        (rbuf_read_byte rb lsl 8) lor rbuf_read_byte rb
       else if len = 127 then
         let n = ref 0 in
-        for _ = 0 to 7 do n := (!n lsl 8) lor raw_read_byte fd done;
+        for _ = 0 to 7 do n := (!n lsl 8) lor rbuf_read_byte rb done;
         !n
       else len
     in
     let mask_key =
-      if masked then Some (raw_read_bytes fd 4) else None
+      if masked then Some (rbuf_read rb 4) else None
     in
-    let data = raw_read_bytes fd len in
+    let data = rbuf_read rb len in
     (match mask_key with
      | Some key ->
        for i = 0 to len - 1 do
@@ -433,7 +480,7 @@ let try_eval ?(timeout = 2.0) t js =
     if remaining <= 0.0 then (
       if debug then Printf.eprintf "[CDP try_eval] deadline expired\n%!";
       None)
-    else if ws_has_data t.fd (min remaining 0.5) then begin
+    else if ws_has_data_buf !rbuf (min remaining 0.5) then begin
       ws_frame_timeout := 30.0;
       let result =
         try
@@ -476,7 +523,8 @@ let try_eval ?(timeout = 2.0) t js =
 let reconnect t =
   (try Unix.close t.fd with _ -> ());
   let ws_path = Printf.sprintf "/devtools/page/%s" t.target_id in
-  t.fd <- ws_connect t.browser.port ws_path
+  t.fd <- ws_connect t.browser.port ws_path;
+  rbuf := make_read_buf t.fd
 
 (** Navigate to a URL and wait for the page to fully load. *)
 let goto t url =
