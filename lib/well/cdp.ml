@@ -103,9 +103,9 @@ open struct
   (* ── WebSocket client (RFC 6455, client-side masking) ──── *)
 
   let ws_connect port path =
-    let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-    Unix.connect fd (Unix.ADDR_INET (Unix.inet_addr_loopback, port));
-    let oc = Unix.out_channel_of_descr (Unix.dup fd) in
+    let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, port) in
+    let ic, oc = Unix.open_connection addr in
+    let fd = Unix.descr_of_in_channel ic in
     let key_bytes = Bytes.create 16 in
     for i = 0 to 15 do Bytes.set key_bytes i (Char.chr (Random.int 256)) done;
     let key = Base64.encode_exn (Bytes.to_string key_bytes) in
@@ -118,7 +118,8 @@ open struct
        Sec-WebSocket-Version: 13\r\n\r\n"
       path port key;
     flush oc;
-    (* Read upgrade response using raw reads (no buffered in_channel) *)
+    (* Read upgrade response using raw reads on the underlying fd.
+       We intentionally bypass in_channel to avoid buffering issues. *)
     let status = raw_read_line fd in
     if String.length status < 12
        || String.sub status 9 3 <> "101" then
@@ -128,6 +129,8 @@ open struct
       if line <> "" then skip ()
     in
     skip ();
+    (* Keep ic alive to prevent GC from closing fd *)
+    Gc.finalise (fun _ -> ()) ic;
     (fd, oc)
 
   let ws_send oc payload =
