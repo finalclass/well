@@ -25,7 +25,7 @@ type browser = {
 (** A CDP session connected to a browser tab via WebSocket. *)
 type t = {
   browser : browser;
-  fd : Unix.file_descr;
+  mutable fd : Unix.file_descr;
   mutable next_id : int;
   mutable closed : bool;
   target_id : string;
@@ -413,78 +413,6 @@ let new_tab t =
   ignore (send tab "Page.enable" (`Assoc []));
   tab
 
-(** Navigate to a URL and wait for the page to fully load. *)
-let goto t url =
-  (* Fire-and-forget: trigger navigation via JS, don't wait for response
-     (Chrome may not respond during execution context destruction). *)
-  let id = t.next_id in
-  t.next_id <- t.next_id + 1;
-  let js = Printf.sprintf "window.location.href = %s" (js_str url) in
-  let msg = `Assoc [
-    ("id", `Int id);
-    ("method", `String "Runtime.evaluate");
-    ("params", `Assoc [("expression", `String js);
-                        ("returnByValue", `Bool true)]);
-  ] in
-  if debug then Printf.eprintf "[CDP] goto: fire-and-forget id=%d\n%!" id;
-  ws_send t.fd (Yojson.Safe.to_string msg);
-  (* Poll document.readyState with short timeouts until "complete" *)
-  let deadline = Unix.gettimeofday () +. 30.0 in
-  let rec wait () =
-    if Unix.gettimeofday () >= deadline then raise Timeout;
-    Unix.sleepf 0.2;
-    (* Drain any pending frames with short timeout *)
-    let rec drain () =
-      if ws_has_data t.fd 0.0 then begin
-        ws_frame_timeout := 2.0;
-        (try ignore (ws_recv t.fd); drain () with _ -> ());
-        ws_frame_timeout := 30.0
-      end
-    in
-    drain ();
-    (* Try eval with a short timeout *)
-    let eval_id = t.next_id in
-    t.next_id <- t.next_id + 1;
-    let eval_msg = `Assoc [
-      ("id", `Int eval_id);
-      ("method", `String "Runtime.evaluate");
-      ("params", `Assoc [("expression", `String "document.readyState");
-                          ("returnByValue", `Bool true)]);
-    ] in
-    ws_send t.fd (Yojson.Safe.to_string eval_msg);
-    (* Try to read response with a short timeout *)
-    let got_result = ref false in
-    let is_complete = ref false in
-    let read_deadline = Unix.gettimeofday () +. 2.0 in
-    let rec read_loop () =
-      if !got_result || Unix.gettimeofday () >= read_deadline then ()
-      else
-        match Unix.select [t.fd] [] [] 0.5 with
-        | _ :: _, _, _ ->
-          (try
-             ws_frame_timeout := 2.0;
-             let opcode, payload = ws_recv t.fd in
-             ws_frame_timeout := 30.0;
-             if opcode = 1 then begin
-               let json = Yojson.Safe.from_string payload in
-               match Yojson.Safe.Util.member "id" json with
-               | `Int rid when rid = eval_id ->
-                 got_result := true;
-                 let result = Yojson.Safe.Util.(member "result" json) in
-                 (match Yojson.Safe.Util.(member "result" result |> member "value") with
-                  | `String "complete" -> is_complete := true
-                  | _ -> ())
-               | _ -> read_loop ()
-             end else read_loop ()
-           with _ -> ())
-        | _ -> ()
-    in
-    read_loop ();
-    if !is_complete then ()
-    else wait ()
-  in
-  wait ()
-
 (** Try to evaluate JS with a short timeout. Returns None if Chrome is
     unresponsive (e.g. during page navigation). Safe: never corrupts the
     WebSocket stream (only times out between frames, not mid-frame). *)
@@ -506,7 +434,6 @@ let try_eval ?(timeout = 2.0) t js =
       if debug then Printf.eprintf "[CDP try_eval] deadline expired\n%!";
       None)
     else if ws_has_data t.fd (min remaining 0.5) then begin
-      (* Data available — read full frame with short timeout *)
       ws_frame_timeout := 30.0;
       let result =
         try
@@ -526,7 +453,7 @@ let try_eval ?(timeout = 2.0) t js =
                   let r = Yojson.Safe.Util.member "result" json in
                   `Done (Some Yojson.Safe.Util.(member "result" r |> member "value"))
                 | _ -> `Done None)
-             | _ -> `Continue) (* skip events *)
+             | _ -> `Continue)
           | 8 -> t.closed <- true; `Done None
           | _ -> `Continue
         with exn ->
@@ -544,6 +471,43 @@ let try_eval ?(timeout = 2.0) t js =
   in
   loop ()
 
+(** Reconnect the WebSocket to the same target. Used after page navigation
+    which may leave partial frames in the stream. *)
+let reconnect t =
+  (try Unix.close t.fd with _ -> ());
+  let ws_path = Printf.sprintf "/devtools/page/%s" t.target_id in
+  t.fd <- ws_connect t.browser.port ws_path;
+  ignore (send t "Page.enable" (`Assoc []))
+
+(** Navigate to a URL and wait for the page to fully load. *)
+let goto t url =
+  (* Fire-and-forget: trigger navigation via JS *)
+  let id = t.next_id in
+  t.next_id <- t.next_id + 1;
+  let js = Printf.sprintf "window.location.href = %s" (js_str url) in
+  let msg = `Assoc [
+    ("id", `Int id);
+    ("method", `String "Runtime.evaluate");
+    ("params", `Assoc [("expression", `String js);
+                        ("returnByValue", `Bool true)]);
+  ] in
+  if debug then Printf.eprintf "[CDP] goto: fire-and-forget id=%d\n%!" id;
+  ws_send t.fd (Yojson.Safe.to_string msg);
+  (* Wait for navigation to start, then reconnect WebSocket
+     (Chrome sends partial frames during navigation which corrupt the stream) *)
+  Unix.sleepf 0.5;
+  let deadline = Unix.gettimeofday () +. 30.0 in
+  let rec wait () =
+    if Unix.gettimeofday () >= deadline then raise Timeout;
+    (* Reconnect to get a clean WebSocket stream *)
+    (try reconnect t with _ -> Unix.sleepf 0.5; reconnect t);
+    (* Check if page is loaded *)
+    match try_eval ~timeout:2.0 t "document.readyState" with
+    | Some (`String "complete") -> ()
+    | _ -> Unix.sleepf 0.3; wait ()
+  in
+  wait ()
+
 (** Get the current page URL. *)
 let get_url t =
   match eval t "window.location.href" with
@@ -551,31 +515,49 @@ let get_url t =
   | _ -> ""
 
 (** Wait until the page body contains the given text.
-    Resilient to temporary Chrome unresponsiveness during navigation. *)
+    Resilient to navigation: reconnects WebSocket if stream is corrupted. *)
 let wait_for_text ?(timeout = 10.0) t text =
   let deadline = Unix.gettimeofday () +. timeout in
   let js = Printf.sprintf
     "document.body && document.body.innerText.includes(%s)" (js_str text) in
+  let fails = ref 0 in
   let rec loop () =
     if Unix.gettimeofday () >= deadline then
       raise (Cdp_error (Printf.sprintf "timeout waiting for text: %s" text));
     match try_eval ~timeout:2.0 t js with
-    | Some (`Bool true) -> ()
-    | _ -> Unix.sleepf 0.1; loop ()
+    | Some (`Bool true) -> fails := 0
+    | Some _ -> fails := 0; Unix.sleepf 0.1; loop ()
+    | None ->
+      incr fails;
+      if !fails >= 3 then begin
+        fails := 0;
+        if debug then Printf.eprintf "[CDP] reconnecting after %d try_eval failures\n%!" 3;
+        (try reconnect t with _ -> Unix.sleepf 0.5);
+      end;
+      Unix.sleepf 0.2; loop ()
   in
   loop ()
 
 (** Wait until a CSS selector matches an element on the page.
-    Resilient to temporary Chrome unresponsiveness during navigation. *)
+    Resilient to navigation: reconnects WebSocket if stream is corrupted. *)
 let wait_for_selector ?(timeout = 10.0) t selector =
   let deadline = Unix.gettimeofday () +. timeout in
   let js = Printf.sprintf "!!document.querySelector(%s)" (js_str selector) in
+  let fails = ref 0 in
   let rec loop () =
     if Unix.gettimeofday () >= deadline then
       raise (Cdp_error (Printf.sprintf "timeout waiting for: %s" selector));
     match try_eval ~timeout:2.0 t js with
-    | Some (`Bool true) -> ()
-    | _ -> Unix.sleepf 0.1; loop ()
+    | Some (`Bool true) -> fails := 0
+    | Some _ -> fails := 0; Unix.sleepf 0.1; loop ()
+    | None ->
+      incr fails;
+      if !fails >= 3 then begin
+        fails := 0;
+        if debug then Printf.eprintf "[CDP] reconnecting after %d try_eval failures\n%!" 3;
+        (try reconnect t with _ -> Unix.sleepf 0.5);
+      end;
+      Unix.sleepf 0.2; loop ()
   in
   loop ()
 
