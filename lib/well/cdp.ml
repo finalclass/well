@@ -406,31 +406,73 @@ let new_tab t =
 
 (** Navigate to a URL and wait for the page to fully load. *)
 let goto t url =
-  let result = send t "Page.navigate" (`Assoc [("url", `String url)]) in
-  (match Yojson.Safe.Util.member "errorText" result with
-   | `String err ->
-     raise (Cdp_error (Printf.sprintf "navigation error: %s" err))
-   | _ -> ());
-  (* Wait for Page.loadEventFired event (requires Page.enable) *)
-  let rec wait_for_load () =
-    let opcode, payload = ws_recv t.fd in
-    if debug then begin
-      let preview = if String.length payload > 200
-        then String.sub payload 0 200 ^ "..." else payload in
-      Printf.eprintf "[CDP goto] recv opcode=%d payload=%s\n%!" opcode preview
-    end;
-    match opcode with
-    | 1 (* Text *) ->
-      let json = Yojson.Safe.from_string payload in
-      (match Yojson.Safe.Util.member "method" json with
-       | `String "Page.loadEventFired" -> ()
-       | _ -> wait_for_load ())
-    | 8 (* Close *) ->
-      t.closed <- true;
-      raise (Cdp_error "WebSocket closed during navigation")
-    | _ -> wait_for_load ()
+  (* Fire-and-forget: trigger navigation via JS, don't wait for response
+     (Chrome may not respond during execution context destruction). *)
+  let id = t.next_id in
+  t.next_id <- t.next_id + 1;
+  let js = Printf.sprintf "window.location.href = %s" (js_str url) in
+  let msg = `Assoc [
+    ("id", `Int id);
+    ("method", `String "Runtime.evaluate");
+    ("params", `Assoc [("expression", `String js);
+                        ("returnByValue", `Bool true)]);
+  ] in
+  if debug then Printf.eprintf "[CDP] goto: fire-and-forget id=%d\n%!" id;
+  ws_send t.fd (Yojson.Safe.to_string msg);
+  (* Poll document.readyState with short timeouts until "complete" *)
+  let deadline = Unix.gettimeofday () +. 30.0 in
+  let rec wait () =
+    if Unix.gettimeofday () >= deadline then raise Timeout;
+    Unix.sleepf 0.2;
+    (* Drain any pending frames first *)
+    let rec drain () =
+      match Unix.select [t.fd] [] [] 0.0 with
+      | _ :: _, _, _ ->
+        (try ignore (ws_recv t.fd); drain ()
+         with _ -> ())
+      | _ -> ()
+    in
+    drain ();
+    (* Try eval with a short timeout *)
+    let eval_id = t.next_id in
+    t.next_id <- t.next_id + 1;
+    let eval_msg = `Assoc [
+      ("id", `Int eval_id);
+      ("method", `String "Runtime.evaluate");
+      ("params", `Assoc [("expression", `String "document.readyState");
+                          ("returnByValue", `Bool true)]);
+    ] in
+    ws_send t.fd (Yojson.Safe.to_string eval_msg);
+    (* Try to read response with a short timeout *)
+    let got_result = ref false in
+    let is_complete = ref false in
+    let read_deadline = Unix.gettimeofday () +. 2.0 in
+    let rec read_loop () =
+      if !got_result || Unix.gettimeofday () >= read_deadline then ()
+      else
+        match Unix.select [t.fd] [] [] 0.5 with
+        | _ :: _, _, _ ->
+          (try
+             let opcode, payload = ws_recv t.fd in
+             if opcode = 1 then begin
+               let json = Yojson.Safe.from_string payload in
+               match Yojson.Safe.Util.member "id" json with
+               | `Int rid when rid = eval_id ->
+                 got_result := true;
+                 let result = Yojson.Safe.Util.(member "result" json) in
+                 (match Yojson.Safe.Util.(member "result" result |> member "value") with
+                  | `String "complete" -> is_complete := true
+                  | _ -> ())
+               | _ -> read_loop ()
+             end else read_loop ()
+           with _ -> ())
+        | _ -> ()
+    in
+    read_loop ();
+    if !is_complete then ()
+    else wait ()
   in
-  wait_for_load ()
+  wait ()
 
 (** Get the current page URL. *)
 let get_url t =
