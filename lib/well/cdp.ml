@@ -494,11 +494,14 @@ let try_eval ?(timeout = 2.0) t js =
     ("params", `Assoc [("expression", `String js);
                         ("returnByValue", `Bool true)]);
   ] in
+  if debug then Printf.eprintf "[CDP try_eval] send id=%d\n%!" id;
   ws_send t.fd (Yojson.Safe.to_string msg);
   let deadline = Unix.gettimeofday () +. timeout in
   let rec loop () =
     let remaining = deadline -. Unix.gettimeofday () in
-    if remaining <= 0.0 then None
+    if remaining <= 0.0 then (
+      if debug then Printf.eprintf "[CDP try_eval] deadline expired\n%!";
+      None)
     else if ws_has_data t.fd (min remaining 0.5) then begin
       (* Data available — read full frame with short timeout *)
       ws_frame_timeout := 3.0;
@@ -506,6 +509,11 @@ let try_eval ?(timeout = 2.0) t js =
         try
           let opcode, payload = ws_recv t.fd in
           ws_frame_timeout := 30.0;
+          if debug then begin
+            let preview = if String.length payload > 120
+              then String.sub payload 0 120 ^ "..." else payload in
+            Printf.eprintf "[CDP try_eval] frame opcode=%d payload=%s\n%!" opcode preview
+          end;
           match opcode with
           | 1 ->
             let json = Yojson.Safe.from_string payload in
@@ -519,13 +527,18 @@ let try_eval ?(timeout = 2.0) t js =
              | _ -> `Continue) (* skip events *)
           | 8 -> t.closed <- true; `Done None
           | _ -> `Continue
-        with _ -> ws_frame_timeout := 30.0; `Done None
+        with exn ->
+          ws_frame_timeout := 30.0;
+          if debug then Printf.eprintf "[CDP try_eval] frame read error: %s\n%!" (Printexc.to_string exn);
+          `Done None
       in
       match result with
       | `Done v -> v
       | `Continue -> loop ()
     end
-    else loop ()
+    else (
+      if debug then Printf.eprintf "[CDP try_eval] no data (remaining=%.1f)\n%!" remaining;
+      loop ())
   in
   loop ()
 
