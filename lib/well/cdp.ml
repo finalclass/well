@@ -394,14 +394,21 @@ let goto t url =
    | `String err ->
      raise (Cdp_error (Printf.sprintf "navigation error: %s" err))
    | _ -> ());
-  Unix.sleepf 0.05;
-  let rec wait n =
-    if n > 200 then raise Timeout; (* 200 * 50ms = 10s *)
-    match eval t "document.readyState" with
-    | `String "complete" -> ()
-    | _ -> Unix.sleepf 0.05; wait (n + 1)
+  (* Wait for Page.loadEventFired event (requires Page.enable) *)
+  let rec wait_for_load () =
+    let opcode, payload = ws_recv t.fd in
+    match opcode with
+    | 1 (* Text *) ->
+      let json = Yojson.Safe.from_string payload in
+      (match Yojson.Safe.Util.member "method" json with
+       | `String "Page.loadEventFired" -> ()
+       | _ -> wait_for_load ())
+    | 8 (* Close *) ->
+      t.closed <- true;
+      raise (Cdp_error "WebSocket closed during navigation")
+    | _ -> wait_for_load ()
   in
-  wait 0
+  wait_for_load ()
 
 (** Get the current page URL. *)
 let get_url t =
