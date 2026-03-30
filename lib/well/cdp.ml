@@ -180,11 +180,11 @@ open struct
        Sec-WebSocket-Version: 13\r\n\r\n"
       path port key in
     raw_write_all fd req;
+    rbuf := make_read_buf fd;
     let status = raw_read_line fd in
     if String.length status < 12
        || String.sub status 9 3 <> "101" then
       raise (Cdp_error ("WebSocket upgrade failed: " ^ status));
-    rbuf := make_read_buf fd;
     let rec skip () =
       let line = raw_read_line fd in
       if line <> "" then skip ()
