@@ -328,8 +328,12 @@ let launch ?(headless = true) () =
   let ic, oc = ws_connect port ws_path in
   let browser = { pid; port; user_data_dir } in
   let t = { browser; ic; oc; next_id = 1; closed = false; target_id } in
+  Printf.printf "[CDP] target: type=%s id=%s\n%!" (try Yojson.Safe.Util.(member "type" target |> to_string) with _ -> "?") target_id;
+  Printf.printf "[CDP] Page.enable...\n%!";
   ignore (send t "Page.enable" (`Assoc []));
+  Printf.printf "[CDP] Runtime.enable...\n%!";
   ignore (send t "Runtime.enable" (`Assoc []));
+  Printf.printf "[CDP] done\n%!";
   t
 
 (** Close the browser, kill the process, and clean up the temp directory. *)
