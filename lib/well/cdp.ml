@@ -293,22 +293,28 @@ let launch ?(headless = true) () =
   in
   Unix.close stderr_r;
   (* Give Chrome a moment to initialize *)
-  Printf.printf "[CDP] found port %d, sleeping 0.2s...\n%!" port;
   Unix.sleepf 0.2;
   (* Get first target *)
-  Printf.printf "[CDP] calling http_get /json...\n%!";
   let json_str = http_get port "/json" in
-  Printf.printf "[CDP] http_get returned %d bytes\n%!" (String.length json_str);
   let targets = Yojson.Safe.from_string json_str in
-  let target = match targets with
-    | `List (t :: _) -> t
-    | _ -> raise (Cdp_error "no targets found")
+  let target =
+    let target_list = match targets with
+      | `List l -> l
+      | _ -> raise (Cdp_error "no targets found")
+    in
+    (* Prefer "page" type targets over extension background pages *)
+    match List.find_opt (fun t ->
+      match Yojson.Safe.Util.member "type" t with
+      | `String "page" -> true | _ -> false
+    ) target_list with
+    | Some t -> t
+    | None -> match target_list with
+      | t :: _ -> t
+      | [] -> raise (Cdp_error "no targets found")
   in
-  Printf.printf "[CDP] parsing ws_url...\n%!";
   let ws_url =
     Yojson.Safe.Util.(member "webSocketDebuggerUrl" target |> to_string)
   in
-  Printf.printf "[CDP] ws_url=%s\n%!" ws_url;
   (* Extract path from ws://127.0.0.1:PORT/path *)
   let ws_path =
     let s = ws_url in
@@ -319,16 +325,11 @@ let launch ?(headless = true) () =
   let target_id =
     Yojson.Safe.Util.(member "id" target |> to_string)
   in
-  Printf.printf "[CDP] connecting websocket to %s...\n%!" ws_path;
   let ic, oc = ws_connect port ws_path in
-  Printf.printf "[CDP] ws connected!\n%!";
   let browser = { pid; port; user_data_dir } in
   let t = { browser; ic; oc; next_id = 1; closed = false; target_id } in
-  Printf.printf "[CDP] sending Page.enable...\n%!";
   ignore (send t "Page.enable" (`Assoc []));
-  Printf.printf "[CDP] sending Runtime.enable...\n%!";
   ignore (send t "Runtime.enable" (`Assoc []));
-  Printf.printf "[CDP] launch complete!\n%!";
   t
 
 (** Close the browser, kill the process, and clean up the temp directory. *)
