@@ -165,8 +165,14 @@ open struct
       ("params", params);
     ] in
     ws_send t.oc (Yojson.Safe.to_string msg);
+    let recv_count = ref 0 in
     let rec loop () =
+      incr recv_count;
+      if !recv_count <= 5 then
+        Printf.printf "[CDP send %s] waiting for response (id=%d), recv #%d...\n%!" meth id !recv_count;
       let opcode, payload = ws_recv t.ic in
+      if !recv_count <= 5 then
+        Printf.printf "[CDP send %s] got opcode=%d, len=%d\n%!" meth opcode (String.length payload);
       match opcode with
       | 1 (* Text *) ->
         let json = Yojson.Safe.from_string payload in
