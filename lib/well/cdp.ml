@@ -70,14 +70,14 @@ open struct
 
   (* ── Raw I/O helpers (unbuffered, select-based timeout) ──── *)
 
-  let ws_read_timeout = 30.0
+  let active_ws_timeout = ref 30.0
 
   let raw_read_bytes fd n =
     let buf = Bytes.create n in
     let rec loop off remaining =
       if remaining = 0 then buf
       else
-        match Unix.select [fd] [] [] ws_read_timeout with
+        match Unix.select [fd] [] [] !active_ws_timeout with
         | _ :: _, _, _ ->
           let got = Unix.read fd buf off remaining in
           if got = 0 then raise (Cdp_error "WebSocket connection closed");
@@ -474,13 +474,26 @@ let goto t url =
   in
   wait ()
 
+(** Try to evaluate JS with a short timeout. Returns None if Chrome is
+    unresponsive (e.g. during page navigation). *)
+let try_eval ?(timeout = 2.0) t js =
+  let saved = !active_ws_timeout in
+  active_ws_timeout := timeout;
+  let result =
+    try Some (eval t js)
+    with Timeout | Cdp_error _ -> None
+  in
+  active_ws_timeout := saved;
+  result
+
 (** Get the current page URL. *)
 let get_url t =
   match eval t "window.location.href" with
   | `String url -> url
   | _ -> ""
 
-(** Wait until the page body contains the given text. *)
+(** Wait until the page body contains the given text.
+    Resilient to temporary Chrome unresponsiveness during navigation. *)
 let wait_for_text ?(timeout = 10.0) t text =
   let deadline = Unix.gettimeofday () +. timeout in
   let js = Printf.sprintf
@@ -488,21 +501,22 @@ let wait_for_text ?(timeout = 10.0) t text =
   let rec loop () =
     if Unix.gettimeofday () >= deadline then
       raise (Cdp_error (Printf.sprintf "timeout waiting for text: %s" text));
-    match eval t js with
-    | `Bool true -> ()
+    match try_eval ~timeout:2.0 t js with
+    | Some (`Bool true) -> ()
     | _ -> Unix.sleepf 0.1; loop ()
   in
   loop ()
 
-(** Wait until a CSS selector matches an element on the page. *)
+(** Wait until a CSS selector matches an element on the page.
+    Resilient to temporary Chrome unresponsiveness during navigation. *)
 let wait_for_selector ?(timeout = 10.0) t selector =
   let deadline = Unix.gettimeofday () +. timeout in
   let js = Printf.sprintf "!!document.querySelector(%s)" (js_str selector) in
   let rec loop () =
     if Unix.gettimeofday () >= deadline then
       raise (Cdp_error (Printf.sprintf "timeout waiting for: %s" selector));
-    match eval t js with
-    | `Bool true -> ()
+    match try_eval ~timeout:2.0 t js with
+    | Some (`Bool true) -> ()
     | _ -> Unix.sleepf 0.1; loop ()
   in
   loop ()
