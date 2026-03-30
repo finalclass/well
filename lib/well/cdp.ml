@@ -293,9 +293,12 @@ let launch ?(headless = true) () =
   in
   Unix.close stderr_r;
   (* Give Chrome a moment to initialize *)
+  Printf.printf "[CDP] found port %d, sleeping 0.2s...\n%!" port;
   Unix.sleepf 0.2;
   (* Get first target *)
+  Printf.printf "[CDP] calling http_get /json...\n%!";
   let json_str = http_get port "/json" in
+  Printf.printf "[CDP] http_get returned %d bytes\n%!" (String.length json_str);
   let targets = Yojson.Safe.from_string json_str in
   let target = match targets with
     | `List (t :: _) -> t
