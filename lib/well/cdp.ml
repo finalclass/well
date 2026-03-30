@@ -36,6 +36,8 @@ open struct
 
   let js_str s = Yojson.Safe.to_string (`String s)
 
+  let debug = try ignore (Sys.getenv "CDP_DEBUG"); true with Not_found -> false
+
   (* ── Simple HTTP GET (localhost only) ──── *)
 
   let http_get port path =
@@ -202,8 +204,6 @@ open struct
     (opcode, Bytes.to_string data)
 
   (* ── CDP command/response ──── *)
-
-  let debug = try ignore (Sys.getenv "CDP_DEBUG"); true with Not_found -> false
 
   let send t meth params =
     let id = t.next_id in
