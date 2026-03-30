@@ -167,6 +167,7 @@ open struct
 
   let ws_connect port path =
     let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    Unix.setsockopt fd Unix.TCP_NODELAY true;
     Unix.connect fd (Unix.ADDR_INET (Unix.inet_addr_loopback, port));
     let key_bytes = Bytes.create 16 in
     for i = 0 to 15 do Bytes.set key_bytes i (Char.chr (Random.int 256)) done;
@@ -481,10 +482,12 @@ let try_eval ?(timeout = 2.0) t js =
       if debug then Printf.eprintf "[CDP try_eval] deadline expired\n%!";
       None)
     else if ws_has_data_buf !rbuf (min remaining 0.5) then begin
-      ws_frame_timeout := 30.0;
+      (* Use short frame timeout so partial frames don't block for 30s *)
+      ws_frame_timeout := (min remaining 3.0);
       let result =
         try
           let opcode, payload = ws_recv t.fd in
+          ws_frame_timeout := 30.0;
           if debug then begin
             let preview = if String.length payload > 120
               then String.sub payload 0 120 ^ "..." else payload in
@@ -567,20 +570,15 @@ let wait_for_text ?(timeout = 10.0) t text =
   let deadline = Unix.gettimeofday () +. timeout in
   let js = Printf.sprintf
     "document.body && document.body.innerText.includes(%s)" (js_str text) in
-  let fails = ref 0 in
   let rec loop () =
     if Unix.gettimeofday () >= deadline then
       raise (Cdp_error (Printf.sprintf "timeout waiting for text: %s" text));
     match try_eval ~timeout:2.0 t js with
-    | Some (`Bool true) -> fails := 0
-    | Some _ -> fails := 0; Unix.sleepf 0.1; loop ()
+    | Some (`Bool true) -> ()
+    | Some _ -> Unix.sleepf 0.1; loop ()
     | None ->
-      incr fails;
-      if !fails >= 3 then begin
-        fails := 0;
-        if debug then Printf.eprintf "[CDP] reconnecting after %d try_eval failures\n%!" 3;
-        (try reconnect t with _ -> Unix.sleepf 0.5);
-      end;
+      if debug then Printf.eprintf "[CDP] reconnecting after try_eval failure\n%!";
+      (try reconnect t with _ -> Unix.sleepf 0.5);
       Unix.sleepf 0.2; loop ()
   in
   loop ()
@@ -590,20 +588,15 @@ let wait_for_text ?(timeout = 10.0) t text =
 let wait_for_selector ?(timeout = 10.0) t selector =
   let deadline = Unix.gettimeofday () +. timeout in
   let js = Printf.sprintf "!!document.querySelector(%s)" (js_str selector) in
-  let fails = ref 0 in
   let rec loop () =
     if Unix.gettimeofday () >= deadline then
       raise (Cdp_error (Printf.sprintf "timeout waiting for: %s" selector));
     match try_eval ~timeout:2.0 t js with
-    | Some (`Bool true) -> fails := 0
-    | Some _ -> fails := 0; Unix.sleepf 0.1; loop ()
+    | Some (`Bool true) -> ()
+    | Some _ -> Unix.sleepf 0.1; loop ()
     | None ->
-      incr fails;
-      if !fails >= 3 then begin
-        fails := 0;
-        if debug then Printf.eprintf "[CDP] reconnecting after %d try_eval failures\n%!" 3;
-        (try reconnect t with _ -> Unix.sleepf 0.5);
-      end;
+      if debug then Printf.eprintf "[CDP] reconnecting after try_eval failure\n%!";
+      (try reconnect t with _ -> Unix.sleepf 0.5);
       Unix.sleepf 0.2; loop ()
   in
   loop ()
