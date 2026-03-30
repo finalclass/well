@@ -74,6 +74,9 @@ open struct
   let ws_connect port path =
     let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, port) in
     let ic, oc = Unix.open_connection addr in
+    (* Set receive timeout to prevent blocking forever *)
+    Unix.setsockopt_float (Unix.descr_of_in_channel ic)
+      Unix.SO_RCVTIMEO 30.0;
     let key_bytes = Bytes.create 16 in
     for i = 0 to 15 do Bytes.set key_bytes i (Char.chr (Random.int 256)) done;
     let key = Base64.encode_exn (Bytes.to_string key_bytes) in
