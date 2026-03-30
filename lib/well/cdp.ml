@@ -430,9 +430,7 @@ let launch ?(headless = true) () =
   in
   let fd = ws_connect port ws_path in
   let browser = { pid; port; user_data_dir } in
-  let t = { browser; fd; next_id = 1; closed = false; target_id } in
-  ignore (send t "Page.enable" (`Assoc []));
-  t
+  { browser; fd; next_id = 1; closed = false; target_id }
 
 (** Close the browser, kill the process, and clean up the temp directory. *)
 let close t =
@@ -458,7 +456,6 @@ let new_tab t =
     browser = t.browser; fd;
     next_id = 1; closed = false; target_id;
   } in
-  ignore (send tab "Page.enable" (`Assoc []));
   tab
 
 (** Try to evaluate JS with a short timeout. Returns None if Chrome is
