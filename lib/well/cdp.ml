@@ -169,10 +169,13 @@ open struct
     raw_write_all fd (Buffer.contents buf)
 
   let ws_recv fd =
+    if debug then Printf.eprintf "[CDP ws_recv] reading first byte...\n%!";
     let first = raw_read_byte fd in
+    if debug then Printf.eprintf "[CDP ws_recv] first=0x%02x\n%!" first;
     let _fin = first land 0x80 <> 0 in
     let opcode = first land 0x0F in
     let second = raw_read_byte fd in
+    if debug then Printf.eprintf "[CDP ws_recv] second=0x%02x opcode=%d len_indicator=%d\n%!" second opcode (second land 0x7F);
     let masked = second land 0x80 <> 0 in
     let len = second land 0x7F in
     let len =
