@@ -70,14 +70,12 @@ open struct
 
   (* ── Raw I/O helpers (unbuffered, select-based timeout) ──── *)
 
-  let active_ws_timeout = ref 30.0
-
   let raw_read_bytes fd n =
     let buf = Bytes.create n in
     let rec loop off remaining =
       if remaining = 0 then buf
       else
-        match Unix.select [fd] [] [] !active_ws_timeout with
+        match Unix.select [fd] [] [] 300.0 with
         | _ :: _, _, _ ->
           let got = Unix.read fd buf off remaining in
           if got = 0 then raise (Cdp_error "WebSocket connection closed");
@@ -88,6 +86,12 @@ open struct
 
   let raw_read_byte fd =
     Char.code (Bytes.get (raw_read_bytes fd 1) 0)
+
+  (** Check if data is available on the socket within the given timeout. *)
+  let ws_has_data fd timeout =
+    match Unix.select [fd] [] [] timeout with
+    | _ :: _, _, _ -> true
+    | _ -> false
 
   let raw_read_line fd =
     let buf = Buffer.create 256 in
@@ -475,16 +479,42 @@ let goto t url =
   wait ()
 
 (** Try to evaluate JS with a short timeout. Returns None if Chrome is
-    unresponsive (e.g. during page navigation). *)
+    unresponsive (e.g. during page navigation). Safe: never corrupts the
+    WebSocket stream (only times out between frames, not mid-frame). *)
 let try_eval ?(timeout = 2.0) t js =
-  let saved = !active_ws_timeout in
-  active_ws_timeout := timeout;
-  let result =
-    try Some (eval t js)
-    with Timeout | Cdp_error _ -> None
+  let id = t.next_id in
+  t.next_id <- t.next_id + 1;
+  let msg = `Assoc [
+    ("id", `Int id);
+    ("method", `String "Runtime.evaluate");
+    ("params", `Assoc [("expression", `String js);
+                        ("returnByValue", `Bool true)]);
+  ] in
+  ws_send t.fd (Yojson.Safe.to_string msg);
+  let deadline = Unix.gettimeofday () +. timeout in
+  let rec loop () =
+    let remaining = deadline -. Unix.gettimeofday () in
+    if remaining <= 0.0 then None
+    else if ws_has_data t.fd (min remaining 0.5) then begin
+      (* Data available — read full frame (won't timeout mid-frame) *)
+      let opcode, payload = ws_recv t.fd in
+      match opcode with
+      | 1 ->
+        let json = Yojson.Safe.from_string payload in
+        (match Yojson.Safe.Util.member "id" json with
+         | `Int rid when rid = id ->
+           (match Yojson.Safe.Util.member "error" json with
+            | `Null ->
+              let result = Yojson.Safe.Util.member "result" json in
+              Some Yojson.Safe.Util.(member "result" result |> member "value")
+            | _ -> None)
+         | _ -> loop ()) (* skip events *)
+      | 8 -> t.closed <- true; None
+      | _ -> loop ()
+    end
+    else loop ()
   in
-  active_ws_timeout := saved;
-  result
+  loop ()
 
 (** Get the current page URL. *)
 let get_url t =
