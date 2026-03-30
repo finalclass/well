@@ -476,8 +476,7 @@ let try_eval ?(timeout = 2.0) t js =
 let reconnect t =
   (try Unix.close t.fd with _ -> ());
   let ws_path = Printf.sprintf "/devtools/page/%s" t.target_id in
-  t.fd <- ws_connect t.browser.port ws_path;
-  ignore (send t "Page.enable" (`Assoc []))
+  t.fd <- ws_connect t.browser.port ws_path
 
 (** Navigate to a URL and wait for the page to fully load. *)
 let goto t url =
