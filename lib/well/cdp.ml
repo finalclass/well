@@ -500,21 +500,30 @@ let try_eval ?(timeout = 2.0) t js =
     let remaining = deadline -. Unix.gettimeofday () in
     if remaining <= 0.0 then None
     else if ws_has_data t.fd (min remaining 0.5) then begin
-      (* Data available — read full frame (won't timeout mid-frame) *)
-      let opcode, payload = ws_recv t.fd in
-      match opcode with
-      | 1 ->
-        let json = Yojson.Safe.from_string payload in
-        (match Yojson.Safe.Util.member "id" json with
-         | `Int rid when rid = id ->
-           (match Yojson.Safe.Util.member "error" json with
-            | `Null ->
-              let result = Yojson.Safe.Util.member "result" json in
-              Some Yojson.Safe.Util.(member "result" result |> member "value")
-            | _ -> None)
-         | _ -> loop ()) (* skip events *)
-      | 8 -> t.closed <- true; None
-      | _ -> loop ()
+      (* Data available — read full frame with short timeout *)
+      ws_frame_timeout := 3.0;
+      let result =
+        try
+          let opcode, payload = ws_recv t.fd in
+          ws_frame_timeout := 30.0;
+          match opcode with
+          | 1 ->
+            let json = Yojson.Safe.from_string payload in
+            (match Yojson.Safe.Util.member "id" json with
+             | `Int rid when rid = id ->
+               (match Yojson.Safe.Util.member "error" json with
+                | `Null ->
+                  let r = Yojson.Safe.Util.member "result" json in
+                  `Done (Some Yojson.Safe.Util.(member "result" r |> member "value"))
+                | _ -> `Done None)
+             | _ -> `Continue) (* skip events *)
+          | 8 -> t.closed <- true; `Done None
+          | _ -> `Continue
+        with _ -> ws_frame_timeout := 30.0; `Done None
+      in
+      match result with
+      | `Done v -> v
+      | `Continue -> loop ()
     end
     else loop ()
   in
