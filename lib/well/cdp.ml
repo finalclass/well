@@ -504,11 +504,10 @@ let try_eval ?(timeout = 2.0) t js =
       None)
     else if ws_has_data t.fd (min remaining 0.5) then begin
       (* Data available — read full frame with short timeout *)
-      ws_frame_timeout := 3.0;
+      ws_frame_timeout := 30.0;
       let result =
         try
           let opcode, payload = ws_recv t.fd in
-          ws_frame_timeout := 30.0;
           if debug then begin
             let preview = if String.length payload > 120
               then String.sub payload 0 120 ^ "..." else payload in
