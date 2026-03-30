@@ -70,12 +70,14 @@ open struct
 
   (* ── Raw I/O helpers (unbuffered, select-based timeout) ──── *)
 
+  let ws_frame_timeout = ref 30.0
+
   let raw_read_bytes fd n =
     let buf = Bytes.create n in
     let rec loop off remaining =
       if remaining = 0 then buf
       else
-        match Unix.select [fd] [] [] 300.0 with
+        match Unix.select [fd] [] [] !ws_frame_timeout with
         | _ :: _, _, _ ->
           let got = Unix.read fd buf off remaining in
           if got = 0 then raise (Cdp_error "WebSocket connection closed");
@@ -428,13 +430,13 @@ let goto t url =
   let rec wait () =
     if Unix.gettimeofday () >= deadline then raise Timeout;
     Unix.sleepf 0.2;
-    (* Drain any pending frames first *)
+    (* Drain any pending frames with short timeout *)
     let rec drain () =
-      match Unix.select [t.fd] [] [] 0.0 with
-      | _ :: _, _, _ ->
-        (try ignore (ws_recv t.fd); drain ()
-         with _ -> ())
-      | _ -> ()
+      if ws_has_data t.fd 0.0 then begin
+        ws_frame_timeout := 2.0;
+        (try ignore (ws_recv t.fd); drain () with _ -> ());
+        ws_frame_timeout := 30.0
+      end
     in
     drain ();
     (* Try eval with a short timeout *)
@@ -457,7 +459,9 @@ let goto t url =
         match Unix.select [t.fd] [] [] 0.5 with
         | _ :: _, _, _ ->
           (try
+             ws_frame_timeout := 2.0;
              let opcode, payload = ws_recv t.fd in
+             ws_frame_timeout := 30.0;
              if opcode = 1 then begin
                let json = Yojson.Safe.from_string payload in
                match Yojson.Safe.Util.member "id" json with
