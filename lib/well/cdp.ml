@@ -184,6 +184,8 @@ open struct
 
   (* ── CDP command/response ──── *)
 
+  let debug = try ignore (Sys.getenv "CDP_DEBUG"); true with Not_found -> false
+
   let send t meth params =
     let id = t.next_id in
     t.next_id <- t.next_id + 1;
@@ -192,9 +194,15 @@ open struct
       ("method", `String meth);
       ("params", params);
     ] in
+    if debug then Printf.eprintf "[CDP] send id=%d method=%s\n%!" id meth;
     ws_send t.oc (Yojson.Safe.to_string msg);
     let rec loop () =
       let opcode, payload = ws_recv t.fd in
+      if debug then begin
+        let preview = if String.length payload > 200
+          then String.sub payload 0 200 ^ "..." else payload in
+        Printf.eprintf "[CDP] recv opcode=%d payload=%s\n%!" opcode preview
+      end;
       match opcode with
       | 1 (* Text *) ->
         let json = Yojson.Safe.from_string payload in
@@ -397,6 +405,11 @@ let goto t url =
   (* Wait for Page.loadEventFired event (requires Page.enable) *)
   let rec wait_for_load () =
     let opcode, payload = ws_recv t.fd in
+    if debug then begin
+      let preview = if String.length payload > 200
+        then String.sub payload 0 200 ^ "..." else payload in
+      Printf.eprintf "[CDP goto] recv opcode=%d payload=%s\n%!" opcode preview
+    end;
     match opcode with
     | 1 (* Text *) ->
       let json = Yojson.Safe.from_string payload in
