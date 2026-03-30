@@ -45,13 +45,27 @@ open struct
     Printf.fprintf oc "GET %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nConnection: close\r\n\r\n" path port;
     flush oc;
     let _ = input_line ic in (* status *)
-    let rec skip_headers () =
-      if String.trim (input_line ic) <> "" then skip_headers ()
+    let content_length = ref (-1) in
+    let rec read_headers () =
+      let line = String.trim (input_line ic) in
+      if line <> "" then begin
+        (let prefix = "content-length:" in
+         let llow = String.lowercase_ascii line in
+         let plen = String.length prefix in
+         if String.length llow >= plen && String.sub llow 0 plen = prefix then
+           content_length := int_of_string (String.trim (String.sub line plen (String.length line - plen))));
+        read_headers ()
+      end
     in
-    skip_headers ();
+    read_headers ();
     let buf = Buffer.create 4096 in
-    (try while true do Buffer.add_char buf (input_char ic) done
-     with End_of_file -> ());
+    if !content_length >= 0 then begin
+      let bytes = Bytes.create !content_length in
+      really_input ic bytes 0 !content_length;
+      Buffer.add_bytes buf bytes
+    end else
+      (try while true do Buffer.add_char buf (input_char ic) done
+       with End_of_file -> ());
     close_in_noerr ic;
     Buffer.contents buf
 
