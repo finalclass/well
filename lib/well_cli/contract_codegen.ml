@@ -540,7 +540,7 @@ let rec ts_encode ~local_module expr = function
   | List inner ->
     let item = ts_encode ~local_module "v" inner in
     if item = "v" then expr
-    else Printf.sprintf "%s.map(v => %s)" expr item
+    else Printf.sprintf "%s.map((v: any) => %s)" expr item
   | Optional inner ->
     let enc = ts_encode ~local_module "v" inner in
     if enc = "v" then expr
@@ -565,10 +565,10 @@ let rec ts_decode ~local_module expr = function
       Printf.sprintf "%s.decode%s(%s as unknown[])" module_name msg_name expr
   | List inner ->
     let item = ts_decode ~local_module "v" inner in
-    Printf.sprintf "(%s as unknown[]).map(v => %s)" expr item
+    Printf.sprintf "(%s as unknown[]).map((v: any) => %s)" expr item
   | Optional inner ->
     let dec = ts_decode ~local_module "v" inner in
-    Printf.sprintf "%s === null ? null : (v => %s)(%s)" expr dec expr
+    Printf.sprintf "%s === null ? null : ((v: any) => %s)(%s)" expr dec expr
 
 (* ── Generate TS interface + encode/decode for a struct msg ───────── *)
 

@@ -261,7 +261,9 @@ let launch ?(headless = true) () =
       "about:blank";
     ]) in
   let stderr_r, stderr_w = Unix.pipe () in
-  let pid = Unix.create_process chrome args Unix.stdin Unix.stdout stderr_w in
+  let dev_null = Unix.openfile "/dev/null" [Unix.O_RDWR] 0 in
+  let pid = Unix.create_process chrome args dev_null dev_null stderr_w in
+  Unix.close dev_null;
   Unix.close stderr_w;
   (* Parse "DevTools listening on ws://127.0.0.1:PORT/..." from stderr *)
   let port =
