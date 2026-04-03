@@ -199,6 +199,103 @@ let _impl =
          ~body:(_ : string) (_ : string) : fetch_response ->
       failwith "Well.fetch: must be called within Well.run")
 
+(** Make an HTTP request with an explicit [net] handle. Does not require [Well.run]. *)
+let fetch_with_net ~net ?(method_ = "GET") ?(headers = []) ?(body = "") url =
+  let parsed = parse_url url in
+  let req_str =
+    build_request ~method_ ~host:parsed.p_host ~port:parsed.p_port
+      ~path:parsed.p_path ~headers ~body
+  in
+  let addr = resolve net parsed.p_host parsed.p_port in
+  Eio.Switch.run @@ fun sw ->
+  let tcp_flow = Eio.Net.connect ~sw net addr in
+  let send_and_receive flow =
+    Eio.Flow.copy_string req_str flow;
+    let reader = Eio.Buf_read.of_flow ~max_size:(10 * 1024 * 1024) flow in
+    let status = parse_status reader in
+    let resp_hdrs = parse_headers reader in
+    let body = read_body ~method_ reader resp_hdrs in
+    { status; headers = resp_hdrs; body }
+  in
+  if parsed.p_scheme = "https" then (
+    let tls_cfg = tls_config () in
+    let host =
+      Option.bind
+        (Domain_name.of_string parsed.p_host |> Result.to_option)
+        (fun dn -> Domain_name.host dn |> Result.to_option)
+    in
+    let tls_flow = Tls_eio.client_of_flow ?host tls_cfg tcp_flow in
+    send_and_receive tls_flow)
+  else send_and_receive tcp_flow
+
+(** Make a streaming HTTP request with an explicit [net] handle.
+    Body chunks are delivered via [on_data] callback as they arrive.
+    Returns [(status, headers)]. Does not require [Well.run]. *)
+let fetch_stream_with_net ~net ?(method_ = "POST") ?(headers = []) ?(body = "")
+    ~on_data url =
+  let parsed = parse_url url in
+  let req_str =
+    build_request ~method_ ~host:parsed.p_host ~port:parsed.p_port
+      ~path:parsed.p_path ~headers ~body
+  in
+  let addr = resolve net parsed.p_host parsed.p_port in
+  Eio.Switch.run @@ fun sw ->
+  let tcp_flow = Eio.Net.connect ~sw net addr in
+  let send_and_stream flow =
+    Eio.Flow.copy_string req_str flow;
+    let reader = Eio.Buf_read.of_flow ~max_size:(10 * 1024 * 1024) flow in
+    let status = parse_status reader in
+    let resp_hdrs = parse_headers reader in
+    let is_chunked =
+      match List.assoc_opt "transfer-encoding" resp_hdrs with
+      | Some v -> String.lowercase_ascii (String.trim v) = "chunked"
+      | None -> false
+    in
+    if is_chunked then begin
+      let rec loop () =
+        let line = read_line_crlf reader in
+        let size_str =
+          match String.index_opt line ';' with
+          | Some i -> String.sub line 0 i
+          | None -> line
+        in
+        match int_of_string_opt ("0x" ^ String.trim size_str) with
+        | None | Some 0 -> ()
+        | Some n ->
+          let chunk = Eio.Buf_read.take n reader in
+          on_data chunk;
+          (try ignore (read_line_crlf reader) with _ -> ());
+          loop ()
+      in
+      loop ()
+    end else begin
+      (try
+        while true do
+          let c = Eio.Buf_read.any_char reader in
+          let buf = Buffer.create 4096 in
+          Buffer.add_char buf c;
+          (try
+            let avail = Eio.Buf_read.buffered_bytes reader in
+            if avail > 0 then
+              Buffer.add_string buf (Eio.Buf_read.take avail reader)
+          with _ -> ());
+          on_data (Buffer.contents buf)
+        done
+      with End_of_file | Eio.Io _ -> ())
+    end;
+    (status, resp_hdrs)
+  in
+  if parsed.p_scheme = "https" then (
+    let tls_cfg = tls_config () in
+    let host =
+      Option.bind
+        (Domain_name.of_string parsed.p_host |> Result.to_option)
+        (fun dn -> Domain_name.host dn |> Result.to_option)
+    in
+    let tls_flow = Tls_eio.client_of_flow ?host tls_cfg tcp_flow in
+    send_and_stream tls_flow)
+  else send_and_stream tcp_flow
+
 (** Make an HTTP request. Supports HTTP and HTTPS with system CA certificates. Must be called within [Well.run]. *)
 let fetch ?(method_ = "GET") ?(headers = []) ?(body = "") url =
   !_impl ~method_ ~headers ~body url

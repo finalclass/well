@@ -105,6 +105,12 @@ type fetch_response = Fetch.fetch_response = {
 (** Make an HTTP request. Supports HTTP and HTTPS with system CA certificates. Must be called within [Well.run]. *)
 let fetch = Fetch.fetch
 
+(** Make an HTTP request with an explicit [net] handle. Does not require [Well.run]. *)
+let fetch_with_net = Fetch.fetch_with_net
+
+(** Make a streaming HTTP request with an explicit [net] handle. Body delivered via callback. *)
+let fetch_stream_with_net = Fetch.fetch_stream_with_net
+
 (* ── Re-exports: Channel ─────────────────────────────────────────── *)
 
 (** Result of a successful channel join: topics to subscribe and optional initial state. *)
