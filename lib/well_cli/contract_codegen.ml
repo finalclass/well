@@ -141,7 +141,7 @@ let generate_struct_module ~local_module msg_name props =
   | [] ->
     (* Empty struct → type t = unit *)
     p "module %s = struct\n" msg_name;
-    p "  type t = unit\n\n";
+    p "  type t = unit [@@deriving show]\n\n";
     p "  let make () = ()\n\n";
     p "  let to_wire (() : t) : Yojson.Safe.t = `List []\n\n";
     p "  let of_wire (_wire : Yojson.Safe.t) : t = ()\n";
@@ -157,7 +157,7 @@ let generate_struct_module ~local_module msg_name props =
     let ty = if prop.optional then ty ^ " option" else ty in
     p "    %s : %s;\n" prop.name ty
   ) props;
-  p "  }\n\n";
+  p "  } [@@deriving show]\n\n";
 
   (* make *)
   p "  let make";
@@ -233,7 +233,7 @@ let generate_variant_module ~local_module msg_name ctors =
     | Prim Void -> p "    | %s\n" ctor.name
     | ti -> p "    | %s of %s\n" ctor.name (type_to_ocaml ~local_module ti)
   ) ctors;
-  p "\n";
+  p "  [@@deriving show]\n\n";
 
   (* to_wire *)
   p "  let to_wire (v : t) : Yojson.Safe.t =\n";
@@ -500,6 +500,7 @@ let generate_dune modules ~output_dir =
   p "(library\n";
   p " (name %s)\n" lib_name;
   p " (libraries well.core yojson)\n";
+  p " (preprocess (pps ppx_deriving.show))\n";
   p " (modules %s))\n" (String.concat " " module_names);
   Buffer.contents buf
 

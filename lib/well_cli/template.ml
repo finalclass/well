@@ -19,7 +19,7 @@ let dune_project name =
  (version 0.0.1)
  (allow_empty)
  (synopsis "A well web application")
- (depends
+  (depends
   (ocaml (>= 5.4))
   mlx
   well
@@ -27,6 +27,8 @@ let dune_project name =
   eio_main
   yojson
   sqlite3
+  ppx_deriving
+  ppx_deriving.show
   ppx_deriving_yojson))
 |}
     name
@@ -1691,7 +1693,7 @@ module Note = struct
     id : int;
     title : string;
     body : string;
-  }
+  } [@@deriving show]
 
   let make ~id ~title ~body () =
     { id; title; body }
@@ -1717,7 +1719,7 @@ end
 module ListReq = struct
   type t = {
     limit : int;
-  }
+  } [@@deriving show]
 
   let make ~limit () =
     { limit }
@@ -1739,7 +1741,7 @@ end
 module IdReq = struct
   type t = {
     id : int;
-  }
+  } [@@deriving show]
 
   let make ~id () =
     { id }
@@ -1762,7 +1764,7 @@ module CreateReq = struct
   type t = {
     title : string;
     body : string;
-  }
+  } [@@deriving show]
 
   let make ~title ~body () =
     { title; body }
@@ -1786,7 +1788,7 @@ end
 module Ok = struct
   type t = {
     ok : bool;
-  }
+  } [@@deriving show]
 
   let make ~ok () =
     { ok }
@@ -1808,7 +1810,7 @@ end
 module NoteList = struct
   type t = {
     notes : Note.t list;
-  }
+  } [@@deriving show]
 
   let make ~notes () =
     { notes }
@@ -1895,7 +1897,7 @@ module Task = struct
     id : int;
     title : string;
     completed : bool;
-  }
+  } [@@deriving show]
 
   let make ~id ~title ~completed () =
     { id; title; completed }
@@ -1921,7 +1923,7 @@ end
 module ListReq = struct
   type t = {
     limit : int;
-  }
+  } [@@deriving show]
 
   let make ~limit () =
     { limit }
@@ -1943,7 +1945,7 @@ end
 module IdReq = struct
   type t = {
     id : int;
-  }
+  } [@@deriving show]
 
   let make ~id () =
     { id }
@@ -1965,7 +1967,7 @@ end
 module CreateReq = struct
   type t = {
     title : string;
-  }
+  } [@@deriving show]
 
   let make ~title () =
     { title }
@@ -1989,7 +1991,7 @@ module UpdateReq = struct
     id : int;
     title : string option;
     completed : bool option;
-  }
+  } [@@deriving show]
 
   let make ~id ?title ?completed () =
     { id; title = (match title with Some v -> Some v | None -> None); completed = (match completed with Some v -> Some v | None -> None) }
@@ -2015,7 +2017,7 @@ end
 module Ok = struct
   type t = {
     ok : bool;
-  }
+  } [@@deriving show]
 
   let make ~ok () =
     { ok }
@@ -2037,7 +2039,7 @@ end
 module TaskList = struct
   type t = {
     tasks : Task.t list;
-  }
+  } [@@deriving show]
 
   let make ~tasks () =
     { tasks }
@@ -2133,7 +2135,7 @@ let contract_task_manager_ml =
 module AddReq = struct
   type t = {
     title : string;
-  }
+  } [@@deriving show]
 
   let make ~title () =
     { title }
@@ -2155,7 +2157,7 @@ end
 module ToggleReq = struct
   type t = {
     id : int;
-  }
+  } [@@deriving show]
 
   let make ~id () =
     { id }
@@ -2177,7 +2179,7 @@ end
 module DeleteReq = struct
   type t = {
     id : int;
-  }
+  } [@@deriving show]
 
   let make ~id () =
     { id }
@@ -2199,7 +2201,7 @@ end
 module TaskListRes = struct
   type t = {
     tasks : Task_access.Task.t list;
-  }
+  } [@@deriving show]
 
   let make ~tasks () =
     { tasks }
@@ -2221,7 +2223,7 @@ end
 module TaskRes = struct
   type t = {
     task : Task_access.Task.t;
-  }
+  } [@@deriving show]
 
   let make ~task () =
     { task }
@@ -2243,7 +2245,7 @@ end
 module StatusRes = struct
   type t = {
     ok : bool;
-  }
+  } [@@deriving show]
 
   let make ~ok () =
     { ok }
@@ -2331,7 +2333,8 @@ let contract_dune_file =
   {|(library
  (name contract)
  (wrapped false)
- (libraries well.core yojson))
+ (libraries well.core yojson)
+ (preprocess (pps ppx_deriving.show)))
 
 (rule
  (targets note_access.ml task_access.ml task_manager.ml)
