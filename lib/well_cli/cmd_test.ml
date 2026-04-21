@@ -4,6 +4,19 @@ let run args =
   let watch = List.mem "--watch" args || List.mem "-w" args in
   let ci = List.mem "--ci" args in
   let update_snapshots = List.mem "--update-snapshots" args || List.mem "-u" args in
+  let jobs =
+    let rec find = function
+      | "--jobs" :: value :: _ | "-j" :: value :: _ ->
+          (match int_of_string_opt value with
+           | Some n when n > 0 -> Some n
+           | _ ->
+               Printf.eprintf "\027[31m--jobs expects a positive integer\027[0m\n";
+               exit 1)
+      | _ :: rest -> find rest
+      | [] -> None
+    in
+    find args
+  in
   let filter =
     let rec find = function
       | "--filter" :: pat :: _ | "-f" :: pat :: _ -> Some pat
@@ -18,7 +31,12 @@ let run args =
     Unix.putenv "WELL_UPDATE_SNAPSHOTS" "1";
   (* Build first *)
   if watch then begin
-    let cmd = Printf.sprintf "%s test -w" dune in
+    let jobs_arg =
+      match jobs with
+      | Some n -> Printf.sprintf " -j%d" n
+      | None -> ""
+    in
+    let cmd = Printf.sprintf "%s test -w%s" dune jobs_arg in
     exit (Sys.command cmd)
   end;
   let build_code = Sys.command (Printf.sprintf "%s build 2>&1" dune) in
@@ -41,20 +59,27 @@ let run args =
     Printf.printf "\027[33mNo test files found (*_test.ml)\027[0m\n";
     exit 0
   end;
-  Printf.printf "\027[1mRunning %d test file(s)...\027[0m\n\n" (List.length test_files);
-  let failed = Well_test_runner.run_parallel ~ci ~update_snapshots test_files in
+  let jobs =
+    match jobs with
+    | Some n -> min n (List.length test_files)
+    | None -> List.length test_files
+  in
+  Printf.printf "\027[1mRunning %d test file(s) with %d job(s)...\027[0m\n\n%!"
+    (List.length test_files) jobs;
+  let failed = Well_test_runner.run_parallel ~ci ~update_snapshots ~jobs test_files in
   exit failed
 
 let cmd : Command.t = {
   name = "test";
   summary = "Run tests";
-  usage = "test [--watch] [--filter <pattern>] [--ci] [--update-snapshots]";
+  usage = "test [--watch] [--filter <pattern>] [--jobs <n>] [--ci] [--update-snapshots]";
   description =
     "Discover and run all *_test.ml test files.\n\
      \n\
      Options:\n\
      \  --watch, -w              Watch for changes and rerun\n\
      \  --filter, -f PAT         Only run tests matching pattern\n\
+     \  --jobs, -j N             Run up to N test files concurrently\n\
      \  --ci                     CI-friendly output format\n\
      \  --update-snapshots, -u   Update snapshot files";
   run;

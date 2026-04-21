@@ -4678,7 +4678,7 @@ The server also listens on port 80 for ACME challenges and HTTP→HTTPS redirect
 well init <name>              # Scaffold new project
 well build                    # Production build (dune + patchelf + bundle .so → _release/)
 well release                  # Build + create .tar.gz archive for deployment
-well test [-w] [-f pat] [-u]  # Run tests (watch, filter, update snapshots)
+well test [-w] [-f pat] [--jobs n] [-u]  # Run tests (watch, filter, concurrency, snapshots)
 well docs [--open] [-o dir]   # Generate HTML documentation from (** *) comments
 well contract build [dir]     # Generate code from TOML contracts
 well db diff                  # Show pending schema migrations

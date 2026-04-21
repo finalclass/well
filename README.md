@@ -96,7 +96,7 @@ let () = Well.run ()
 
 ```bash
 well init <name>         # new project
-well test [-w] [-f pat]  # run tests (watch, filter)
+well test [-w] [-f pat] [--jobs n]  # run tests (watch, filter, concurrency)
 well docs [--open]       # generate HTML documentation
 well contract build .    # generate from TOML contracts
 well db diff             # show pending migrations
