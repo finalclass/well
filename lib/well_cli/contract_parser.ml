@@ -2,6 +2,8 @@
 
 open Contract_types
 
+exception Contract_error of string
+
 (* ── OCaml keyword escaping ───────────────────────────────────────── *)
 
 let ocaml_keywords =
@@ -96,6 +98,11 @@ let module_name_of_file path =
   let name = Filename.chop_extension base in
   String.capitalize_ascii name
 
+let parse_toml_file path =
+  match Otoml.Parser.from_file_result path with
+  | Ok toml -> toml
+  | Error msg -> raise (Contract_error (Printf.sprintf "%s: %s" path msg))
+
 let collect_available_msgs dir =
   let files = Sys.readdir dir |> Array.to_list in
   let toml_files =
@@ -104,7 +111,7 @@ let collect_available_msgs dir =
   in
   List.concat_map (fun path ->
     let module_name = module_name_of_file path in
-    let toml = Otoml.Parser.from_file path in
+    let toml = parse_toml_file path in
     match Otoml.find_opt toml Otoml.get_table ["msg"] with
     | Some msg_pairs ->
       List.map (fun (name, _) -> module_name ^ "." ^ name) msg_pairs
@@ -264,7 +271,7 @@ let topo_sort ~module_name (msgs : msg list) =
 
 let parse_file ~available_msgs path =
   let module_name = module_name_of_file path in
-  let toml = Otoml.Parser.from_file path in
+  let toml = parse_toml_file path in
   let rpcs = parse_rpcs toml in
   let service = if rpcs = [] then None else Some { rpcs } in
   let msgs = parse_msgs ~module_name ~available_msgs toml in

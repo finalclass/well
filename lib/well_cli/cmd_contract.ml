@@ -31,7 +31,12 @@ let run args =
     Printf.eprintf "Error: contract directory '%s' not found\n" contract_dir;
     exit 1
   end;
-  let modules = Contract_parser.parse_all contract_dir in
+  let modules =
+    try Contract_parser.parse_all contract_dir with
+    | Contract_parser.Contract_error msg ->
+      Printf.eprintf "Error: failed to parse contract TOML\n%s\n" msg;
+      exit 1
+  in
   if modules = [] then begin
     Printf.printf "No contract files found in %s\n" contract_dir;
     exit 0
@@ -52,13 +57,11 @@ let run args =
     in
     Printf.printf "  %s (%d msgs, %d rpcs)\n" path msg_count rpc_count
   ) modules;
-  (* Generate OCaml dune file only if it doesn't exist *)
+  (* Always refresh the generated dune file to keep preprocess/libraries in sync *)
   let dune_path = Filename.concat ocaml_dir "dune" in
-  if not (Sys.file_exists dune_path) then begin
-    let dune_content = Contract_codegen.generate_dune modules ~output_dir:ocaml_dir in
-    write_file dune_path dune_content;
-    Printf.printf "  %s\n" dune_path
-  end;
+  let dune_content = Contract_codegen.generate_dune modules ~output_dir:ocaml_dir in
+  write_file dune_path dune_content;
+  Printf.printf "  %s\n" dune_path;
   (* Generate TypeScript files — silently skip if dir creation fails *)
   (try
      List.iter (fun (cm : Contract_types.contract_module) ->
