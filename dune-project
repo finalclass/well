@@ -25,5 +25,7 @@
   base64
   zarith
   ppxlib
+  ppx_deriving
+  ppx_deriving_yojson
   otoml
   camlzip))
