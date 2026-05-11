@@ -1,6 +1,12 @@
 (* well_test_runner — Autodiscovery and parallel test execution *)
 
 let find_test_files ?(dir = ".") () =
+  let normalize path =
+    if String.length path >= 2 && String.sub path 0 2 = "./" then
+      String.sub path 2 (String.length path - 2)
+    else
+      path
+  in
   let rec walk acc path =
     if Sys.is_directory path then begin
       let entries = Sys.readdir path in
@@ -14,7 +20,7 @@ let find_test_files ?(dir = ".") () =
     end else begin
       let basename = Filename.basename path in
       if Str.string_match (Str.regexp ".*_test\\.ml$") basename 0 then
-        path :: acc
+        normalize path :: acc
       else
         acc
     end
@@ -36,7 +42,7 @@ let run_test_file ~ci ~update_snapshots test_file =
       else ""
     in
     let ci_flag = if ci then " --ci" else "" in
-    let cmd = Printf.sprintf "%s%s%s" env_prefix exe ci_flag in
+    let cmd = Printf.sprintf "%s%s%s" env_prefix (Filename.quote exe) ci_flag in
     let code = Sys.command cmd in
     (test_file, code)
   end

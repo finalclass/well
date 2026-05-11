@@ -8,6 +8,9 @@
 let quote_id name =
   "\"" ^ String.concat "\"\"" (String.split_on_char '"' name) ^ "\""
 
+let quote_string value =
+  "'" ^ String.concat "''" (String.split_on_char '\'' value) ^ "'"
+
 (* ── Schema types ─────────────────────────────────────────────────── *)
 
 (** A column definition in a table schema. *)
@@ -37,38 +40,44 @@ let register_table tbl =
 
 (** Check whether a table exists in the database. *)
 let table_exists db table_name =
-  let sql = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?" in
-  let stmt = Sqlite3.prepare db sql in
-  ignore (Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT table_name));
-  let found = Sqlite3.step stmt = Sqlite3.Rc.ROW in
-  ignore (Sqlite3.finalize stmt);
-  found
+  let sql =
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name="
+    ^ quote_string table_name
+  in
+  let found = ref false in
+  let rc = Sqlite3.exec db sql ~cb:(fun _row _headers -> found := true) in
+  match rc with
+  | Sqlite3.Rc.OK -> !found
+  | rc -> failwith ("Well.Db.table_exists: " ^ Sqlite3.Rc.to_string rc)
 
 (** Introspect a table's columns via [PRAGMA table_info]. *)
 let get_db_columns db table_name =
   let sql = Printf.sprintf "PRAGMA table_info(%s)" (quote_id table_name) in
-  let stmt = Sqlite3.prepare db sql in
   let cols = ref [] in
-  let rec loop () =
-    match Sqlite3.step stmt with
-    | Sqlite3.Rc.ROW ->
-        let col_name = match Sqlite3.column stmt 1 with
-          | Sqlite3.Data.TEXT s -> s | _ -> "" in
-        let col_type = match Sqlite3.column stmt 2 with
-          | Sqlite3.Data.TEXT s -> s | _ -> "TEXT" in
-        let notnull = match Sqlite3.column stmt 3 with
-          | Sqlite3.Data.INT i -> Int64.to_int i <> 0 | _ -> false in
-        let pk = match Sqlite3.column stmt 5 with
-          | Sqlite3.Data.INT i -> Int64.to_int i <> 0 | _ -> false in
-        cols := { cname = col_name;
-                  sqlite_type = String.uppercase_ascii col_type;
-                  primary = pk;
-                  nullable = not notnull && not pk } :: !cols;
-        loop ()
-    | _ -> ()
+  let text row index default =
+    match row.(index) with
+    | Some value -> value
+    | None -> default
   in
-  loop ();
-  ignore (Sqlite3.finalize stmt);
+  let int_flag row index =
+    match row.(index) with
+    | Some value -> (try int_of_string value <> 0 with Failure _ -> false)
+    | None -> false
+  in
+  let rc =
+    Sqlite3.exec db sql ~cb:(fun row _headers ->
+      let col_name = text row 1 "" in
+      let col_type = text row 2 "TEXT" in
+      let notnull = int_flag row 3 in
+      let pk = int_flag row 5 in
+      cols := { cname = col_name;
+                sqlite_type = String.uppercase_ascii col_type;
+                primary = pk;
+                nullable = not notnull && not pk } :: !cols)
+  in
+  (match rc with
+   | Sqlite3.Rc.OK -> ()
+   | rc -> failwith ("Well.Db.get_db_columns: " ^ Sqlite3.Rc.to_string rc));
   List.rev !cols
 
 (* ── SQL generation from schema ───────────────────────────────────── *)
