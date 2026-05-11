@@ -1,0 +1,34 @@
+(executable
+ (name pp)
+ (package well)
+ (public_name well-mlx-pp)
+ (modules :standard \ mlx_shim)
+ (flags
+  (:standard -w -9-67 -open Astlib -open Astlib.Ast_501 -open Mlx_shim))
+ (libraries ppxlib ocaml-compiler-libs.shadow menhirLib mlx_shim))
+
+(library
+ (name mlx_shim)
+ (package well)
+ (modules mlx_shim)
+ (flags
+  (:standard -w -9-67 -open Astlib -open Astlib.Ast_501))
+ (libraries ppxlib ocaml-compiler-libs.shadow))
+
+(ocamllex lexer)
+
+(menhir
+ (flags
+  --lalr
+  --dump
+  --require-aliases
+  -lg=1
+  -la=1
+  --fixed-exception
+  --table
+  --strategy
+  simplified)
+ (enabled_if
+  (<> %{profile} "release"))
+ (mode promote)
+ (modules parser))

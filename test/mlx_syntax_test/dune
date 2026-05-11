@@ -1,0 +1,3 @@
+(test
+ (name mlx_syntax_test)
+ (libraries well.test well.html well))

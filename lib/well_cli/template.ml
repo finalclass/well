@@ -8,7 +8,7 @@ let dune_project name =
   (extension mlx)
   (merlin_reader mlx)
   (preprocess
-   (run mlx-pp %%{input-file}))))
+   (run well-mlx-pp %%{input-file}))))
 
 (pin
  (url "git+ssh://git@github.com/finalclass/well.git")

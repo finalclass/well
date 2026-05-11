@@ -1,0 +1,27 @@
+open Well_test
+
+let render (`Html s) = s
+
+let () =
+  describe "Well MLX syntax" (fun () ->
+    it "renders HTML attributes as attrs" (fun () ->
+      let html = <div class'="flex" id="x1" /> |> render in
+      expect html |> to_equal_string {|<div class="flex" id="x1"></div>|}
+    );
+
+    it "renders custom tags and custom attributes" (fun () ->
+      let html = <custom-tag with-custom-arg="abc" /> |> render in
+      expect html
+      |> to_equal_string {|<custom-tag with-custom-arg="abc"></custom-tag>|}
+    );
+
+    it "renders boolean attributes" (fun () ->
+      let html = <input type="text" required /> |> render in
+      expect html |> to_equal_string {|<input type="text" required></input>|}
+    );
+
+    it "keeps explicit attrs compatible" (fun () ->
+      let html = <div attrs=[("data-x", "1")] class'="flex" /> |> render in
+      expect html |> to_equal_string {|<div data-x="1" class="flex"></div>|}
+    )
+  )

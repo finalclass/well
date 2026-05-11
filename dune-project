@@ -1,4 +1,5 @@
 (lang dune 3.17)
+(using menhir 3.0)
 
 (dialect
  (name mlx)
@@ -6,7 +7,7 @@
   (extension mlx)
   (merlin_reader mlx)
   (preprocess
-   (run mlx-pp %{input-file}))))
+   (run well-mlx-pp %{input-file}))))
 
 (package
  (name well)
@@ -15,6 +16,8 @@
  (depends
   (ocaml (>= 5.4))
   mlx
+  menhir
+  menhirLib
   eio
   eio_main
   yojson
