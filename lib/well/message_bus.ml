@@ -119,19 +119,11 @@ let publish ?(ephemeral = false) channel payload =
   end else begin
     let id = Db.with_well_db (fun db ->
       ensure_tables db;
-      let sql =
-        "INSERT INTO _well_events (channel, payload, created_at) VALUES (?, ?, ?)"
-      in
-      let stmt = Sqlite3.prepare db sql in
-      let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT channel) in
-      let _ =
-        Sqlite3.bind stmt 2
-          (Sqlite3.Data.TEXT (Yojson.Safe.to_string payload))
-      in
-      let _ = Sqlite3.bind stmt 3 (Sqlite3.Data.FLOAT now) in
-      let _ = Sqlite3.step stmt in
+      ignore
+        (Db.exec db
+           "INSERT INTO _well_events (channel, payload, created_at) VALUES (?, ?, ?)"
+           [ Text channel; Text (Yojson.Safe.to_string payload); Float now ]);
       let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
-      let _ = Sqlite3.finalize stmt in
       id)
     in
     let event = { id; channel; payload; created_at = now } in
@@ -155,35 +147,21 @@ let replay ?(since_id = 0) pattern cb =
     "SELECT id, channel, payload, created_at FROM _well_events \
      WHERE id > ? ORDER BY id ASC"
   in
-  let stmt = Sqlite3.prepare db sql in
-  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int since_id)) in
   replay_mode := true;
   Fun.protect ~finally:(fun () -> replay_mode := false) (fun () ->
-    let rec loop () =
-      match Sqlite3.step stmt with
-      | Sqlite3.Rc.ROW ->
-          let channel = Sqlite3.column_text stmt 1 in
-          if matches_pattern pattern channel then begin
-            let id = Int64.to_int (Sqlite3.column_int64 stmt 0) in
-            let payload_str = Sqlite3.column_text stmt 2 in
-            let payload =
-              try Yojson.Safe.from_string payload_str
-              with _ -> `Null
-            in
-            let created_at =
-              match Sqlite3.column stmt 3 with
-              | Sqlite3.Data.FLOAT f -> f
-              | _ -> 0.0
-            in
-            let event = { id; channel; payload; created_at } in
-            (try cb event with _ -> ())
-          end;
-          loop ()
-      | _ ->
-          let _ = Sqlite3.finalize stmt in
-          ()
-    in
-    loop ())
+    ignore
+      (Db.query db sql [ Int since_id ] (fun row ->
+         let channel = row.text 1 in
+         if matches_pattern pattern channel then begin
+           let payload =
+             try Yojson.Safe.from_string (row.text 2)
+             with _ -> `Null
+           in
+           let event =
+             { id = row.int 0; channel; payload; created_at = row.float 3 }
+           in
+           (try cb event with _ -> ())
+         end)))
 
 (* ── Prune ────────────────────────────────────────────────────────── *)
 
@@ -192,12 +170,7 @@ let replay ?(since_id = 0) pattern cb =
 let prune ~keep_since_id () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
-  let sql = "DELETE FROM _well_events WHERE id <= ?" in
-  let stmt = Sqlite3.prepare db sql in
-  let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int keep_since_id)) in
-  let _ = Sqlite3.step stmt in
-  let _ = Sqlite3.finalize stmt in
-  Sqlite3.changes db
+  Db.exec db "DELETE FROM _well_events WHERE id <= ?" [ Int keep_since_id ]
 
 (* ── Typed topic descriptor ────────────────────────────────────────── *)
 

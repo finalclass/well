@@ -264,61 +264,112 @@ let _init_conn db =
   ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
   ignore (Sqlite3.exec db "PRAGMA synchronous=NORMAL")
 
+let _db_open ?(uri = false) filename =
+  Sqlite3.db_open ~uri ~mutex:`FULL filename
+
 type reentrant_mutex = {
-  mutex : Mutex.t;
-  cond : Condition.t;
-  mutable owner : Domain.id option;
+  state_mutex : Mutex.t;
+  std_mutex : Mutex.t;
+  eio_mutex : Eio.Mutex.t;
+  mutable owner : lock_owner option;
   mutable depth : int;
 }
 
+and lock_owner =
+  | Fiber_owner of int
+  | Domain_owner of Domain.id
+
+let _lock_owner_key : int Eio.Fiber.key = Eio.Fiber.create_key ()
+let _next_lock_owner = Atomic.make 1
+
 let _reentrant_mutex () =
-  { mutex = Mutex.create ();
-    cond = Condition.create ();
+  { state_mutex = Mutex.create ();
+    std_mutex = Mutex.create ();
+    eio_mutex = Eio.Mutex.create ();
     owner = None;
     depth = 0 }
 
-let _reentrant_lock lock =
-  let self = Domain.self () in
-  Mutex.lock lock.mutex;
-  Fun.protect
-    ~finally:(fun () -> Mutex.unlock lock.mutex)
-    (fun () ->
-      let rec wait () =
-        match lock.owner with
-        | None ->
-          lock.owner <- Some self;
-          lock.depth <- 1
-        | Some owner when owner = self ->
-          lock.depth <- lock.depth + 1
-        | Some _ ->
-          Condition.wait lock.cond lock.mutex;
-          wait ()
-      in
-      wait ())
+let _current_lock_owner () =
+  try
+    match Eio.Fiber.get _lock_owner_key with
+    | Some token -> Fiber_owner token, (fun f -> f ()), true
+    | None ->
+      let token = Atomic.fetch_and_add _next_lock_owner 1 in
+      Fiber_owner token, Eio.Fiber.with_binding _lock_owner_key token, true
+  with
+  | _ -> Domain_owner (Domain.self ()), (fun f -> f ()), false
 
-let _reentrant_unlock lock =
-  let self = Domain.self () in
-  Mutex.lock lock.mutex;
+let _unlock_owned lock self =
+  Mutex.lock lock.state_mutex;
   Fun.protect
-    ~finally:(fun () -> Mutex.unlock lock.mutex)
+    ~finally:(fun () -> Mutex.unlock lock.state_mutex)
     (fun () ->
       match lock.owner with
       | Some owner when owner = self ->
         lock.depth <- lock.depth - 1;
-        if lock.depth = 0 then begin
-          lock.owner <- None;
-          Condition.broadcast lock.cond
-        end
+        lock.depth = 0
       | _ ->
-        invalid_arg "Well.Db: unlock from non-owner domain")
+        invalid_arg "Well.Db: unlock from non-owner context")
 
-let _sqlite_access_mu = _reentrant_mutex ()
+let _clear_owner lock =
+  lock.owner <- None
 
-let _with_sqlite_access f =
-  _reentrant_lock _sqlite_access_mu;
-  Fun.protect
-    ~finally:(fun () -> _reentrant_unlock _sqlite_access_mu)
-    f
+let _with_reentrant_lock lock f =
+  let self, bind_owner, use_eio = _current_lock_owner () in
+  bind_owner @@ fun () ->
+  Mutex.lock lock.state_mutex;
+  match lock.owner with
+  | Some owner when owner = self ->
+    lock.depth <- lock.depth + 1;
+    Mutex.unlock lock.state_mutex;
+    Fun.protect
+      ~finally:(fun () -> ignore (_unlock_owned lock self))
+      f
+  | _ ->
+    Mutex.unlock lock.state_mutex;
+    if use_eio then begin
+      Eio.Mutex.lock lock.eio_mutex;
+      Mutex.lock lock.state_mutex;
+      (try
+         lock.owner <- Some self;
+         lock.depth <- 1;
+         Mutex.unlock lock.state_mutex
+       with exn ->
+         Mutex.unlock lock.state_mutex;
+         Eio.Mutex.unlock lock.eio_mutex;
+         raise exn);
+      Fun.protect
+        ~finally:(fun () ->
+          if _unlock_owned lock self then begin
+            Mutex.lock lock.state_mutex;
+            Fun.protect
+              ~finally:(fun () -> Mutex.unlock lock.state_mutex)
+              (fun () -> _clear_owner lock);
+            Eio.Mutex.unlock lock.eio_mutex
+          end)
+        f
+    end else begin
+      Mutex.lock lock.std_mutex;
+      Mutex.lock lock.state_mutex;
+      (try
+         lock.owner <- Some self;
+         lock.depth <- 1;
+         Mutex.unlock lock.state_mutex
+       with exn ->
+         Mutex.unlock lock.state_mutex;
+         Mutex.unlock lock.std_mutex;
+         raise exn);
+      Fun.protect
+        ~finally:(fun () ->
+          if _unlock_owned lock self then begin
+            Mutex.lock lock.state_mutex;
+            Fun.protect
+              ~finally:(fun () -> Mutex.unlock lock.state_mutex)
+              (fun () -> _clear_owner lock);
+            Mutex.unlock lock.std_mutex
+          end)
+        f
+    end
 
 type pooled_conn = {
   db : Sqlite3.db;
@@ -348,7 +399,7 @@ let _db_path dir filename =
 let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
   if !memory_mode then begin
     let uri = _memory_uri filename in
-    let db = Sqlite3.db_open ~uri:true uri in
+    let db = _db_open ~uri:true uri in
     _init_conn db;
     auto_migrate db;
     { conns = [|{ db; mutex = _reentrant_mutex () }|];
@@ -364,16 +415,16 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     let path = _db_path dir filename in
     let migrated = Atomic.make false in
     let conns = Array.init size (fun _ ->
-      let db = Sqlite3.db_open path in
+      let db = _db_open path in
       _init_conn db;
       if not (Atomic.exchange migrated true) then
-        auto_migrate db;
-      { db; mutex = _reentrant_mutex () }) in
-    { conns;
-      next = Atomic.make 0;
-      mutex = Mutex.create ();
-      cond = Condition.create ();
-      active = 0;
+	        auto_migrate db;
+	      { db; mutex = _reentrant_mutex () }) in
+	    { conns;
+	      next = Atomic.make 0;
+	      mutex = Mutex.create ();
+	      cond = Condition.create ();
+	      active = 0;
       closed = false }
   end
 
@@ -390,16 +441,15 @@ let with_conn pool f =
      raise exn);
   let idx = Atomic.fetch_and_add pool.next 1 mod Array.length pool.conns in
   let conn = pool.conns.(idx) in
-  _reentrant_lock conn.mutex;
-  Fun.protect
-    ~finally:(fun () ->
-      _reentrant_unlock conn.mutex;
+  _with_reentrant_lock conn.mutex (fun () ->
+    Fun.protect
+      ~finally:(fun () ->
       Mutex.lock pool.mutex;
       pool.active <- pool.active - 1;
       if pool.active = 0 then
         Condition.broadcast pool.cond;
       Mutex.unlock pool.mutex)
-    (fun () -> _with_sqlite_access (fun () -> f conn.db))
+      (fun () -> f conn.db))
 
 (** Close all connections in the pool after waiting for leased handles. *)
 let close_pool pool =
@@ -413,7 +463,9 @@ let close_pool pool =
           Condition.wait pool.cond pool.mutex
         done;
         Array.iter
-          (fun (conn : pooled_conn) -> ignore (Sqlite3.db_close conn.db))
+          (fun (conn : pooled_conn) ->
+             _with_reentrant_lock conn.mutex (fun () ->
+               ignore (Sqlite3.db_close conn.db)))
           pool.conns
       end)
 
@@ -423,7 +475,7 @@ let close_pool pool =
 let open_db ?(filename = "app.sqlite") () =
   if !memory_mode then begin
     let uri = _memory_uri filename in
-    let db = Sqlite3.db_open ~uri:true uri in
+    let db = _db_open ~uri:true uri in
     _init_conn db;
     auto_migrate db;
     db
@@ -432,7 +484,7 @@ let open_db ?(filename = "app.sqlite") () =
     (try Unix.mkdir dir 0o755
      with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
     let path = _db_path dir filename in
-    let db = Sqlite3.db_open path in
+    let db = _db_open path in
     _init_conn db;
     auto_migrate db;
     db
@@ -497,7 +549,7 @@ let backup path =
 (** Run [f] with an in-memory database that has all registered tables migrated.
     The connection is closed when [f] returns. *)
 let with_test_db f =
-  let db = Sqlite3.db_open ":memory:" in
+  let db = _db_open ":memory:" in
   ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
   auto_migrate db;
   Fun.protect
@@ -532,7 +584,7 @@ let _well_closing = ref false
 let _make_well_conns () =
   if !memory_mode then begin
     let uri = _memory_uri "well.sqlite" in
-    let db = Sqlite3.db_open ~uri:true uri in
+    let db = _db_open ~uri:true uri in
     _init_conn db;
     [|{ db; mutex = _reentrant_mutex () }|]
   end else begin
@@ -541,7 +593,7 @@ let _make_well_conns () =
      with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
     let path = _db_path dir "well.sqlite" in
     Array.init _well_size (fun _ ->
-      let db = Sqlite3.db_open path in
+      let db = _db_open path in
       _init_conn db;
       { db; mutex = _reentrant_mutex () })
   end
@@ -586,16 +638,15 @@ let with_well_db f =
        Mutex.unlock _well_mu;
        raise exn)
   in
-  _reentrant_lock conn.mutex;
-  Fun.protect
-    ~finally:(fun () ->
-      _reentrant_unlock conn.mutex;
+  _with_reentrant_lock conn.mutex (fun () ->
+    Fun.protect
+      ~finally:(fun () ->
       Mutex.lock _well_mu;
       _well_active := !_well_active - 1;
       if !_well_active = 0 then
         Condition.broadcast _well_cond;
       Mutex.unlock _well_mu)
-    (fun () -> _with_sqlite_access (fun () -> f conn.db))
+      (fun () -> f conn.db))
 
 (* ── Query helpers ────────────────────────────────────────────────── *)
 
@@ -618,6 +669,62 @@ let _bind_params stmt params =
     in
     ignore (Sqlite3.bind stmt (i + 1) d)
   ) params
+
+let _quote_sql_string s =
+  let b = Buffer.create (String.length s + 2) in
+  Buffer.add_char b '\'';
+  String.iter
+    (function
+      | '\'' -> Buffer.add_string b "''"
+      | c -> Buffer.add_char b c)
+    s;
+  Buffer.add_char b '\'';
+  Buffer.contents b
+
+let _hex_digit n =
+  Char.unsafe_chr (if n < 10 then Char.code '0' + n else Char.code 'A' + n - 10)
+
+let _quote_sql_blob s =
+  let b = Buffer.create ((String.length s * 2) + 3) in
+  Buffer.add_string b "X'";
+  String.iter
+    (fun c ->
+      let n = Char.code c in
+      Buffer.add_char b (_hex_digit (n lsr 4));
+      Buffer.add_char b (_hex_digit (n land 0x0f)))
+    s;
+  Buffer.add_char b '\'';
+  Buffer.contents b
+
+let _param_sql = function
+  | Null -> "NULL"
+  | Int n -> string_of_int n
+  | Float f ->
+    let s = string_of_float f in
+    if String.contains s '\'' then _quote_sql_string s else s
+  | Text s -> _quote_sql_string s
+  | Blob s -> _quote_sql_blob s
+
+let _substitute_params sql params =
+  let b = Buffer.create (String.length sql + (List.length params * 8)) in
+  let len = String.length sql in
+  let rec loop i params =
+    if i >= len then begin
+      match params with
+      | [] -> Buffer.contents b
+      | _ -> invalid_arg "Well.Db: too many SQL parameters"
+    end else
+      match sql.[i], params with
+      | '?', p :: rest ->
+        Buffer.add_string b (_param_sql p);
+        loop (i + 1) rest
+      | '?', [] ->
+        invalid_arg "Well.Db: missing SQL parameter"
+      | c, _ ->
+        Buffer.add_char b c;
+        loop (i + 1) params
+  in
+  loop 0 params
 
 let _col_to_yojson stmt i : Yojson.Safe.t =
   match Sqlite3.column stmt i with
@@ -654,51 +761,76 @@ let _make_row stmt =
     bool_opt = (fun i -> match Sqlite3.column stmt i with Sqlite3.Data.NULL -> None | _ -> Some (Sqlite3.column_int stmt i <> 0));
   }
 
+let _make_exec_row (values : string option array) =
+  let get i =
+    if i < 0 || i >= Array.length values then None else values.(i)
+  in
+  let text_opt i = get i in
+  let text i = Option.value ~default:"" (text_opt i) in
+  let int_opt i = Option.map int_of_string (text_opt i) in
+  let int i = Option.value ~default:0 (int_opt i) in
+  let float_opt i = Option.map float_of_string (text_opt i) in
+  let float i = Option.value ~default:0.0 (float_opt i) in
+  let bool_opt i = Option.map (fun n -> n <> 0) (int_opt i) in
+  let bool i = Option.value ~default:false (bool_opt i) in
+  { int; float; text; bool; int_opt; float_opt; text_opt; bool_opt }
+
 (** Execute a SELECT query and map each row with [f]. Returns results in order. *)
 let query db sql params f =
-  let stmt = Sqlite3.prepare db sql in
-  _bind_params stmt params;
-  let r = _make_row stmt in
+  let sql = _substitute_params sql params in
   let results = ref [] in
-  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
-    while Sqlite3.step stmt = Sqlite3.Rc.ROW do
-      results := f r :: !results
-    done;
-    List.rev !results)
+  let rc =
+    Sqlite3.exec db sql ~cb:(fun values _headers ->
+      results := f (_make_exec_row values) :: !results)
+  in
+  match rc with
+  | Sqlite3.Rc.OK -> List.rev !results
+  | rc -> failwith ("Well.Db.query: " ^ Sqlite3.Rc.to_string rc)
 
 (** Like {!query} but returns only the first row, or [None]. *)
 let query_one db sql params f =
-  let stmt = Sqlite3.prepare db sql in
-  _bind_params stmt params;
-  let r = _make_row stmt in
-  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
-    match Sqlite3.step stmt with
-    | Sqlite3.Rc.ROW -> Some (f r)
-    | _ -> None)
+  let sql = _substitute_params sql params in
+  let result = ref None in
+  let rc =
+    Sqlite3.exec db sql ~cb:(fun values _headers ->
+      match !result with
+      | Some _ -> ()
+      | None -> result := Some (f (_make_exec_row values)))
+  in
+  match rc with
+  | Sqlite3.Rc.OK -> !result
+  | rc -> failwith ("Well.Db.query_one: " ^ Sqlite3.Rc.to_string rc)
 
 (** Execute a non-SELECT statement (INSERT, UPDATE, DELETE). Returns the number of changed rows. *)
 let exec db sql params =
-  let stmt = Sqlite3.prepare db sql in
-  _bind_params stmt params;
-  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
-    match Sqlite3.step stmt with
-    | Sqlite3.Rc.DONE -> Sqlite3.changes db
-    | rc -> failwith ("Well.Db.exec: " ^ Sqlite3.Rc.to_string rc))
+  let sql = _substitute_params sql params in
+  match Sqlite3.exec db sql with
+  | Sqlite3.Rc.OK -> Sqlite3.changes db
+  | rc -> failwith ("Well.Db.exec: " ^ Sqlite3.Rc.to_string rc)
 
 (** Execute a SELECT and return rows as [Yojson.Safe.t] association lists. *)
 let fetch_yojson db sql params =
-  let stmt = Sqlite3.prepare db sql in
-  _bind_params stmt params;
-  let ncols = Sqlite3.column_count stmt in
-  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
-    let results = ref [] in
-    while Sqlite3.step stmt = Sqlite3.Rc.ROW do
-      let names = Array.init ncols (fun i -> Sqlite3.column_name stmt i) in
-      let assoc = Array.to_list (Array.mapi (fun i name ->
-        (name, _col_to_yojson stmt i)) names) in
-      results := `Assoc assoc :: !results
-    done;
-    List.rev !results)
+  let sql = _substitute_params sql params in
+  let results = ref [] in
+  let rc =
+    Sqlite3.exec db sql ~cb:(fun values headers ->
+      let assoc =
+        Array.to_list
+          (Array.mapi
+             (fun i name ->
+               let value =
+                 match values.(i) with
+                 | None -> `Null
+                 | Some s -> `String s
+               in
+               (name, value))
+             headers)
+      in
+      results := `Assoc assoc :: !results)
+  in
+  match rc with
+  | Sqlite3.Rc.OK -> List.rev !results
+  | rc -> failwith ("Well.Db.fetch_yojson: " ^ Sqlite3.Rc.to_string rc)
 
 (** Close all connections in the framework database pool. Safe to call multiple times. *)
 let close_well_db () =
@@ -711,7 +843,11 @@ let close_well_db () =
         Condition.wait _well_cond _well_mu
       done;
       _well_conns := None;
-      Array.iter (fun (conn : pooled_conn) -> ignore (Sqlite3.db_close conn.db)) conns;
+      Array.iter
+        (fun (conn : pooled_conn) ->
+           _with_reentrant_lock conn.mutex (fun () ->
+             ignore (Sqlite3.db_close conn.db)))
+        conns;
       _well_closing := false;
       Condition.broadcast _well_cond
     | None ->

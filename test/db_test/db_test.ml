@@ -255,7 +255,7 @@ let () =
               Well.Db.close_well_db)
       );
 
-      it "serializes well.sqlite callbacks across multiple connections" (fun () ->
+      it "allows safe concurrent well.sqlite callbacks across leased connections" (fun () ->
         let old_memory_mode = !(Well.Db.memory_mode) in
         let old_data_dir = !(Well.Db.data_dir) in
         Well.Db.close_well_db ();
@@ -268,12 +268,26 @@ let () =
           (fun () ->
             with_temp_data_dir @@ fun dir ->
             Well.Db.data_dir := dir;
-            expect_no_concurrent_leases
-              (fun f -> Well.Db.with_well_db f)
-              Well.Db.close_well_db)
+            let active = Atomic.make 0 in
+            let overlapped = Atomic.make false in
+            Fun.protect
+              ~finally:Well.Db.close_well_db
+              (fun () ->
+                run_domains 16 (fun _domain_id ->
+                  for _iteration = 1 to 20 do
+                    Well.Db.with_well_db (fun db ->
+                      if Atomic.fetch_and_add active 1 <> 0 then
+                        Atomic.set overlapped true;
+                      Fun.protect
+                        ~finally:(fun () -> ignore (Atomic.fetch_and_add active (-1)))
+                        (fun () ->
+                          ignore (Well.Db.query db "SELECT 1" [] (fun row -> row.int 0));
+                          Unix.sleepf 0.001))
+                  done);
+                expect (Atomic.get overlapped) |> to_be_true))
       );
 
-      it "serializes SQLite callbacks across app and framework pools" (fun () ->
+      it "allows concurrent SQLite query helpers across app and framework pools" (fun () ->
         let old_memory_mode = !(Well.Db.memory_mode) in
         let old_data_dir = !(Well.Db.data_dir) in
         Well.Db.close_well_db ();
@@ -301,15 +315,18 @@ let () =
                         fun f -> Well.Db.with_well_db f
                     in
                     with_db (fun db ->
-                      if Atomic.fetch_and_add active 1 <> 0 then
-                        Atomic.set overlapped true;
-                      Fun.protect
-                        ~finally:(fun () -> ignore (Atomic.fetch_and_add active (-1)))
-                        (fun () ->
-                          ignore (Well.Db.query db "SELECT 1" [] (fun row -> row.int 0));
-                          Unix.sleepf 0.001))
+                      ignore
+                        (Well.Db.query db "SELECT 1" [] (fun row ->
+                           if Atomic.fetch_and_add active 1 <> 0 then
+                             Atomic.set overlapped true;
+                           Fun.protect
+                             ~finally:(fun () ->
+                               ignore (Atomic.fetch_and_add active (-1)))
+                             (fun () ->
+                               Unix.sleepf 0.001;
+                               row.int 0))))
                   done);
-                expect (Atomic.get overlapped) |> to_be_false))
+                expect (Atomic.get overlapped) |> to_be_true))
       );
     );
   );
