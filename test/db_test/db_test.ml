@@ -40,6 +40,19 @@ let () =
         expect (Atomic.get overlapped) |> to_be_false)
   in
 
+  let with_temp_data_dir f =
+    let dir = Filename.temp_file "well-db-test-" "" in
+    Sys.remove dir;
+    Unix.mkdir dir 0o700;
+    Fun.protect
+      ~finally:(fun () ->
+        Array.iter
+          (fun name -> Sys.remove (Filename.concat dir name))
+          (Sys.readdir dir);
+        Unix.rmdir dir)
+      (fun () -> f dir)
+  in
+
   describe "Well.Db" (fun () ->
 
     describe "with_test_db" (fun () ->
@@ -191,6 +204,23 @@ let () =
               (fun () -> Well.Db.close_pool pool))
       );
 
+      it "serializes create_pool callbacks across multiple connections" (fun () ->
+        let old_memory_mode = !(Well.Db.memory_mode) in
+        let old_data_dir = !(Well.Db.data_dir) in
+        Well.Db.memory_mode := false;
+        Fun.protect
+          ~finally:(fun () ->
+            Well.Db.memory_mode := old_memory_mode;
+            Well.Db.data_dir := old_data_dir)
+          (fun () ->
+            with_temp_data_dir @@ fun dir ->
+            Well.Db.data_dir := dir;
+            let pool = Well.Db.create_pool ~size:4 ~filename:"pool_serial.sqlite" () in
+            expect_no_concurrent_leases
+              (fun f -> Well.Db.with_conn pool f)
+              (fun () -> Well.Db.close_pool pool))
+      );
+
       it "returns create_pool connections when callbacks raise" (fun () ->
         let old_memory_mode = !(Well.Db.memory_mode) in
         Well.Db.memory_mode := true;
@@ -218,6 +248,24 @@ let () =
             Well.Db.close_well_db ();
             Well.Db.memory_mode := old_memory_mode)
           (fun () ->
+            expect_no_concurrent_leases
+              (fun f -> Well.Db.with_well_db f)
+              Well.Db.close_well_db)
+      );
+
+      it "serializes well.sqlite callbacks across multiple connections" (fun () ->
+        let old_memory_mode = !(Well.Db.memory_mode) in
+        let old_data_dir = !(Well.Db.data_dir) in
+        Well.Db.close_well_db ();
+        Well.Db.memory_mode := false;
+        Fun.protect
+          ~finally:(fun () ->
+            Well.Db.close_well_db ();
+            Well.Db.memory_mode := old_memory_mode;
+            Well.Db.data_dir := old_data_dir)
+          (fun () ->
+            with_temp_data_dir @@ fun dir ->
+            Well.Db.data_dir := dir;
             expect_no_concurrent_leases
               (fun f -> Well.Db.with_well_db f)
               Well.Db.close_well_db)

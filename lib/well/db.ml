@@ -211,10 +211,17 @@ let auto_migrate db =
     Returns a function [Sqlite3.db -> unit] that executes [f] only once. *)
 let once f =
   let done_ = Atomic.make false in
+  let mutex = Mutex.create () in
   fun db ->
     if not (Atomic.get done_) then begin
-      f db;
-      Atomic.set done_ true
+      Mutex.lock mutex;
+      Fun.protect
+        ~finally:(fun () -> Mutex.unlock mutex)
+        (fun () ->
+          if not (Atomic.get done_) then begin
+            f db;
+            Atomic.set done_ true
+          end)
     end
 
 (** Reset a one-shot guard (for test teardown). Takes the guard function and
@@ -224,13 +231,25 @@ let once f =
 (** Like {!once} but also returns a reset function. *)
 let once_resettable f =
   let done_ = Atomic.make false in
+  let mutex = Mutex.create () in
   let run db =
     if not (Atomic.get done_) then begin
-      f db;
-      Atomic.set done_ true
+      Mutex.lock mutex;
+      Fun.protect
+        ~finally:(fun () -> Mutex.unlock mutex)
+        (fun () ->
+          if not (Atomic.get done_) then begin
+            f db;
+            Atomic.set done_ true
+          end)
     end
   in
-  let reset () = Atomic.set done_ false in
+  let reset () =
+    Mutex.lock mutex;
+    Fun.protect
+      ~finally:(fun () -> Mutex.unlock mutex)
+      (fun () -> Atomic.set done_ false)
+  in
   (run, reset)
 
 (** Directory for SQLite database files. Defaults to ["data"], overridable via config. *)
@@ -254,6 +273,7 @@ type pool = {
   conns : pooled_conn array;
   next : int Atomic.t;
   mutex : Mutex.t;
+  access_mutex : Mutex.t;
   cond : Condition.t;
   mutable active : int;
   mutable closed : bool;
@@ -279,6 +299,7 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     { conns = [|{ db; mutex = Mutex.create () }|];
       next = Atomic.make 0;
       mutex = Mutex.create ();
+      access_mutex = Mutex.create ();
       cond = Condition.create ();
       active = 0;
       closed = false }
@@ -297,6 +318,7 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     { conns;
       next = Atomic.make 0;
       mutex = Mutex.create ();
+      access_mutex = Mutex.create ();
       cond = Condition.create ();
       active = 0;
       closed = false }
@@ -316,8 +338,10 @@ let with_conn pool f =
   let idx = Atomic.fetch_and_add pool.next 1 mod Array.length pool.conns in
   let conn = pool.conns.(idx) in
   Mutex.lock conn.mutex;
+  Mutex.lock pool.access_mutex;
   Fun.protect
     ~finally:(fun () ->
+      Mutex.unlock pool.access_mutex;
       Mutex.unlock conn.mutex;
       Mutex.lock pool.mutex;
       pool.active <- pool.active - 1;
@@ -450,6 +474,7 @@ let _well_size = 4
 let _well_conns : pooled_conn array option ref = ref None
 let _well_next = Atomic.make 0
 let _well_mu = Mutex.create () (* only for lazy init + shutdown *)
+let _well_access_mu = Mutex.create ()
 let _well_cond = Condition.create ()
 let _well_active = ref 0
 let _well_closing = ref false
@@ -512,8 +537,10 @@ let with_well_db f =
        raise exn)
   in
   Mutex.lock conn.mutex;
+  Mutex.lock _well_access_mu;
   Fun.protect
     ~finally:(fun () ->
+      Mutex.unlock _well_access_mu;
       Mutex.unlock conn.mutex;
       Mutex.lock _well_mu;
       _well_active := !_well_active - 1;
