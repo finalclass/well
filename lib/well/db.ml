@@ -273,7 +273,6 @@ type pool = {
   conns : pooled_conn array;
   next : int Atomic.t;
   mutex : Mutex.t;
-  access_mutex : Mutex.t;
   cond : Condition.t;
   mutable active : int;
   mutable closed : bool;
@@ -299,7 +298,6 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     { conns = [|{ db; mutex = Mutex.create () }|];
       next = Atomic.make 0;
       mutex = Mutex.create ();
-      access_mutex = Mutex.create ();
       cond = Condition.create ();
       active = 0;
       closed = false }
@@ -318,7 +316,6 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     { conns;
       next = Atomic.make 0;
       mutex = Mutex.create ();
-      access_mutex = Mutex.create ();
       cond = Condition.create ();
       active = 0;
       closed = false }
@@ -338,10 +335,8 @@ let with_conn pool f =
   let idx = Atomic.fetch_and_add pool.next 1 mod Array.length pool.conns in
   let conn = pool.conns.(idx) in
   Mutex.lock conn.mutex;
-  Mutex.lock pool.access_mutex;
   Fun.protect
     ~finally:(fun () ->
-      Mutex.unlock pool.access_mutex;
       Mutex.unlock conn.mutex;
       Mutex.lock pool.mutex;
       pool.active <- pool.active - 1;

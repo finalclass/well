@@ -204,23 +204,6 @@ let () =
               (fun () -> Well.Db.close_pool pool))
       );
 
-      it "serializes create_pool callbacks across multiple connections" (fun () ->
-        let old_memory_mode = !(Well.Db.memory_mode) in
-        let old_data_dir = !(Well.Db.data_dir) in
-        Well.Db.memory_mode := false;
-        Fun.protect
-          ~finally:(fun () ->
-            Well.Db.memory_mode := old_memory_mode;
-            Well.Db.data_dir := old_data_dir)
-          (fun () ->
-            with_temp_data_dir @@ fun dir ->
-            Well.Db.data_dir := dir;
-            let pool = Well.Db.create_pool ~size:4 ~filename:"pool_serial.sqlite" () in
-            expect_no_concurrent_leases
-              (fun f -> Well.Db.with_conn pool f)
-              (fun () -> Well.Db.close_pool pool))
-      );
-
       it "returns create_pool connections when callbacks raise" (fun () ->
         let old_memory_mode = !(Well.Db.memory_mode) in
         Well.Db.memory_mode := true;
