@@ -12,6 +12,34 @@ let () =
     ];
   };
 
+  let run_domains count f =
+    let domains = List.init count (fun i -> Domain.spawn (fun () -> f i)) in
+    List.iter Domain.join domains
+  in
+
+  let expect_no_concurrent_leases with_db close =
+    let active = Atomic.make 0 in
+    let overlapped = Atomic.make false in
+    Fun.protect
+      ~finally:close
+      (fun () ->
+        run_domains 16 (fun domain_id ->
+          for iteration = 1 to 20 do
+            with_db (fun db ->
+              if Atomic.fetch_and_add active 1 <> 0 then
+                Atomic.set overlapped true;
+              Fun.protect
+                ~finally:(fun () -> ignore (Atomic.fetch_and_add active (-1)))
+                (fun () ->
+                  ignore (Well.Db.query db "SELECT ? + ?" [
+                    Well.Db.Int domain_id;
+                    Well.Db.Int iteration;
+                  ] (fun row -> row.int 0));
+                  Unix.sleepf 0.001))
+          done);
+        expect (Atomic.get overlapped) |> to_be_false)
+  in
+
   describe "Well.Db" (fun () ->
 
     describe "with_test_db" (fun () ->
@@ -147,6 +175,52 @@ let () =
           ignore (Sqlite3.finalize stmt);
           expect count |> to_equal_int 1
         )
+      );
+    );
+
+    describe "connection pools" (fun () ->
+      it "leases create_pool connections exclusively across domains" (fun () ->
+        let old_memory_mode = !(Well.Db.memory_mode) in
+        Well.Db.memory_mode := true;
+        Fun.protect
+          ~finally:(fun () -> Well.Db.memory_mode := old_memory_mode)
+          (fun () ->
+            let pool = Well.Db.create_pool ~size:1 ~filename:"pool_concurrency" () in
+            expect_no_concurrent_leases
+              (fun f -> Well.Db.with_conn pool f)
+              (fun () -> Well.Db.close_pool pool))
+      );
+
+      it "returns create_pool connections when callbacks raise" (fun () ->
+        let old_memory_mode = !(Well.Db.memory_mode) in
+        Well.Db.memory_mode := true;
+        Fun.protect
+          ~finally:(fun () -> Well.Db.memory_mode := old_memory_mode)
+          (fun () ->
+            let pool = Well.Db.create_pool ~size:1 ~filename:"pool_raise" () in
+            Fun.protect
+              ~finally:(fun () -> Well.Db.close_pool pool)
+              (fun () ->
+                (try
+                   Well.Db.with_conn pool (fun _db -> failwith "expected")
+                 with Failure _ -> ());
+                Well.Db.with_conn pool (fun db ->
+                  let rows = Well.Db.query db "SELECT 1" [] (fun row -> row.int 0) in
+                  expect (List.hd rows) |> to_equal_int 1)))
+      );
+
+      it "leases well.sqlite connections exclusively across domains" (fun () ->
+        let old_memory_mode = !(Well.Db.memory_mode) in
+        Well.Db.close_well_db ();
+        Well.Db.memory_mode := true;
+        Fun.protect
+          ~finally:(fun () ->
+            Well.Db.close_well_db ();
+            Well.Db.memory_mode := old_memory_mode)
+          (fun () ->
+            expect_no_concurrent_leases
+              (fun f -> Well.Db.with_well_db f)
+              Well.Db.close_well_db)
       );
     );
   );

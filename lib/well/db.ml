@@ -245,13 +245,29 @@ let _init_conn db =
   ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
   ignore (Sqlite3.exec db "PRAGMA synchronous=NORMAL")
 
+type pooled_conn = {
+  db : Sqlite3.db;
+  mutex : Mutex.t;
+}
+
 type pool = {
-  conns : Sqlite3.db array;
+  conns : pooled_conn array;
   next : int Atomic.t;
+  mutex : Mutex.t;
+  cond : Condition.t;
+  mutable active : int;
+  mutable closed : bool;
 }
 
 let _memory_uri filename =
   Printf.sprintf "file:%s?mode=memory&cache=shared" filename
+
+let _db_path dir filename =
+  let path = Filename.concat dir filename in
+  if Filename.is_relative path then
+    Filename.concat (Sys.getcwd ()) path
+  else
+    path
 
 (** Create a round-robin connection pool. Runs auto-migrate on the first connection. *)
 let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
@@ -260,30 +276,71 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     let db = Sqlite3.db_open ~uri:true uri in
     _init_conn db;
     auto_migrate db;
-    { conns = [|db|]; next = Atomic.make 0 }
+    { conns = [|{ db; mutex = Mutex.create () }|];
+      next = Atomic.make 0;
+      mutex = Mutex.create ();
+      cond = Condition.create ();
+      active = 0;
+      closed = false }
   end else begin
     let dir = !data_dir in
     (try Unix.mkdir dir 0o755
      with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-    let path = Filename.concat dir filename in
+    let path = _db_path dir filename in
     let migrated = Atomic.make false in
     let conns = Array.init size (fun _ ->
       let db = Sqlite3.db_open path in
       _init_conn db;
       if not (Atomic.exchange migrated true) then
         auto_migrate db;
-      db) in
-    { conns; next = Atomic.make 0 }
+      { db; mutex = Mutex.create () }) in
+    { conns;
+      next = Atomic.make 0;
+      mutex = Mutex.create ();
+      cond = Condition.create ();
+      active = 0;
+      closed = false }
   end
 
-(** Run [f] with the next connection from the pool (round-robin). *)
+(** Run [f] with exclusive ownership of the next connection from the pool. *)
 let with_conn pool f =
+  Mutex.lock pool.mutex;
+  (try
+     if pool.closed then
+       invalid_arg "Well.Db.with_conn: pool is closed";
+     pool.active <- pool.active + 1;
+     Mutex.unlock pool.mutex
+   with exn ->
+     Mutex.unlock pool.mutex;
+     raise exn);
   let idx = Atomic.fetch_and_add pool.next 1 mod Array.length pool.conns in
-  f pool.conns.(idx)
+  let conn = pool.conns.(idx) in
+  Mutex.lock conn.mutex;
+  Fun.protect
+    ~finally:(fun () ->
+      Mutex.unlock conn.mutex;
+      Mutex.lock pool.mutex;
+      pool.active <- pool.active - 1;
+      if pool.active = 0 then
+        Condition.broadcast pool.cond;
+      Mutex.unlock pool.mutex)
+    (fun () -> f conn.db)
 
-(** Close all connections in the pool. *)
+(** Close all connections in the pool after waiting for leased handles. *)
 let close_pool pool =
-  Array.iter (fun db -> ignore (Sqlite3.db_close db)) pool.conns
+  Mutex.lock pool.mutex;
+  Fun.protect
+    ~finally:(fun () -> Mutex.unlock pool.mutex)
+    (fun () ->
+      if not pool.closed then begin
+        pool.closed <- true;
+        while pool.active > 0 do
+          Condition.wait pool.cond pool.mutex
+        done;
+        Array.iter
+          (fun (conn : pooled_conn) -> ignore (Sqlite3.db_close conn.db))
+          pool.conns
+      end)
 
 (* ── open_db — single connection (backward compat) ───────────────── *)
 
@@ -299,7 +356,7 @@ let open_db ?(filename = "app.sqlite") () =
     let dir = !data_dir in
     (try Unix.mkdir dir 0o755
      with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-    let path = Filename.concat dir filename in
+    let path = _db_path dir filename in
     let db = Sqlite3.db_open path in
     _init_conn db;
     auto_migrate db;
@@ -387,12 +444,32 @@ let rollback path =
 
 (* Simple round-robin pool for well.sqlite.
    No Eio dependency — works both inside and outside Eio runtime.
-   Each fiber/thread gets its own connection via round-robin — no locking needed. *)
+   Each callback gets exclusive use of its selected connection. *)
 
 let _well_size = 4
-let _well_conns : Sqlite3.db array option ref = ref None
+let _well_conns : pooled_conn array option ref = ref None
 let _well_next = Atomic.make 0
 let _well_mu = Mutex.create () (* only for lazy init + shutdown *)
+let _well_cond = Condition.create ()
+let _well_active = ref 0
+let _well_closing = ref false
+
+let _make_well_conns () =
+  if !memory_mode then begin
+    let uri = _memory_uri "well.sqlite" in
+    let db = Sqlite3.db_open ~uri:true uri in
+    _init_conn db;
+    [|{ db; mutex = Mutex.create () }|]
+  end else begin
+    let dir = !data_dir in
+    (try Unix.mkdir dir 0o755
+     with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+    let path = _db_path dir "well.sqlite" in
+    Array.init _well_size (fun _ ->
+      let db = Sqlite3.db_open path in
+      _init_conn db;
+      { db; mutex = Mutex.create () })
+  end
 
 let _ensure_well_conns () =
   match !_well_conns with
@@ -403,32 +480,47 @@ let _ensure_well_conns () =
       match !_well_conns with
       | Some c -> c (* double-check after lock *)
       | None ->
-        let conns =
-          if !memory_mode then begin
-            let uri = _memory_uri "well.sqlite" in
-            let db = Sqlite3.db_open ~uri:true uri in
-            _init_conn db;
-            [|db|]
-          end else begin
-            let dir = !data_dir in
-            (try Unix.mkdir dir 0o755
-             with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-            let path = Filename.concat dir "well.sqlite" in
-            Array.init _well_size (fun _ ->
-              let db = Sqlite3.db_open path in
-              _init_conn db;
-              db)
-          end
-        in
+        let conns = _make_well_conns () in
         _well_conns := Some conns;
         conns)
 
 (** Run [f] with a connection to the framework database ([well.sqlite]).
-    Lazily initializes a round-robin pool on first call. *)
+    Lazily initializes a round-robin pool on first call and leases the selected
+    connection exclusively. *)
 let with_well_db f =
-  let conns = _ensure_well_conns () in
-  let idx = Atomic.fetch_and_add _well_next 1 mod Array.length conns in
-  f conns.(idx)
+  Mutex.lock _well_mu;
+  let conn =
+    (try
+       while !_well_closing do
+         Condition.wait _well_cond _well_mu
+       done;
+       let conns =
+         match !_well_conns with
+         | Some conns -> conns
+         | None ->
+           let conns = _make_well_conns () in
+           _well_conns := Some conns;
+           conns
+       in
+       _well_active := !_well_active + 1;
+       let idx = Atomic.fetch_and_add _well_next 1 mod Array.length conns in
+       let conn = conns.(idx) in
+       Mutex.unlock _well_mu;
+       conn
+     with exn ->
+       Mutex.unlock _well_mu;
+       raise exn)
+  in
+  Mutex.lock conn.mutex;
+  Fun.protect
+    ~finally:(fun () ->
+      Mutex.unlock conn.mutex;
+      Mutex.lock _well_mu;
+      _well_active := !_well_active - 1;
+      if !_well_active = 0 then
+        Condition.broadcast _well_cond;
+      Mutex.unlock _well_mu)
+    (fun () -> f conn.db)
 
 (* ── Query helpers ────────────────────────────────────────────────── *)
 
@@ -539,6 +631,17 @@ let close_well_db () =
   Fun.protect ~finally:(fun () -> Mutex.unlock _well_mu) (fun () ->
     match !_well_conns with
     | Some conns ->
-      Array.iter (fun db -> ignore (Sqlite3.db_close db)) conns;
-      _well_conns := None
-    | None -> ())
+      _well_closing := true;
+      while !_well_active > 0 do
+        Condition.wait _well_cond _well_mu
+      done;
+      _well_conns := None;
+      Array.iter (fun (conn : pooled_conn) -> ignore (Sqlite3.db_close conn.db)) conns;
+      _well_closing := false;
+      Condition.broadcast _well_cond
+    | None ->
+      while !_well_active > 0 do
+        Condition.wait _well_cond _well_mu
+      done;
+      _well_closing := false;
+      Condition.broadcast _well_cond)
