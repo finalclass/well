@@ -222,6 +222,25 @@ let () =
                   expect (List.hd rows) |> to_equal_int 1)))
       );
 
+      it "allows nested leases on the same domain" (fun () ->
+        let old_memory_mode = !(Well.Db.memory_mode) in
+        Well.Db.memory_mode := true;
+        Fun.protect
+          ~finally:(fun () -> Well.Db.memory_mode := old_memory_mode)
+          (fun () ->
+            let pool = Well.Db.create_pool ~size:1 ~filename:"pool_nested" () in
+            Fun.protect
+              ~finally:(fun () -> Well.Db.close_pool pool)
+              (fun () ->
+                Well.Db.with_conn pool (fun db_outer ->
+                  ignore (Well.Db.query db_outer "SELECT 1" [] (fun row -> row.int 0));
+                  Well.Db.with_conn pool (fun db_inner ->
+                    let rows =
+                      Well.Db.query db_inner "SELECT 2" [] (fun row -> row.int 0)
+                    in
+                    expect (List.hd rows) |> to_equal_int 2))))
+      );
+
       it "leases well.sqlite connections exclusively across domains" (fun () ->
         let old_memory_mode = !(Well.Db.memory_mode) in
         Well.Db.close_well_db ();
@@ -252,6 +271,45 @@ let () =
             expect_no_concurrent_leases
               (fun f -> Well.Db.with_well_db f)
               Well.Db.close_well_db)
+      );
+
+      it "serializes SQLite callbacks across app and framework pools" (fun () ->
+        let old_memory_mode = !(Well.Db.memory_mode) in
+        let old_data_dir = !(Well.Db.data_dir) in
+        Well.Db.close_well_db ();
+        Well.Db.memory_mode := false;
+        Fun.protect
+          ~finally:(fun () ->
+            Well.Db.close_well_db ();
+            Well.Db.memory_mode := old_memory_mode;
+            Well.Db.data_dir := old_data_dir)
+          (fun () ->
+            with_temp_data_dir @@ fun dir ->
+            Well.Db.data_dir := dir;
+            let pool = Well.Db.create_pool ~size:4 ~filename:"app_serial.sqlite" () in
+            let active = Atomic.make 0 in
+            let overlapped = Atomic.make false in
+            Fun.protect
+              ~finally:(fun () -> Well.Db.close_pool pool; Well.Db.close_well_db ())
+              (fun () ->
+                run_domains 16 (fun domain_id ->
+                  for iteration = 1 to 20 do
+                    let with_db =
+                      if (domain_id + iteration) mod 2 = 0 then
+                        fun f -> Well.Db.with_conn pool f
+                      else
+                        fun f -> Well.Db.with_well_db f
+                    in
+                    with_db (fun db ->
+                      if Atomic.fetch_and_add active 1 <> 0 then
+                        Atomic.set overlapped true;
+                      Fun.protect
+                        ~finally:(fun () -> ignore (Atomic.fetch_and_add active (-1)))
+                        (fun () ->
+                          ignore (Well.Db.query db "SELECT 1" [] (fun row -> row.int 0));
+                          Unix.sleepf 0.001))
+                  done);
+                expect (Atomic.get overlapped) |> to_be_false))
       );
     );
   );

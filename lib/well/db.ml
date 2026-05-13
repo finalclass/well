@@ -264,9 +264,65 @@ let _init_conn db =
   ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
   ignore (Sqlite3.exec db "PRAGMA synchronous=NORMAL")
 
+type reentrant_mutex = {
+  mutex : Mutex.t;
+  cond : Condition.t;
+  mutable owner : Domain.id option;
+  mutable depth : int;
+}
+
+let _reentrant_mutex () =
+  { mutex = Mutex.create ();
+    cond = Condition.create ();
+    owner = None;
+    depth = 0 }
+
+let _reentrant_lock lock =
+  let self = Domain.self () in
+  Mutex.lock lock.mutex;
+  Fun.protect
+    ~finally:(fun () -> Mutex.unlock lock.mutex)
+    (fun () ->
+      let rec wait () =
+        match lock.owner with
+        | None ->
+          lock.owner <- Some self;
+          lock.depth <- 1
+        | Some owner when owner = self ->
+          lock.depth <- lock.depth + 1
+        | Some _ ->
+          Condition.wait lock.cond lock.mutex;
+          wait ()
+      in
+      wait ())
+
+let _reentrant_unlock lock =
+  let self = Domain.self () in
+  Mutex.lock lock.mutex;
+  Fun.protect
+    ~finally:(fun () -> Mutex.unlock lock.mutex)
+    (fun () ->
+      match lock.owner with
+      | Some owner when owner = self ->
+        lock.depth <- lock.depth - 1;
+        if lock.depth = 0 then begin
+          lock.owner <- None;
+          Condition.broadcast lock.cond
+        end
+      | _ ->
+        invalid_arg "Well.Db: unlock from non-owner domain")
+
+let _sqlite_access_mu = _reentrant_mutex ()
+
+let _with_sqlite_access f =
+  _reentrant_lock _sqlite_access_mu;
+  Fun.protect
+    ~finally:(fun () -> _reentrant_unlock _sqlite_access_mu)
+    f
+
 type pooled_conn = {
   db : Sqlite3.db;
-  mutex : Mutex.t;
+  mutex : reentrant_mutex;
 }
 
 type pool = {
@@ -295,7 +351,7 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     let db = Sqlite3.db_open ~uri:true uri in
     _init_conn db;
     auto_migrate db;
-    { conns = [|{ db; mutex = Mutex.create () }|];
+    { conns = [|{ db; mutex = _reentrant_mutex () }|];
       next = Atomic.make 0;
       mutex = Mutex.create ();
       cond = Condition.create ();
@@ -312,7 +368,7 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
       _init_conn db;
       if not (Atomic.exchange migrated true) then
         auto_migrate db;
-      { db; mutex = Mutex.create () }) in
+      { db; mutex = _reentrant_mutex () }) in
     { conns;
       next = Atomic.make 0;
       mutex = Mutex.create ();
@@ -334,16 +390,16 @@ let with_conn pool f =
      raise exn);
   let idx = Atomic.fetch_and_add pool.next 1 mod Array.length pool.conns in
   let conn = pool.conns.(idx) in
-  Mutex.lock conn.mutex;
+  _reentrant_lock conn.mutex;
   Fun.protect
     ~finally:(fun () ->
-      Mutex.unlock conn.mutex;
+      _reentrant_unlock conn.mutex;
       Mutex.lock pool.mutex;
       pool.active <- pool.active - 1;
       if pool.active = 0 then
         Condition.broadcast pool.cond;
       Mutex.unlock pool.mutex)
-    (fun () -> f conn.db)
+    (fun () -> _with_sqlite_access (fun () -> f conn.db))
 
 (** Close all connections in the pool after waiting for leased handles. *)
 let close_pool pool =
@@ -469,7 +525,6 @@ let _well_size = 4
 let _well_conns : pooled_conn array option ref = ref None
 let _well_next = Atomic.make 0
 let _well_mu = Mutex.create () (* only for lazy init + shutdown *)
-let _well_access_mu = Mutex.create ()
 let _well_cond = Condition.create ()
 let _well_active = ref 0
 let _well_closing = ref false
@@ -479,7 +534,7 @@ let _make_well_conns () =
     let uri = _memory_uri "well.sqlite" in
     let db = Sqlite3.db_open ~uri:true uri in
     _init_conn db;
-    [|{ db; mutex = Mutex.create () }|]
+    [|{ db; mutex = _reentrant_mutex () }|]
   end else begin
     let dir = !data_dir in
     (try Unix.mkdir dir 0o755
@@ -488,7 +543,7 @@ let _make_well_conns () =
     Array.init _well_size (fun _ ->
       let db = Sqlite3.db_open path in
       _init_conn db;
-      { db; mutex = Mutex.create () })
+      { db; mutex = _reentrant_mutex () })
   end
 
 let _ensure_well_conns () =
@@ -531,18 +586,16 @@ let with_well_db f =
        Mutex.unlock _well_mu;
        raise exn)
   in
-  Mutex.lock conn.mutex;
-  Mutex.lock _well_access_mu;
+  _reentrant_lock conn.mutex;
   Fun.protect
     ~finally:(fun () ->
-      Mutex.unlock _well_access_mu;
-      Mutex.unlock conn.mutex;
+      _reentrant_unlock conn.mutex;
       Mutex.lock _well_mu;
       _well_active := !_well_active - 1;
       if !_well_active = 0 then
         Condition.broadcast _well_cond;
       Mutex.unlock _well_mu)
-    (fun () -> f conn.db)
+    (fun () -> _with_sqlite_access (fun () -> f conn.db))
 
 (* ── Query helpers ────────────────────────────────────────────────── *)
 
