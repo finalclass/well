@@ -15,6 +15,20 @@ let () =
       |> to_equal_string {|<custom-tag with-custom-arg="abc"></custom-tag>|}
     );
 
+    it "renders hyphenated HTML attributes directly" (fun () ->
+      let edit_href = "/positions/1/edit" in
+      let name = "Manager" in
+      let html =
+        <a href=(edit_href) aria-label=("Edytuj stanowisko " ^ name) data-testid="edit-link">
+          (Html.txt "Edit")
+        </a>
+        |> render
+      in
+      expect html
+      |> to_equal_string
+           {|<a href="/positions/1/edit" aria-label="Edytuj stanowisko Manager" data-testid="edit-link">Edit</a>|}
+    );
+
     it "renders boolean attributes" (fun () ->
       let html = <input type="text" required /> |> render in
       expect html |> to_equal_string {|<input type="text" required></input>|}
