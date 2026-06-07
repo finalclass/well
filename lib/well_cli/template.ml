@@ -6256,16 +6256,16 @@ let project_files name =
     { path = "data/.gitkeep"; content = "" };
     { path = "data/uploads/.gitkeep"; content = "" };
     { path = Printf.sprintf "%s.service" name; content = systemd_unit name };
-    { path = ".claude/skills/well/SKILL.md"; content = well_skill };
-    (* .claude/skills/idesign-architecture/ *)
-    { path = ".claude/skills/idesign-architecture/SKILL.md"; content = idesign_skill_md };
-    { path = ".claude/skills/idesign-architecture/references/decomposition.md"; content = idesign_ref_decomposition };
-    { path = ".claude/skills/idesign-architecture/references/structure.md"; content = idesign_ref_structure };
-    { path = ".claude/skills/idesign-architecture/references/composition.md"; content = idesign_ref_composition };
-    { path = ".claude/skills/idesign-architecture/references/design-donts.md"; content = idesign_ref_design_donts };
-    { path = ".claude/skills/idesign-architecture/references/design-standard.md"; content = idesign_ref_design_standard };
-    { path = ".claude/skills/idesign-architecture/references/contract-design.md"; content = idesign_ref_contract_design };
-    { path = ".claude/skills/idesign-architecture/references/design-example.md"; content = idesign_ref_design_example };
-    (* .claude/skills/frontend-design/ *)
-    { path = ".claude/skills/frontend-design/SKILL.md"; content = frontend_design_skill };
+    { path = ".agents/skills/well/SKILL.md"; content = well_skill };
+    (* .agents/skills/idesign-architecture/ *)
+    { path = ".agents/skills/idesign-architecture/SKILL.md"; content = idesign_skill_md };
+    { path = ".agents/skills/idesign-architecture/references/decomposition.md"; content = idesign_ref_decomposition };
+    { path = ".agents/skills/idesign-architecture/references/structure.md"; content = idesign_ref_structure };
+    { path = ".agents/skills/idesign-architecture/references/composition.md"; content = idesign_ref_composition };
+    { path = ".agents/skills/idesign-architecture/references/design-donts.md"; content = idesign_ref_design_donts };
+    { path = ".agents/skills/idesign-architecture/references/design-standard.md"; content = idesign_ref_design_standard };
+    { path = ".agents/skills/idesign-architecture/references/contract-design.md"; content = idesign_ref_contract_design };
+    { path = ".agents/skills/idesign-architecture/references/design-example.md"; content = idesign_ref_design_example };
+    (* .agents/skills/frontend-design/ *)
+    { path = ".agents/skills/frontend-design/SKILL.md"; content = frontend_design_skill };
   ]

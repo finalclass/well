@@ -35,10 +35,10 @@ Don't read docs. Read the scaffold. It compiles, it runs, it's the source of tru
 
 ## Learn with AI
 
-The framework ships with a `/well` skill for Claude Code. Every scaffolded project includes it at `.claude/skills/well/SKILL.md`.
+The framework ships with a `/well` skill for coding agents. Every scaffolded project includes it at `.agents/skills/well/SKILL.md`.
 
 ```
-# In your project directory, with Claude Code:
+# In your project directory, with your coding agent:
 /well
 # Then ask Claude to build whatever you need
 ```
