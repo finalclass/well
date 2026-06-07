@@ -241,6 +241,19 @@ let generate_code len =
   let hex = Buffer.contents buf in
   String.sub hex 0 len
 
+let html_escape s =
+  let buf = Buffer.create (String.length s) in
+  String.iter
+    (function
+      | '&' -> Buffer.add_string buf "&amp;"
+      | '<' -> Buffer.add_string buf "&lt;"
+      | '>' -> Buffer.add_string buf "&gt;"
+      | '"' -> Buffer.add_string buf "&quot;"
+      | '\'' -> Buffer.add_string buf "&#39;"
+      | c -> Buffer.add_char buf c)
+    s;
+  Buffer.contents buf
+
 (* ── User row reader ─────────────────────────────────────────── *)
 
 let _user_cols = "id, email, first_name, last_name, language, phone_number, is_archived, created_at"
@@ -594,6 +607,39 @@ let initiate_otp ~email () =
       let _ = Sqlite3.step stmt in
       let _ = Sqlite3.finalize stmt in
       Ok code
+
+(** Generate a one-time password for [email] and deliver it via [Well.Mailer].
+    The code is intentionally not returned to callers. *)
+let initiate_otp_and_send ?(subject = "Your sign-in code") ~email () =
+  match initiate_otp ~email () with
+  | Error _ as error -> error
+  | Ok code ->
+    let email = normalize_email email in
+    let minutes =
+      max 1 ((_config.otp_lifetime_seconds + 59) / 60)
+    in
+    let html =
+      Printf.sprintf
+        {|<p>Your sign-in code is:</p><p><strong>%s</strong></p><p>This code expires in %d minutes.</p>|}
+        (html_escape code)
+        minutes
+    in
+    let text =
+      Printf.sprintf
+        "Your sign-in code is: %s\n\nThis code expires in %d minutes."
+        code
+        minutes
+    in
+    (match
+       Mailer.send
+         { to_ = [("", email)]
+         ; subject
+         ; html
+         ; text
+         }
+     with
+    | Ok () -> Ok ()
+    | Error message -> Error message)
 
 (** Verify an OTP code. On success, returns the user (auto-created if new). *)
 let verify_otp ~email ~code ?(ip = "") () =

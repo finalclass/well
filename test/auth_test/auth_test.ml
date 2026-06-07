@@ -272,6 +272,37 @@ let () =
     let not_found = Well.Auth.find_user_by_email "nobody@nowhere.com" in
     check "find_user_by_email: not found" (Option.is_none not_found);
 
+    (* ── OTP delivery through Well.Mailer ────────────────────────────── *)
+
+    Well.Mailer.setup
+      { from_email = "noreply@example.com"; from_name = "Well"; adapter = Log };
+    let sent_otp =
+      Well.Auth.initiate_otp_and_send ~email:"otp@example.com" ()
+    in
+    check "initiate_otp_and_send: ok" (Result.is_ok sent_otp);
+    let otp_code =
+      Well.Auth.with_db (fun db ->
+          let stmt =
+            Sqlite3.prepare
+              db
+              "SELECT code FROM _well_otps WHERE email = ? ORDER BY id DESC \
+               LIMIT 1"
+          in
+          let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT "otp@example.com") in
+          let code =
+            match Sqlite3.step stmt with
+            | Sqlite3.Rc.ROW -> Sqlite3.column_text stmt 0
+            | _ -> ""
+          in
+          let _ = Sqlite3.finalize stmt in
+          code)
+    in
+    check "initiate_otp_and_send: stores code" (String.length otp_code > 0);
+    let verified_otp =
+      Well.Auth.verify_otp ~email:"otp@example.com" ~code:otp_code ()
+    in
+    check "initiate_otp_and_send: verifiable" (Result.is_ok verified_otp);
+
     (* ── with_db ─────────────────────────────────────────────────────── *)
 
     let db_ok = ref false in
