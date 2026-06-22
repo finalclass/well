@@ -113,6 +113,7 @@ a public API layer or a workflow engine.
 Declare registries in TOML:
 
 ```toml
+# lib/registry/company.toml
 [registry.company]
 table = "companies"
 title = "Companies"
@@ -140,11 +141,15 @@ Register them before opening the app database:
 let () =
   Well.Registry.setup_from_toml_file
     ~base_path:"/planner/registry"
-    "well.toml"
+    "lib/registry/company.toml"
 ```
 
 The registry registers SQLite tables for Well auto-migration and exposes list,
 new, edit and archive routes under the selected base path.
+
+`well build` and `well release` include `lib/registry/` in the release archive
+when it exists, so applications can read the same TOML path in development and
+deployment.
 
 ## Build from source
 

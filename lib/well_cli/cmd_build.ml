@@ -100,6 +100,64 @@ let get_interpreter binary =
   ignore (Unix.close_process_in ic);
   result
 
+let rec ensure_dir path =
+  if path = "" || path = "." then ()
+  else if Sys.file_exists path then (
+    if not (Sys.is_directory path) then (
+      Printf.eprintf "Error: %s exists and is not a directory\n" path;
+      exit 1))
+  else (
+    ensure_dir (Filename.dirname path);
+    Unix.mkdir path 0o755)
+
+let copy_file ~src ~dst =
+  ensure_dir (Filename.dirname dst);
+  let ic = open_in_bin src in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () ->
+      let oc = open_out_bin dst in
+      Fun.protect
+        ~finally:(fun () -> close_out_noerr oc)
+        (fun () ->
+          let buffer = Bytes.create 65536 in
+          let rec loop () =
+            match input ic buffer 0 (Bytes.length buffer) with
+            | 0 -> ()
+            | n ->
+                output oc buffer 0 n;
+                loop ()
+          in
+          loop ()))
+
+let copy_registry_specs ~src ~dst =
+  if not (Sys.file_exists src) then false
+  else (
+    if Sys.file_exists dst then
+      ignore
+        (Sys.command
+           (Printf.sprintf "rm -rf %s" (Filename.quote dst)));
+    let copied = ref false in
+    let rec walk rel =
+      let dir = if rel = "" then src else Filename.concat src rel in
+      Sys.readdir dir
+      |> Array.iter (fun name ->
+           let src_path = Filename.concat dir name in
+           let rel_path =
+             if rel = "" then name else Filename.concat rel name
+           in
+           match (Unix.lstat src_path).Unix.st_kind with
+           | Unix.S_DIR -> walk rel_path
+           | Unix.S_REG when String.ends_with ~suffix:".toml" name ->
+               copy_file
+                 ~src:src_path
+                 ~dst:(Filename.concat dst rel_path);
+               copied := true
+           | _ -> ())
+    in
+    walk "";
+    !copied)
+
 let run _args =
   let name = detect_name () in
   let dune =
@@ -168,12 +226,18 @@ let run _args =
     ignore
       (Sys.command
          (Printf.sprintf "cp -r static %s/" (Filename.quote release_dir))));
-  (* 7. Summary *)
+  (* 7. Copy framework-known runtime specs *)
+  let has_registry_specs =
+    copy_registry_specs ~src:"lib/registry" ~dst:(release_dir ^ "/lib/registry")
+  in
+  (* 8. Summary *)
   Printf.printf "\n\027[32mBuild ready: %s/\027[0m\n" release_dir;
   Printf.printf "  bin/%-14s relocatable binary\n" name;
   Printf.printf "  bin/lib/           bundled .so\n";
   if Sys.file_exists "static" then
     Printf.printf "  static/            assets\n";
+  if has_registry_specs then
+    Printf.printf "  lib/registry/      Registry Forms TOML specs\n";
   Printf.printf "\nRun: cd %s && ./bin/%s\n" release_dir name
 
 let cmd : Command.t =
@@ -187,7 +251,8 @@ let cmd : Command.t =
        Creates _release/ directory:\n\
       \  bin/<name>       Relocatable binary\n\
       \  bin/lib/         Bundled .so libraries\n\
-      \  static/          Static assets (if present)\n\n\
+      \  static/          Static assets (if present)\n\
+      \  lib/registry/    Registry Forms TOML specs (if present)\n\n\
        Run: cd _release && ./bin/<name>\n\n\
        Note: data/ is NOT included — the server keeps its own databases.";
     run;

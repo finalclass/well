@@ -35,7 +35,8 @@ let run args =
   Printf.printf "  scp %s server:/srv/%s/\n" archive name;
   Printf.printf "  ssh server 'cd /srv/%s && tar xzf %s && ./bin/%s'\n" name
     archive name;
-  Printf.printf "\nArchive contains bin/ and static/ only. data/ is not touched.\n"
+  Printf.printf
+    "\nArchive contains bin/, static/ and framework runtime specs when present. data/ is not touched.\n"
 
 let cmd : Command.t =
   {
