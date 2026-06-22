@@ -32,6 +32,9 @@ let delete = Router.delete
 (** Register a WebSocket route handler. *)
 let ws = Router.ws
 
+(** Declarative admin registries backed by SQLite. *)
+module Registry = Registry
+
 (* ── Re-exports: Middleware ──────────────────────────────────────── *)
 
 (** Request logging middleware. Logs method, path, status, and latency. *)

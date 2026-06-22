@@ -54,6 +54,7 @@ This is how you learn a framework in 2026. You don't read documentation that goe
 - **LiveView** — server-side reactive UI over WebSocket (like Phoenix LiveView)
 - **Type-safe SQL** — write real SQL, compiler validates it (`let%query`, `[@@deriving table]`)
 - **Service contracts** — TOML -> OCaml + TypeScript code generation
+- **Registry Forms** — TOML-declared admin CRUD for low-volatility reference tables
 - **MessageBus** — SQLite-backed persistent pub/sub
 - **Channels** — authorized WebSocket gateway
 - **Auto-TLS** — `Well.run ~domain:"myapp.com" ()` and Let's Encrypt certificates just happen
@@ -102,6 +103,48 @@ well contract build .    # generate from TOML contracts
 well db diff             # show pending migrations
 well repl                # interactive service shell
 ```
+
+## Registry Forms
+
+Registry Forms are for low-volatility back-office reference tables:
+dictionaries, company lists, and simple admin tables. They are deliberately not
+a public API layer or a workflow engine.
+
+Declare registries in TOML:
+
+```toml
+[registry.company]
+table = "companies"
+title = "Companies"
+display = ["name", "nip", "address"]
+soft_delete = true
+
+[registry.company.fields.name]
+type = "string"
+label = "Name"
+required = true
+unique = true
+
+[registry.company.fields.nip]
+type = "string"
+label = "NIP"
+
+[registry.company.fields.address]
+type = "text"
+label = "Address"
+```
+
+Register them before opening the app database:
+
+```ocaml
+let () =
+  Well.Registry.setup_from_toml_file
+    ~base_path:"/planner/registry"
+    "well.toml"
+```
+
+The registry registers SQLite tables for Well auto-migration and exposes list,
+new, edit and archive routes under the selected base path.
 
 ## Build from source
 
