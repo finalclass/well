@@ -104,6 +104,33 @@ data/                              # SQLite databases (gitignored)
 - `.ts` — TypeScript (compiled to JS via bun, wired through dune)
 |} name
 
+let agents_md =
+  {|# Well Agent Instructions
+
+## MLX and HTML
+
+- This is a Well project. Use `.mlx` files for pages, layouts, LiveViews and reusable view components.
+- Build HTML with MLX JSX syntax and the Well `Html` module (`txt`, `raw`, `cat`, `element_to_string`, tag helpers). Do not invent alternate HTML DSLs.
+- Do not create HTML views with `Printf.sprintf`, string concatenation, ad-hoc buffers, or hand-written HTML templates. The only acceptable raw string HTML is a small trusted fragment passed through `raw`, or framework internals that deliberately serialize HTML.
+- In `.ml` files that need to produce HTML, use the programmatic `Html` API (`div ~attrs ~children ()`, `txt`, `cat`, etc.) instead of formatting strings.
+- Components should be normal MLX components with `createElement` when they are used as JSX tags. Use `<Layout>...</Layout>` / `<Component ... />` instead of manually calling component internals or assembling their output strings.
+- Prefer native MLX attributes when available: `<div class'="panel" id="main">`, `<button data-lv-click="Save">`, `<input type="text" required />`. Use `attrs=[...]` only for dynamic attribute lists or when it is clearer.
+- All user-controlled or variable text rendered in tags must go through `txt`. Use `raw` only for trusted HTML that is already intentionally HTML.
+- MLX children use OCaml expression syntax, not JavaScript interpolation:
+  - Correct: `<span>(txt name)</span>`
+  - Correct: `<span>(string_of_int count |> txt)</span>`
+  - Wrong: `<span>{txt name}</span>`
+  - Wrong: `<span>{count}</span>`
+- `{...}` in MLX is record syntax only. Use `(expr)` for function calls, conditionals, matches, list rendering, and other expressions.
+- For conditional empty output, use `(txt "")`.
+- For lists of nodes, map to nodes and render with `cat |> raw` inside MLX: `(items |> List.map render_item |> cat |> raw)`.
+
+## Verification
+
+- Run `dune build @check` or the project `make check` after changing MLX.
+- If a syntax error points at JSX, first check for accidental `{...}` interpolation or unwrapped string variables.
+|}
+
 let well_toml name =
   Printf.sprintf {|[well]
 port = 4000
@@ -6198,6 +6225,7 @@ type file = {
 let project_files name =
   [
     { path = "well.toml"; content = well_toml name };
+    { path = "AGENTS.md"; content = agents_md };
     { path = "README.md"; content = readme name };
     { path = "dune-project"; content = dune_project name };
     { path = "dune"; content = root_dune };
