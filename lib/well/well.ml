@@ -212,9 +212,10 @@ let session_middleware : middleware = fun next req ->
   let resp = next req in
   if new_session then
     let secure = if !_tls_active then "; Secure" else "" in
+    let max_age = int_of_float !_session_lifetime in
     header "Set-Cookie"
-      (Printf.sprintf "well_session=%s; HttpOnly; SameSite=Lax; Path=/%s"
-         session_id secure)
+      (Printf.sprintf "well_session=%s; HttpOnly; SameSite=Lax; Path=/; Max-Age=%d%s"
+         session_id max_age secure)
       resp
   else resp
 
@@ -256,10 +257,11 @@ let session_regenerate req =
   !_session_regenerate_hook old_sid new_sid;
   let new_req = { req with session_id = new_sid } in
   let secure = if !_tls_active then "; Secure" else "" in
+  let max_age = int_of_float !_session_lifetime in
   let set_cookie resp =
     header "Set-Cookie"
-      (Printf.sprintf "well_session=%s; HttpOnly; SameSite=Lax; Path=/%s"
-         new_sid secure)
+      (Printf.sprintf "well_session=%s; HttpOnly; SameSite=Lax; Path=/; Max-Age=%d%s"
+         new_sid max_age secure)
       resp
   in
   (new_req, set_cookie)
