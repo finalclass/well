@@ -27,7 +27,19 @@
   --fixed-exception
   --table
   --strategy
-  simplified)
+  simplified
+  ;; These tokens are declared (and, for COMMENT/DOCSTRING/EOL/LESSSLASH,
+  ;; emitted by the lexer) but never appear in a grammar production, so Menhir
+  ;; warns that they are unused. They are consumed internally by the lexer's
+  ;; comment/docstring-skipping loop or kept for grammar completeness, hence
+  ;; kept and silenced here.
+  --unused-token COMMENT
+  --unused-token DOCSTRING
+  --unused-token EOL
+  --unused-token GREATERRBRACKET
+  --unused-token JSX_LIDENT
+  --unused-token JSX_LIDENT_E
+  --unused-token LESSSLASH)
  (enabled_if
   (<> %{profile} "release"))
  (mode promote)
