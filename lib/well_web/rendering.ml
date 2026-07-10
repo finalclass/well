@@ -1,7 +1,5 @@
 [@@@warning "-69"]
 
-open Component_access
-
 type ctrl = {
   mutable vdom : Obj.t;
   node : Bridge.element;
@@ -11,17 +9,17 @@ type ctrl = {
   is_text : bool;
 }
 
-let is_text_node (v : 'msg Vdom.t) = v.tag = ""
+let is_text_node (v : 'msg Html.vdom) = v.tag = ""
 
 let attach_listener dispatch node (name, handler) =
   let cb ev =
-    match handler ev with
+    match handler (Obj.repr ev) with
     | None -> ()
     | Some msg -> dispatch (Obj.repr msg)
   in
   Bridge.add_event_listener node ~event_name:name (Bridge.fn1 cb)
 
-let rec blit_dispatch dispatch (v : 'msg Vdom.t) : ctrl =
+let rec blit_dispatch dispatch (v : 'msg Html.vdom) : ctrl =
   if is_text_node v then
     let text = match v.text with Some s -> s | None -> "" in
     let node = Bridge.create_text_node text in
@@ -37,7 +35,7 @@ let rec blit_dispatch dispatch (v : 'msg Vdom.t) : ctrl =
      | _ -> ());
     let unsubs = List.map (attach_listener dispatch node) v.handlers in
     let children =
-      Array.of_list (List.map (blit_dispatch dispatch) v.children)
+      Array.of_list (List.map (fun (`Html c) -> blit_dispatch dispatch c) v.children)
     in
     Array.iter
       (fun child -> Bridge.append_child ~parent:node ~child:child.node)
@@ -45,7 +43,7 @@ let rec blit_dispatch dispatch (v : 'msg Vdom.t) : ctrl =
     { vdom = Obj.repr v; node; children; unsubs; dispatch; is_text = false }
   end
 
-let blit (v : 'msg Vdom.t) : ctrl = blit_dispatch (fun _ -> ()) v
+let blit (`Html v : 'msg Html.node) : ctrl = blit_dispatch (fun _ -> ()) v
 
 let sync_attrs node (old_attrs : (string * string) list)
     (new_attrs : (string * string) list) =
@@ -73,7 +71,7 @@ let sync_attrs node (old_attrs : (string * string) list)
   in
   merge (List.sort compare old_attrs) (List.sort compare new_attrs)
 
-let sync_text ctrl (old_v : 'msg Vdom.t) (new_v : 'msg Vdom.t) =
+let sync_text ctrl (old_v : 'msg Html.vdom) (new_v : 'msg Html.vdom) =
   if new_v.children = [] then
     match new_v.text with
     | Some text ->
@@ -92,12 +90,12 @@ let detach_node ctrl =
   | Some parent -> Bridge.remove_child ~parent ~child:ctrl.node
   | None -> ()
 
-let sync_handlers ctrl (new_handlers : (string * _ Vdom.handler) list) =
+let sync_handlers ctrl (new_handlers : (string * _ Html.handler) list) =
   List.iter (fun unsubscribe -> unsubscribe ()) ctrl.unsubs;
   ctrl.unsubs <- List.map (attach_listener ctrl.dispatch ctrl.node) new_handlers
 
-let rec sync (ctrl : ctrl) (v : 'msg Vdom.t) =
-  let old : 'msg Vdom.t = Obj.obj ctrl.vdom in
+let rec sync (ctrl : ctrl) (v : 'msg Html.vdom) =
+  let old : 'msg Html.vdom = Obj.obj ctrl.vdom in
   ctrl.vdom <- Obj.repr v;
   if ctrl.is_text then
     (match v.text with
@@ -114,7 +112,7 @@ let rec sync (ctrl : ctrl) (v : 'msg Vdom.t) =
     sync_children ctrl v.children
   end
 
-and sync_children ctrl (new_children : 'msg Vdom.t list) =
+and sync_children ctrl (new_children : 'msg Html.node list) =
   let old_children = ctrl.children in
   let new_arr = Array.of_list new_children in
   let old_count = Array.length old_children in
@@ -125,11 +123,11 @@ and sync_children ctrl (new_children : 'msg Vdom.t list) =
   done;
   let result : ctrl array = Array.make new_count (Obj.magic ()) in
   for i = 0 to common - 1 do
-    sync old_children.(i) new_arr.(i);
+    (match new_arr.(i) with `Html c -> sync old_children.(i) c);
     result.(i) <- old_children.(i)
   done;
   for i = common to new_count - 1 do
-    result.(i) <- blit_dispatch ctrl.dispatch new_arr.(i)
+    (match new_arr.(i) with `Html c -> result.(i) <- blit_dispatch ctrl.dispatch c)
   done;
   for i = new_count - 1 downto 0 do
     let ref_ =
@@ -145,7 +143,7 @@ let table : (string, ctrl) Hashtbl.t = Hashtbl.create 64
 
 let on_vdom env =
   let instance_id = Message_bus.instance_id env in
-  let v : 'msg Vdom.t = Obj.obj (Message_bus.payload env) in
+  let (`Html v) : 'msg Html.node = Obj.obj (Message_bus.payload env) in
   let dispatch msg =
     Message_bus.publish ~topic:"msg"
       (Message_bus.create ~instance_id (Obj.obj msg))

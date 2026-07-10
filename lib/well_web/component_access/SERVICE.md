@@ -16,7 +16,8 @@ konkretną strukturę `state`/`msg`, faktyczny moduł komponentu, DOM element.
 `instance` jest typem wewnętrznym (implementation detail) — publiczne API
 operuje wyłącznie na stringowym `instance_id`. Stan instancji żyje w
 StateAccess (ComponentAccess nie przechowuje stanu). Definiuje współdzielone
-typy `Vdom.t` (generyczny nad `'msg`), `Props.t`, `Cmd.t`, `emits`,
+typy `Html.node`/`Html.vdom` (przez alias `Vdom`, generyczny nad `'msg`),
+`Props.t`, `Cmd.t`, `emits`,
 re-eksportowane przez Clienta.
 
 ## Assumptions

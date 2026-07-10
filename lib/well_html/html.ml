@@ -1,9 +1,33 @@
-(** HTML generation library with full HTML5 tag coverage, XSS protection, and LiveView support. *)
+(** HTML generation library with full HTML5 tag coverage and XSS protection.
 
-(** An HTML node. Coerces to [Well.response] via [:>] in route handlers. *)
-type node = [ `Html of string ]
+    The core type is ['msg vdom]: a single DOM representation shared by the
+    server (renders to an HTML string) and the frontend TEA runtime (renders
+    to live DOM via {!rendering}). The ['msg] parameter carries the component
+    message type through [handlers]; on the server it is always [unit] since
+    server-rendered nodes never carry handlers. *)
 
-(** Escape HTML special characters (ampersand, angle brackets, double quotes) for safe embedding. *)
+(** A DOM event handler. The event arrives as an [Obj.t] (a JS event on the
+    frontend; never produced on the server). Returns [Some msg] to dispatch,
+    [None] to ignore. *)
+type 'msg handler = Obj.t -> 'msg option
+
+(** A virtual DOM node. Covariant in ['msg]: a ['msg vdom] widens to
+    [unit vdom] (the server/response instantiation) wherever handlers are
+    absent, which is what lets MLX-produced nodes coerce into {!Well.response}. *)
+type +'msg vdom = {
+  tag : string;
+  attrs : (string * string) list;
+  bool_attrs : string list;
+  handlers : (string * 'msg handler) list;
+  children : 'msg node list;
+  text : string option;
+  void : bool;
+}
+
+(** A wrapped vdom — the value MLX emits and [Well.response] carries. *)
+and 'msg node = [ `Html of 'msg vdom ]
+
+(** Escape HTML special characters (ampersand, angle brackets, double quotes). *)
 let escape_html s =
   let buf = Buffer.create (String.length s) in
   String.iter
@@ -28,239 +52,233 @@ let attrs_to_string attrs =
   String.concat "" parts
 
 let bool_attrs_to_string bools =
-  if bools = [] then ""
-  else " " ^ String.concat " " bools
-
-(** Concatenate a list of nodes into a single HTML string. *)
-let cat (children : node list) =
-  String.concat "" (List.map (fun (`Html s) -> s) children)
+  if bools = [] then "" else " " ^ String.concat " " bools
 
 (* ── Shared element constructor ───────────────────────────────────── *)
 
-let _el ~void name
-    ?(attrs : (string * string) list = [])
-    ?(bool_attrs : string list = [])
-    ?(children : node list = []) () : node =
-  let attr_str = attrs_to_string attrs ^ bool_attrs_to_string bool_attrs in
-  if void then begin
-    ignore children;
-    `Html (Printf.sprintf "<%s%s />" name attr_str)
-  end else
-    `Html (Printf.sprintf "<%s%s>%s</%s>" name attr_str (cat children) name)
+let element (tag : string) ?(attrs : (string * string) list = [])
+    ?(bool_attrs : string list = []) ?(handlers : (string * _ handler) list = [])
+    ?(children : _ node list = []) ?(text : string = "") () : 'msg node =
+  `Html { tag; attrs; bool_attrs; handlers; children; text = Some text; void = false }
 
-(** Create a normal HTML element (with closing tag). *)
-let tag = _el ~void:false
+let void_element (tag : string) ?(attrs : (string * string) list = [])
+    ?(bool_attrs : string list = []) ?(handlers : (string * _ handler) list = [])
+    ?(children : _ node list = []) ?(text : string = "") () : 'msg node =
+  `Html { tag; attrs; bool_attrs; handlers; children; text = Some text; void = true }
 
-(** Create a void/self-closing HTML element (e.g. [<input />]). *)
-let void_tag = _el ~void:true
+(** Build a normal (closing-tag) element. MLX desugars [<tag ...>] to this. *)
+let tag name ?attrs ?bool_attrs ?handlers ?children ?text () =
+  element name ?attrs ?bool_attrs ?handlers ?children ?text ()
+
+(** Build a void/self-closing element (e.g. [<input />]). *)
+let void_tag name ?attrs ?bool_attrs ?handlers ?children ?text () =
+  void_element name ?attrs ?bool_attrs ?handlers ?children ?text ()
+
+(** Wrap a vdom into a node. *)
+let node (v : 'msg vdom) : 'msg node = `Html v
 
 (* ── Document ────────────────────────────────────────────────────── *)
 
-let html ?attrs ?bool_attrs ?children () =
-  let (`Html inner) = tag "html" ?attrs ?bool_attrs ?children () in
-  `Html ("<!DOCTYPE html>\n" ^ inner)
-let head = tag "head"
-let title = tag "title"
-let body = tag "body"
-let base = void_tag "base"
+let html ?(attrs = []) ?(bool_attrs = []) ?(children = []) () : 'msg node =
+  `Html { tag = "html"; attrs; bool_attrs; handlers = []; children;
+    text = None; void = false }
+
+(* Each tag helper is an explicit [fun] so its type generalizes —
+   [let head = tag "head"] alone would be a monomorphic value (value
+   restriction: the optionals carry a free type variable). *)
+let head ?attrs ?bool_attrs ?handlers ?children ?text () = tag "head" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let title ?attrs ?bool_attrs ?handlers ?children ?text () = tag "title" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let body ?attrs ?bool_attrs ?handlers ?children ?text () = tag "body" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let base ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "base" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Sections ────────────────────────────────────────────────────── *)
 
-let main = tag "main"
-let header = tag "header"
-let footer = tag "footer"
-let nav = tag "nav"
-let section = tag "section"
-let article = tag "article"
-let aside = tag "aside"
-let address = tag "address"
+let main ?attrs ?bool_attrs ?handlers ?children ?text () = tag "main" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let header ?attrs ?bool_attrs ?handlers ?children ?text () = tag "header" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let footer ?attrs ?bool_attrs ?handlers ?children ?text () = tag "footer" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let nav ?attrs ?bool_attrs ?handlers ?children ?text () = tag "nav" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let section ?attrs ?bool_attrs ?handlers ?children ?text () = tag "section" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let article ?attrs ?bool_attrs ?handlers ?children ?text () = tag "article" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let aside ?attrs ?bool_attrs ?handlers ?children ?text () = tag "aside" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let address ?attrs ?bool_attrs ?handlers ?children ?text () = tag "address" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Headings ────────────────────────────────────────────────────── *)
 
-let h1 = tag "h1"
-let h2 = tag "h2"
-let h3 = tag "h3"
-let h4 = tag "h4"
-let h5 = tag "h5"
-let h6 = tag "h6"
+let h1 ?attrs ?bool_attrs ?handlers ?children ?text () = tag "h1" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let h2 ?attrs ?bool_attrs ?handlers ?children ?text () = tag "h2" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let h3 ?attrs ?bool_attrs ?handlers ?children ?text () = tag "h3" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let h4 ?attrs ?bool_attrs ?handlers ?children ?text () = tag "h4" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let h5 ?attrs ?bool_attrs ?handlers ?children ?text () = tag "h5" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let h6 ?attrs ?bool_attrs ?handlers ?children ?text () = tag "h6" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Grouping / block ────────────────────────────────────────────── *)
 
-let div = tag "div"
-let p = tag "p"
-let pre = tag "pre"
-let blockquote = tag "blockquote"
-let figure = tag "figure"
-let figcaption = tag "figcaption"
-let hr = void_tag "hr"
-let br = void_tag "br"
-let wbr = void_tag "wbr"
+let div ?attrs ?bool_attrs ?handlers ?children ?text () = tag "div" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let p ?attrs ?bool_attrs ?handlers ?children ?text () = tag "p" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let pre ?attrs ?bool_attrs ?handlers ?children ?text () = tag "pre" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let blockquote ?attrs ?bool_attrs ?handlers ?children ?text () = tag "blockquote" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let figure ?attrs ?bool_attrs ?handlers ?children ?text () = tag "figure" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let figcaption ?attrs ?bool_attrs ?handlers ?children ?text () = tag "figcaption" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let hr ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "hr" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let br ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "br" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let wbr ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "wbr" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Lists ───────────────────────────────────────────────────────── *)
 
-let ul = tag "ul"
-let ol = tag "ol"
-let li = tag "li"
-let dl = tag "dl"
-let dt = tag "dt"
-let dd = tag "dd"
+let ul ?attrs ?bool_attrs ?handlers ?children ?text () = tag "ul" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let ol ?attrs ?bool_attrs ?handlers ?children ?text () = tag "ol" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let li ?attrs ?bool_attrs ?handlers ?children ?text () = tag "li" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let dl ?attrs ?bool_attrs ?handlers ?children ?text () = tag "dl" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let dt ?attrs ?bool_attrs ?handlers ?children ?text () = tag "dt" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let dd ?attrs ?bool_attrs ?handlers ?children ?text () = tag "dd" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Inline text semantics ───────────────────────────────────────── *)
 
-let span = tag "span"
-let a = tag "a"
-let strong = tag "strong"
-let em = tag "em"
-let b = tag "b"
-let i = tag "i"
-let u = tag "u"
-let s = tag "s"
-let small = tag "small"
-let mark = tag "mark"
-let del = tag "del"
-let ins = tag "ins"
-let sub = tag "sub"
-let sup = tag "sup"
-let abbr = tag "abbr"
-let time = tag "time"
-let cite = tag "cite"
-let q = tag "q"
-let dfn = tag "dfn"
-let var = tag "var"
-let samp = tag "samp"
-let kbd = tag "kbd"
-let code = tag "code"
-let data = tag "data"
-let ruby = tag "ruby"
-let rt = tag "rt"
-let rp = tag "rp"
-let bdi = tag "bdi"
-let bdo = tag "bdo"
+let span ?attrs ?bool_attrs ?handlers ?children ?text () = tag "span" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let a ?attrs ?bool_attrs ?handlers ?children ?text () = tag "a" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let strong ?attrs ?bool_attrs ?handlers ?children ?text () = tag "strong" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let em ?attrs ?bool_attrs ?handlers ?children ?text () = tag "em" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let b ?attrs ?bool_attrs ?handlers ?children ?text () = tag "b" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let i ?attrs ?bool_attrs ?handlers ?children ?text () = tag "i" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let u ?attrs ?bool_attrs ?handlers ?children ?text () = tag "u" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let s ?attrs ?bool_attrs ?handlers ?children ?text () = tag "s" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let small ?attrs ?bool_attrs ?handlers ?children ?text () = tag "small" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let mark ?attrs ?bool_attrs ?handlers ?children ?text () = tag "mark" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let del ?attrs ?bool_attrs ?handlers ?children ?text () = tag "del" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let ins ?attrs ?bool_attrs ?handlers ?children ?text () = tag "ins" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let sub ?attrs ?bool_attrs ?handlers ?children ?text () = tag "sub" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let sup ?attrs ?bool_attrs ?handlers ?children ?text () = tag "sup" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let abbr ?attrs ?bool_attrs ?handlers ?children ?text () = tag "abbr" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let time ?attrs ?bool_attrs ?handlers ?children ?text () = tag "time" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let cite ?attrs ?bool_attrs ?handlers ?children ?text () = tag "cite" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let q ?attrs ?bool_attrs ?handlers ?children ?text () = tag "q" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let dfn ?attrs ?bool_attrs ?handlers ?children ?text () = tag "dfn" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let var ?attrs ?bool_attrs ?handlers ?children ?text () = tag "var" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let samp ?attrs ?bool_attrs ?handlers ?children ?text () = tag "samp" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let kbd ?attrs ?bool_attrs ?handlers ?children ?text () = tag "kbd" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let code ?attrs ?bool_attrs ?handlers ?children ?text () = tag "code" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let data ?attrs ?bool_attrs ?handlers ?children ?text () = tag "data" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let ruby ?attrs ?bool_attrs ?handlers ?children ?text () = tag "ruby" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let rt ?attrs ?bool_attrs ?handlers ?children ?text () = tag "rt" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let rp ?attrs ?bool_attrs ?handlers ?children ?text () = tag "rp" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let bdi ?attrs ?bool_attrs ?handlers ?children ?text () = tag "bdi" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let bdo ?attrs ?bool_attrs ?handlers ?children ?text () = tag "bdo" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Tables ──────────────────────────────────────────────────────── *)
 
-let table = tag "table"
-let thead = tag "thead"
-let tbody = tag "tbody"
-let tfoot = tag "tfoot"
-let tr = tag "tr"
-let th = tag "th"
-let td = tag "td"
-let caption = tag "caption"
-let colgroup = tag "colgroup"
-let col = void_tag "col"
+let table ?attrs ?bool_attrs ?handlers ?children ?text () = tag "table" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let thead ?attrs ?bool_attrs ?handlers ?children ?text () = tag "thead" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let tbody ?attrs ?bool_attrs ?handlers ?children ?text () = tag "tbody" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let tfoot ?attrs ?bool_attrs ?handlers ?children ?text () = tag "tfoot" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let tr ?attrs ?bool_attrs ?handlers ?children ?text () = tag "tr" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let th ?attrs ?bool_attrs ?handlers ?children ?text () = tag "th" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let td ?attrs ?bool_attrs ?handlers ?children ?text () = tag "td" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let caption ?attrs ?bool_attrs ?handlers ?children ?text () = tag "caption" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let colgroup ?attrs ?bool_attrs ?handlers ?children ?text () = tag "colgroup" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let col ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "col" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Forms ───────────────────────────────────────────────────────── *)
 
-let form = tag "form"
-let button = tag "button"
-let input = void_tag "input"
-let label = tag "label"
-let textarea = tag "textarea"
-let select = tag "select"
-let option = tag "option"
-let optgroup = tag "optgroup"
-let fieldset = tag "fieldset"
-let legend = tag "legend"
-let datalist = tag "datalist"
-let output = tag "output"
-let progress = tag "progress"
-let meter = tag "meter"
+let form ?attrs ?bool_attrs ?handlers ?children ?text () = tag "form" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let button ?attrs ?bool_attrs ?handlers ?children ?text () = tag "button" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let input ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "input" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let label ?attrs ?bool_attrs ?handlers ?children ?text () = tag "label" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let textarea ?attrs ?bool_attrs ?handlers ?children ?text () = tag "textarea" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let select ?attrs ?bool_attrs ?handlers ?children ?text () = tag "select" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let option ?attrs ?bool_attrs ?handlers ?children ?text () = tag "option" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let optgroup ?attrs ?bool_attrs ?handlers ?children ?text () = tag "optgroup" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let fieldset ?attrs ?bool_attrs ?handlers ?children ?text () = tag "fieldset" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let legend ?attrs ?bool_attrs ?handlers ?children ?text () = tag "legend" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let datalist ?attrs ?bool_attrs ?handlers ?children ?text () = tag "datalist" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let output ?attrs ?bool_attrs ?handlers ?children ?text () = tag "output" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let progress ?attrs ?bool_attrs ?handlers ?children ?text () = tag "progress" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let meter ?attrs ?bool_attrs ?handlers ?children ?text () = tag "meter" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Interactive ─────────────────────────────────────────────────── *)
 
-let details = tag "details"
-let summary = tag "summary"
-let dialog = tag "dialog"
+let details ?attrs ?bool_attrs ?handlers ?children ?text () = tag "details" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let summary ?attrs ?bool_attrs ?handlers ?children ?text () = tag "summary" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let dialog ?attrs ?bool_attrs ?handlers ?children ?text () = tag "dialog" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Media / embedded ────────────────────────────────────────────── *)
 
-let img = void_tag "img"
-let video = tag "video"
-let audio = tag "audio"
-let source = void_tag "source"
-let track = void_tag "track"
-let canvas = tag "canvas"
-let picture = tag "picture"
-let iframe = tag "iframe"
-let embed = void_tag "embed"
-let object_ = tag "object"
-let map = tag "map"
-let area = void_tag "area"
+let img ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "img" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let video ?attrs ?bool_attrs ?handlers ?children ?text () = tag "video" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let audio ?attrs ?bool_attrs ?handlers ?children ?text () = tag "audio" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let source ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "source" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let track ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "track" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let canvas ?attrs ?bool_attrs ?handlers ?children ?text () = tag "canvas" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let picture ?attrs ?bool_attrs ?handlers ?children ?text () = tag "picture" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let iframe ?attrs ?bool_attrs ?handlers ?children ?text () = tag "iframe" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let embed ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "embed" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let object_ ?attrs ?bool_attrs ?handlers ?children ?text () = tag "object" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let map ?attrs ?bool_attrs ?handlers ?children ?text () = tag "map" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let area ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "area" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
 (* ── Metadata / scripting ────────────────────────────────────────── *)
 
-let meta = void_tag "meta"
-let link = void_tag "link"
-let script = tag "script"
-let noscript = tag "noscript"
-let template = tag "template"
-let slot = tag "slot"
+let meta ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "meta" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let link ?attrs ?bool_attrs ?handlers ?children ?text () = void_tag "link" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let script ?attrs ?bool_attrs ?handlers ?children ?text () = tag "script" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let noscript ?attrs ?bool_attrs ?handlers ?children ?text () = tag "noscript" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let template ?attrs ?bool_attrs ?handlers ?children ?text () = tag "template" ?attrs ?bool_attrs ?handlers ?children ?text ()
+let slot ?attrs ?bool_attrs ?handlers ?children ?text () = tag "slot" ?attrs ?bool_attrs ?handlers ?children ?text ()
 
-(** Create an escaped text node (XSS-safe). *)
-let txt s : node = `Html (escape_html s)
+(* ── Text / raw nodes ────────────────────────────────────────────── *)
 
-(** Create a raw/unescaped HTML node. Use with caution. *)
-let raw s : node = `Html s
+(** An escaped text node (XSS-safe). MLX bare-string children desugar to this. *)
+let txt (s : string) : 'a node =
+  `Html { tag = ""; attrs = []; bool_attrs = []; handlers = []; children = [];
+    text = Some (escape_html s); void = false }
+
+(** A raw/unescaped HTML node. The string is emitted verbatim. Use with caution. *)
+let raw (s : string) : 'a node =
+  `Html { tag = "#raw"; attrs = []; bool_attrs = []; handlers = []; children = [];
+    text = Some s; void = false }
+
+(** Concatenate nodes into a fragment node. {!element_to_string} flattens
+    fragments; convenient for MLX [(children |> cat |> raw)]. *)
+let cat (children : 'msg node list) : 'msg node =
+  `Html { tag = "#frag"; attrs = []; bool_attrs = []; handlers = []; children;
+    text = None; void = false }
 
 (** Render a hidden CSRF token input field. *)
-let csrf_input token : node =
-  `Html (Printf.sprintf {|<input type="hidden" name="_csrf_token" value="%s" />|}
-           (escape_html token))
+let csrf_input token : 'a node =
+  void_element "input" ~attrs:
+    [ ("type", "hidden"); ("name", "_csrf_token"); ("value", token) ] ()
 
 (** Render a field error message span, or empty if no error for the field. *)
-let field_error errors field_name : node =
+let field_error errors field_name : 'a node =
   match List.assoc_opt field_name errors with
-  | Some msg ->
-      `Html (Printf.sprintf {|<span class="field-error">%s</span>|}
-               (escape_html msg))
-  | None -> `Html ""
+  | Some msg -> span ~attrs:[ ("class", "field-error") ] ~text:msg ()
+  | None -> raw ""
 
-(* ── LiveView support ─────────────────────────────────────────────── *)
+(* ── Handler helpers (frontend) ──────────────────────────────────── *)
 
-(** Extract the raw HTML string from a node. *)
-let element_to_string (`Html s : node) : string = s
+(** A handler that always dispatches the given [msg], ignoring the event. *)
+let on_click (msg : 'msg) : 'msg handler = Fun.const (Some msg)
 
-(* ── Keyed list support ──────────────────────────────────────────── *)
+(** Attach a named event handler to a node. *)
+let on_event (name : string) (handler : 'msg handler) (node : 'msg vdom) : 'msg vdom =
+  { node with handlers = (name, handler) :: node.handlers }
 
-type keyed_item = { key : string; html : string }
+(* ── Serialization ────────────────────────────────────────────────── *)
 
-let _list_registry : (string * keyed_item list) list ref = ref []
-
-let collect_and_clear_lists () =
-  let data = !_list_registry in
-  _list_registry := [];
-  data
-
-let inject_lv_key key html =
-  let pattern = Str.regexp {|<\([a-zA-Z][a-zA-Z0-9]*\)|} in
-  (try
-     let _ = Str.search_forward pattern html 0 in
-     let tag_name = Str.matched_group 1 html in
-     let match_start = Str.match_beginning () in
-     let match_end = Str.match_end () in
-     let before = String.sub html 0 match_start in
-     let after = String.sub html match_end (String.length html - match_end) in
-     before ^ "<" ^ tag_name
-     ^ Printf.sprintf {| data-lv-key="%s"|} (escape_html key)
-     ^ after
-   with Not_found -> html)
-
-(** Render a keyed list for LiveView diffing. Each item gets a [data-lv-key] attribute. *)
-let each ~id ?(tag_name = "div") items ~key render_fn : node =
-  let keyed_items =
-    List.map
-      (fun item ->
-        let k = key item in
-        let rendered = element_to_string (render_fn item) in
-        let html_with_key = inject_lv_key k rendered in
-        { key = k; html = html_with_key })
-      items
-  in
-  _list_registry := (id, keyed_items) :: !_list_registry;
-  let inner =
-    String.concat "" (List.map (fun ki -> ki.html) keyed_items)
-  in
-  `Html
-    (Printf.sprintf {|<%s data-lv-each="%s">%s</%s>|}
-       tag_name (escape_html id) inner tag_name)
+(** Recursively render a node to an HTML string. The server uses this to turn
+    a vdom response into the HTTP body. [tag = ""] and ["#raw"] emit their
+    text verbatim; ["#frag"] flattens to its children's serialization. *)
+let rec element_to_string (`Html v : _ node) : string =
+  match v.tag with
+  | "" | "#raw" -> (match v.text with Some s -> s | None -> "")
+  | "#frag" ->
+    String.concat "" (List.map element_to_string v.children)
+  | _ ->
+    let attr_str = attrs_to_string v.attrs ^ bool_attrs_to_string v.bool_attrs in
+    if v.void then Printf.sprintf "<%s%s />" v.tag attr_str
+    else
+      let inner =
+        match v.text with
+        | Some s when v.children = [] -> s
+        | _ -> String.concat "" (List.map element_to_string v.children)
+      in
+      Printf.sprintf "<%s%s>%s</%s>" v.tag attr_str inner v.tag

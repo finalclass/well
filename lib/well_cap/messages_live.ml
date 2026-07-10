@@ -45,7 +45,8 @@ let view model =
         {|<div class="log-stream" style="max-height:600px">%s</div>|}
         entries
   in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<div class="card">
       <div class="flex items-center justify-between mb-3">
         <div class="card-title" style="margin-bottom:0">MessageBus Events</div>

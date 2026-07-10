@@ -21,7 +21,8 @@ Enkapsuluje 3 wolatylności (V-inputs, V-rendering, V-channels) oraz
 rejestrację. Ukrywa przed aplikacją: wewnętrzne serwisy (LoopManager,
 EffectsManager, Accessy, MessageBus, Bridge), ich wzajemne powiązania,
 kolejkowanie. Aplikacja widzi tylko `module type COMPONENT`, `val component`
-oraz re-eksportowane typy (`Vdom.t`, `Props.t`, `Cmd.t`, `emits`).
+oraz re-eksportowane typy (`Html.node`/`Html.vdom` przez alias `Vdom`, `Props.t`,
+`Cmd.t`, `emits`).
 
 ## Assumptions
 

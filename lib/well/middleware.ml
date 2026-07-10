@@ -123,7 +123,7 @@ let error_handler : middleware = fun next req ->
         (try h exn req with _ -> `Text "Internal Server Error" |> status 500)
     | None ->
         if !_dev_mode then
-          `Html (dev_error_page exn bt req) |> status 500
+          (Html.raw (dev_error_page exn bt req) :> Types.response) |> status 500
         else
           `Text "Internal Server Error" |> status 500
 

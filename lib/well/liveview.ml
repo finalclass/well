@@ -44,7 +44,7 @@ module type VIEW = sig
   val handle_params : Types.request -> model -> model
 
   (** Render the current model as HTML. *)
-  val view : model -> Html.node
+  val view : model -> unit Html.node
 
   (** Reset transient fields after each render cycle (e.g. flash messages). *)
   val temporary_assigns : model -> model
@@ -694,18 +694,15 @@ let register
     let state = ref (View.handle_params req initial_model) in
     let initial_html = View.view !state |> Html.element_to_string in
     state := View.temporary_assigns !state;
-    let _ = Html.collect_and_clear_lists () in
     let prev_html = ref initial_html in
     let get_html () =
       let html = View.view !state |> Html.element_to_string in
       state := View.temporary_assigns !state;
-      let _ = Html.collect_and_clear_lists () in
       html
     in
     let render_and_diff () =
       let new_html = View.view !state |> Html.element_to_string in
       state := View.temporary_assigns !state;
-      let _ = Html.collect_and_clear_lists () in
       if new_html <> !prev_html then begin
         let patches = compute_patches !prev_html new_html in
         prev_html := new_html;
@@ -769,7 +766,6 @@ let render_initial
   in
   let model = View.handle_params req model in
   let el = View.view model in
-  let _ = Html.collect_and_clear_lists () in
   el
 
 (* ── HTML helpers ──────────────────────────────────────────────────── *)
@@ -777,7 +773,7 @@ let render_initial
 (** Emit a [<live-view>] custom element that the client JS will mount.
     Encodes endpoint, topic, and props as data attributes. *)
 let live_view ~endpoint ?(topic = "") ?(props = [])
-    ?(children : Html.node list = []) () : Html.node =
+    ?(children : unit Html.node list = []) () : unit Html.node =
   let topic = if topic = "" then endpoint else topic in
   let props_json =
     `Assoc (List.map (fun (k, v) -> (k, `String v)) props)
@@ -786,7 +782,7 @@ let live_view ~endpoint ?(topic = "") ?(props = [])
   let children_html =
     String.concat "" (List.map Html.element_to_string children)
   in
-  `Html
+  Html.raw
     (Printf.sprintf
        {|<live-view data-liveview="%s" data-topic="%s" data-props="%s">%s</live-view>|}
        (Html.escape_html endpoint)
@@ -795,18 +791,19 @@ let live_view ~endpoint ?(topic = "") ?(props = [])
        children_html)
 
 (** Emit the [<script>] tag that loads the LiveView client JS module. *)
-let live_view_script () : Html.node =
-  `Html {|<script type="module" src="/static/well.js"></script>|}
+let live_view_script () : unit Html.node =
+  Html.raw {|<script type="module" src="/static/well.js"></script>|}
 
 (** Inline script for [<head>] that pre-opens the LiveView WebSocket before
     iframes consume the HTTP/1.1 connection pool. Must be non-module to
     execute synchronously during HTML parsing. *)
-let live_preconnect_script () : Html.node =
-  `Html {|<script>!function(){var p=location.protocol==="https:"?"wss:":"ws:";window.__wellPreWs=new WebSocket(p+"//"+location.host+"/live")}()</script>|}
+let live_preconnect_script () : unit Html.node =
+  Html.raw
+    {|<script>!function(){var p=location.protocol==="https:"?"wss:":"ws:";window.__wellPreWs=new WebSocket(p+"//"+location.host+"/live")}()</script>|}
 
 (** MLX component: [<LiveView name="counter" />].
     Convenience wrapper around {!live_view} for use in MLX templates. *)
 let createElement ~name ?(props : (string * string) list = [])
-    ?(children : Html.node list = []) () : Html.node =
+    ?(children : unit Html.node list = []) () : unit Html.node =
   let endpoint = "/live/" ^ name in
   live_view ~endpoint ~topic:endpoint ~props ~children ()

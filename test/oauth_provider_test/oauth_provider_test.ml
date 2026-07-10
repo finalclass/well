@@ -1,3 +1,5 @@
+[@@@warning "-8"]
+
 let pass = ref 0
 let fail = ref 0
 
@@ -7,6 +9,8 @@ let check name cond =
     incr fail;
     Printf.eprintf "FAIL: %s\n%!" name
   end
+
+let html_str (`Html v : unit Html.node) = Html.element_to_string (`Html v)
 
 (* Simple session store for testing *)
 let _sessions : (string, (string, string) Hashtbl.t) Hashtbl.t = Hashtbl.create 16
@@ -48,8 +52,8 @@ let () =
   Well.OAuthProvider._log_ref := (fun msg -> Printf.eprintf "LOG: %s\n%!" msg);
 
   (* Track registered routes for testing *)
-  let get_handlers : (string, Well.request -> [`Html of string | `Redirect of string]) Hashtbl.t = Hashtbl.create 4 in
-  let post_handlers : (string, Well.request -> [`Html of string | `Redirect of string | `Assoc of (string * Yojson.Safe.t) list | `Text of string]) Hashtbl.t = Hashtbl.create 4 in
+  let get_handlers : (string, Well.request -> Well.response) Hashtbl.t = Hashtbl.create 4 in
+  let post_handlers : (string, Well.request -> Well.response) Hashtbl.t = Hashtbl.create 4 in
   Well.OAuthProvider._register_get_ref := (fun path handler ->
     Hashtbl.replace get_handlers path handler);
   Well.OAuthProvider._register_post_ref := (fun path handler ->
@@ -80,7 +84,7 @@ let () =
     ("response_type", "code"); ("state", "abc")
   ] () in
   (match handle_get "/oauth/authorize" req with
-   | `Html body ->
+   | `Html v -> let body = html_str (`Html v) in
      check "unknown client shows error" (let r = Str.regexp_string "Nieprawidłowy client_id" in
        try ignore (Str.search_forward r body 0); true with Not_found -> false)
    | `Redirect _ -> check "unknown client should not redirect" false);
@@ -92,7 +96,7 @@ let () =
     ("response_type", "code"); ("state", "abc")
   ] () in
   (match handle_get "/oauth/authorize" req with
-   | `Html body ->
+   | `Html v -> let body = html_str (`Html v) in
      check "invalid redirect shows error" (let r = Str.regexp_string "Nieprawidłowy redirect_uri" in
        try ignore (Str.search_forward r body 0); true with Not_found -> false)
    | `Redirect _ -> check "invalid redirect should not redirect" false);
@@ -104,7 +108,7 @@ let () =
     ("response_type", "token"); ("state", "abc")
   ] () in
   (match handle_get "/oauth/authorize" req with
-   | `Html body ->
+   | `Html v -> let body = html_str (`Html v) in
      check "wrong response_type shows error" (let r = Str.regexp_string "response_type" in
        try ignore (Str.search_forward r body 0); true with Not_found -> false)
    | `Redirect _ -> check "wrong response_type should not redirect" false);
@@ -116,7 +120,7 @@ let () =
     ("response_type", "code"); ("state", "mystate")
   ] () in
   (match handle_get "/oauth/authorize" req with
-   | `Html body ->
+   | `Html v -> let body = html_str (`Html v) in
      check "login form contains email field" (let r = Str.regexp_string "name=\"email\"" in
        try ignore (Str.search_forward r body 0); true with Not_found -> false);
      check "login form contains password field" (let r = Str.regexp_string "name=\"password\"" in
@@ -190,7 +194,7 @@ let () =
   let req = make_req ~meth:"POST" ~session_id:"fail-session"
     ~body:"client_id=operations&redirect_uri=http%3A%2F%2Flocalhost%2F&state=s2&email=admin%40test.com&password=wrongpass" () in
   (match handle_post "/oauth/authorize" req with
-   | `Html body ->
+   | `Html v -> let body = html_str (`Html v) in
      check "wrong password shows error" (let r = Str.regexp_string "Nieprawidłowy email lub hasło" in
        try ignore (Str.search_forward r body 0); true with Not_found -> false)
    | _ -> check "wrong password should show form" false);

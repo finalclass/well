@@ -1,7 +1,7 @@
 [@@@warning "-69"]
 
 module type COMPONENT = Component_access.COMPONENT
-module Vdom = Component_access.Vdom
+module Vdom = Html
 module Props = Component_access.Props
 module Cmd = Component_access.Cmd
 type emits = Component_access.emits

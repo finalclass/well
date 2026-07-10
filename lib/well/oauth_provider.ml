@@ -30,18 +30,14 @@ let _current_user_ref : (Types.request -> string option) ref =
 
 let _register_get_ref :
     (   string
-     -> (Types.request -> [`Html of string | `Redirect of string])
+     -> (Types.request -> Types.response)
      -> unit )
     ref =
   ref (fun _ _ -> failwith "Oauth_provider._register_get_ref not wired")
 
 let _register_post_ref :
     (   string
-     -> (   Types.request
-         -> [ `Html of string
-            | `Redirect of string
-            | `Assoc of (string * Yojson.Safe.t) list
-            | `Text of string ] )
+     -> (Types.request -> Types.response)
      -> unit )
     ref =
   ref (fun _ _ -> failwith "Oauth_provider._register_post_ref not wired")
@@ -272,7 +268,7 @@ let escape_html s =
   Buffer.contents buf
 
 let login_page ~title ~subtitle ~client_id ~redirect_uri ~state ?(error = "") ()
-    =
+    : Types.response =
   let error_html =
     if error = ""
     then ""
@@ -281,8 +277,9 @@ let login_page ~title ~subtitle ~client_id ~redirect_uri ~state ?(error = "") ()
         {|<div style="color:#dc2626;background:#fef2f2;border:1px solid #fecaca;padding:12px 16px;border-radius:8px;margin-bottom:20px;font-size:14px">%s</div>|}
         (escape_html error)
   in
-  Printf.sprintf
-    {|<!DOCTYPE html>
+  (Html.raw
+     (Printf.sprintf
+        {|<!DOCTYPE html>
 <html lang="pl">
 <head>
   <meta charset="utf-8">
@@ -324,13 +321,14 @@ let login_page ~title ~subtitle ~client_id ~redirect_uri ~state ?(error = "") ()
   </div>
 </body>
 </html>|}
-    (escape_html title)
-    (escape_html title)
-    (escape_html subtitle)
-    error_html
-    (escape_html client_id)
-    (escape_html redirect_uri)
-    (escape_html state)
+        (escape_html title)
+        (escape_html title)
+        (escape_html subtitle)
+        error_html
+        (escape_html client_id)
+        (escape_html redirect_uri)
+        (escape_html state))
+   :> Types.response)
 
 (* ── Setup — registers OAuth provider routes ─────────────────── *)
 
@@ -375,8 +373,7 @@ let _register_routes () =
           match find_client client_id with
           | None ->
               !_log_ref (Printf.sprintf "OAuth: unknown client_id=%s" client_id) ;
-              `Html
-                (login_page
+              (login_page
                    ~title
                    ~subtitle
                    ~client_id
@@ -393,8 +390,7 @@ let _register_routes () =
                      "OAuth: invalid redirect_uri=%s for client=%s"
                      redirect_uri
                      client_id ) ;
-                `Html
-                  (login_page
+                (login_page
                      ~title
                      ~subtitle
                      ~client_id
@@ -405,8 +401,7 @@ let _register_routes () =
               end (* Validate response_type *)
               else if response_type <> "code"
               then
-                `Html
-                  (login_page
+                (login_page
                      ~title
                      ~subtitle
                      ~client_id
@@ -458,8 +453,7 @@ let _register_routes () =
                     in
                     print_endline debug_msg3 ;
                     (* Show login form *)
-                    `Html
-                      (login_page
+                    (login_page
                          ~title
                          ~subtitle
                          ~client_id
@@ -485,8 +479,7 @@ let _register_routes () =
           (* Re-validate client + redirect_uri *)
           match find_client client_id with
           | None ->
-              `Html
-                (login_page
+              (login_page
                    ~title
                    ~subtitle
                    ~client_id
@@ -497,8 +490,7 @@ let _register_routes () =
           | Some client ->
               if not (validate_redirect_uri client redirect_uri)
               then
-                `Html
-                  (login_page
+                (login_page
                      ~title
                      ~subtitle
                      ~client_id
@@ -510,8 +502,7 @@ let _register_routes () =
                 (* Authenticate *)
                 begin match !_login_ref ~email ~password () with
                 | Error _msg ->
-                    `Html
-                      (login_page
+                    (login_page
                          ~title
                          ~subtitle
                          ~client_id

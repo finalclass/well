@@ -852,7 +852,8 @@ expr | sort .field             Sort by field
     </div>|}
   else ""
   in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<div class="repl-wrap" data-lv-hook="ReplTerminal">
       <div data-lv="repl-head"><div class="repl-toolbar">
         <button class="btn btn-sm" data-lv-click="%s">%s guide</button>

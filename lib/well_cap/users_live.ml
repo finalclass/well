@@ -329,7 +329,8 @@ let view model =
     | Create -> render_create model
     | Edit id -> render_edit model id
   in
-  `Html (Printf.sprintf {|<div data-lv="content">%s%s</div>|} flash content)
+  
+html_raw (Printf.sprintf {|<div data-lv="content">%s%s</div>|} flash content)
 
 let model_to_yojson _m = `Null
 

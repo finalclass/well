@@ -25,10 +25,9 @@ module Counter = struct
     | Decrement -> ({ count = state.count - 1 }, Cmd.emit (Changed (state.count - 1)))
     | Reset -> ({ count = 0 }, Cmd.emit (Changed 0))
 
-  let view state dispatch _children : msg Vdom.t =
-    let open Vdom in
+  let view state dispatch _children : msg Html.node =
+    let open Html in
     let count_txt = string_of_int state.count in
-    (* handlery wołają dispatch —Exercise pętli DOM click → msg → update. *)
     let _ = dispatch in
     element
       ~attrs:[ ("style", "display:flex; gap:8px; align-items:center;") ]
@@ -36,22 +35,22 @@ module Counter = struct
         element
           ~handlers:[ ("click", on_click Decrement) ]
           ~text:"-"
-          "button";
+          "button" ();
         element
           ~attrs:[ ("style", "font-family:monospace; width:32px; text-align:center;")
                  ; ("class", "count") ]
           ~text:count_txt
-          "span";
+          "span" ();
         element
           ~handlers:[ ("click", on_click Increment) ]
           ~text:"+"
-          "button";
+          "button" ();
         element
           ~handlers:[ ("click", on_click Reset) ]
           ~text:"reset"
-          "button";
+          "button" ();
       ]
-      "div"
+      "div" ()
 end
 
 let () =

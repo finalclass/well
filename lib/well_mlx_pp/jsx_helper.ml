@@ -49,6 +49,46 @@ let append_exp ~loc left right =
        ( ident_exp ~loc "@",
          [ (Nolabel, left); (Nolabel, right) ] ))
 
+let html_txt_exp ~loc str_exp =
+  let txt_fn =
+    mkexp ~loc
+      (Pexp_ident { loc = make_loc loc; txt = Ldot (Lident "Html", "txt") })
+  in
+  mkexp ~loc (Pexp_apply (txt_fn, [ (Nolabel, str_exp) ]))
+
+(** A string-literal child becomes [Html.txt "lit"]; any other child
+    expression is left as-is. Bare-string children thus produce escaped text
+    nodes, matching the README rule ([<span>(txt name)</span>] and
+    [<span>"lit"</span>] are equivalent). *)
+let wrap_string_child expr =
+  match expr.pexp_desc with
+  | Pexp_constant (Pconst_string _) ->
+      let loc = (expr.pexp_loc.loc_start, expr.pexp_loc.loc_end) in
+      html_txt_exp ~loc expr
+  | _ -> expr
+
+(** Walk a list-shaped expression (cons cells + nil) and wrap each element
+    that is a string literal via {!wrap_string_child}. Children that are
+    already node expressions (JSX elements, identifiers, parenthesized
+    applications) pass through unchanged. *)
+let rec wrap_string_children expr =
+  match expr.pexp_desc with
+  | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> expr
+  | Pexp_construct ({ txt = Lident "::"; _ }, Some tuple) -> begin
+      match tuple.pexp_desc with
+      | Pexp_tuple [ head; tail ] ->
+          let head' = wrap_string_child head in
+          let tail' = wrap_string_children tail in
+          let loc = (expr.pexp_loc.loc_start, expr.pexp_loc.loc_end) in
+          mkexp ~loc
+            (Pexp_construct
+               ( { txt = Lident "::"; loc = make_loc loc },
+                 Some (mkexp ~loc (Pexp_tuple [ head'; tail' ])) ))
+      | _ -> expr
+    end
+  | _ -> expr
+
+
 let rec equal_longindent a b =
   match a, b with
   | Longident.Lident a, Longident.Lident b -> String.equal a b
@@ -58,6 +98,7 @@ let rec equal_longindent a b =
   | _ -> false
 
 let make_jsx_element ~raise ~loc:_ ~tag ~end_tag ~props ~children () =
+  let children = wrap_string_children children in
   let tag_to_string = function
     | `Module, _, tag ->
         Longident.flatten tag |> String.concat "."
@@ -115,18 +156,22 @@ let make_jsx_element ~raise ~loc:_ ~tag ~end_tag ~props ~children () =
       props
   in
   let html_props tag_name tag_loc =
-    let attrs, bool_attrs, attrs_base, bool_attrs_base =
+    let attrs, bool_attrs, handlers, attrs_base, bool_attrs_base =
       List.fold_left
-        (fun (attrs, bool_attrs, attrs_base, bool_attrs_base) -> function
+        (fun (attrs, bool_attrs, handlers, attrs_base, bool_attrs_base) -> function
           | loc, `Prop_punned name ->
-              (attrs, string_exp ~loc (attr_name name) :: bool_attrs, attrs_base, bool_attrs_base)
+              (attrs, string_exp ~loc (attr_name name) :: bool_attrs, handlers, attrs_base, bool_attrs_base)
           | _loc, `Prop ("attrs", expr) ->
-              (attrs, bool_attrs, Some expr, bool_attrs_base)
+              (attrs, bool_attrs, handlers, Some expr, bool_attrs_base)
           | _loc, `Prop ("bool_attrs", expr) ->
-              (attrs, bool_attrs, attrs_base, Some expr)
+              (attrs, bool_attrs, handlers, attrs_base, Some expr)
+          | loc, `Prop (name, expr) when String.length name > 3 && String.sub name 0 3 = "on_" ->
+              let event_name = String.sub name 3 (String.length name - 3) in
+              let event_label = string_exp ~loc event_name in
+              (attrs, bool_attrs, tuple2 ~loc event_label expr :: handlers, attrs_base, bool_attrs_base)
           | loc, `Prop (name, expr) ->
               let name = string_exp ~loc (attr_name name) in
-              (tuple2 ~loc name expr :: attrs, bool_attrs, attrs_base, bool_attrs_base)
+              (tuple2 ~loc name expr :: attrs, bool_attrs, handlers, attrs_base, bool_attrs_base)
           | _loc, `Prop_opt_punned name ->
               ignore name;
               Stdlib.raise
@@ -137,12 +182,14 @@ let make_jsx_element ~raise ~loc:_ ~tag ~end_tag ~props ~children () =
               Stdlib.raise
                 Syntaxerr.(
                   Error (Other (make_loc _loc))))
-        ([], [], None, None) props
+        ([], [], [], None, None) props
     in
     let attrs = List.rev attrs in
     let bool_attrs = List.rev bool_attrs in
+    let handlers = List.rev handlers in
     let attrs_expr = list_exp ~loc:tag_loc attrs in
     let bool_attrs_expr = list_exp ~loc:tag_loc bool_attrs in
+    let handlers_expr = list_exp ~loc:tag_loc handlers in
     let attrs_expr =
       match attrs_base, attrs with
       | Some base, [] -> base
@@ -159,6 +206,7 @@ let make_jsx_element ~raise ~loc:_ ~tag ~end_tag ~props ~children () =
       (Nolabel, string_exp ~loc:tag_loc tag_name);
       (Labelled "attrs", attrs_expr);
       (Labelled "bool_attrs", bool_attrs_expr);
+      (Labelled "handlers", handlers_expr);
       (Labelled "children", children);
     ]
   in

@@ -55,7 +55,8 @@ let view model =
         ) sorted)
     end
   in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<div>
       <div class="stat-grid">
         <div class="stat-card">

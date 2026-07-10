@@ -118,6 +118,8 @@ let agents_md =
 - In `.ml` files that need to produce HTML, use the programmatic `Html` API (`div ~attrs ~children ()`, `txt`, `cat`, etc.) instead of formatting strings.
 - Components should be normal MLX components with `createElement` when they are used as JSX tags. Use `<Layout>...</Layout>` / `<Component ... />` instead of manually calling component internals or assembling their output strings.
 - Prefer native MLX attributes when available: `<div class'="panel" id="main">`, `<button data-lv-click="Save">`, `<input type="text" required />`. Use `attrs=[...]` only for dynamic attribute lists or when it is clearer.
+- Event handlers use `on_<event>` attributes: `<button on_click=handler>`. The value is a function of type `Obj.t -> 'msg option` (a `Well_web.Vdom.handler`); return `Some msg` to dispatch, `None` to ignore. Define the handler as a named function (`let inc _ = Some Increment in <button on_click=inc>...`) — inline `(fun ...)` is not accepted as an attribute value by MLX. `on_click` desugars to `~handlers:[("click", ...)]`, never to `~attrs`.
+- Bare-string children are escaped automatically (desugar to `Html.txt`); for any other expression child use `(expr)` (e.g. `(txt x)`, `(count_txt)`).
 - All user-controlled or variable text rendered in tags must go through `txt`. Use `raw` only for trusted HTML that is already intentionally HTML.
 - MLX children use OCaml expression syntax, not JavaScript interpolation:
   - Correct: `<span>(txt name)</span>`
@@ -188,7 +190,7 @@ let lib_web_dune _name =
  (name register)
  (modes js)
  (modules register counter)
- (libraries well.web js_of_ocaml js_of_ocaml-ppx)
+ (libraries well.web well.html js_of_ocaml js_of_ocaml-ppx)
  (preprocess (pps js_of_ocaml-ppx)))
 |}
 
@@ -200,7 +202,10 @@ let web_counter_ml _name =
      pliku, wiec register.ml moze przekazac go jako (module Counter).
      Rejestrowany jako <well-counter>. Patrzac na ten kod widzisz pelna petle
      runtime well.web: click DOM -> handler (dispatch msg) -> update -> nowy
-     stan -> render vdom -> DOM. *)
+     stan -> render vdom -> DOM.
+
+     View jest napisane w MLX (JSX). on_click=(fun _ -> Some Msg) to handler
+     typu Obj.t -> msg option — handler woła dispatch tylko gdy zwróci Some. *)
 
 type state = { count : int }
 type msg = Increment | Decrement | Reset
@@ -219,31 +224,17 @@ let update state : msg -> state * (msg, emits) Well_web.Cmd.t = function
     ({ count = next }, Well_web.Cmd.emit (Changed next))
   | Reset -> ({ count = 0 }, Well_web.Cmd.emit (Changed 0))
 
-let view state _dispatch _children : msg Well_web.Vdom.t =
-  let open Well_web.Vdom in
+let view state _dispatch _children : msg Html.node =
   let count_txt = string_of_int state.count in
-  element
-    ~attrs:[ ("style", "display:flex; gap:8px; align-items:center;") ]
-    ~children:[
-      element
-        ~handlers:[ ("click", on_click Decrement) ]
-        ~text:"-"
-        "button";
-      element
-        ~attrs:[ ("style", "font-family:monospace; width:32px; text-align:center;")
-               ; ("class", "count") ]
-        ~text:count_txt
-        "span";
-      element
-        ~handlers:[ ("click", on_click Increment) ]
-        ~text:"+"
-        "button";
-      element
-        ~handlers:[ ("click", on_click Reset) ]
-        ~text:"reset"
-        "button";
-    ]
-    "div"
+  let dec _ = Some Decrement in
+  let inc _ = Some Increment in
+  let reset _ = Some Reset in
+  <div attrs=[("style", "display:flex; gap:8px; align-items:center;")]>
+    <button on_click=dec>(txt "-")</button>
+    <span attrs=[("style", "font-family:monospace; width:32px; text-align:center;"); ("class", "count")]>(txt count_txt)</span>
+    <button on_click=inc>(txt "+")</button>
+    <button on_click=reset>(txt "reset")</button>
+  </div>
 |}
 
 let web_register_ml _name =
@@ -6362,7 +6353,7 @@ let project_files name =
     { path = "lib/live/activity_log_live.mlx"; content = activity_log_live name };
     (* web/ — TEA web components (js_of_ocaml → app.js) *)
     { path = "web/dune"; content = lib_web_dune name };
-    { path = "web/counter.ml"; content = web_counter_ml name };
+    { path = "web/counter.mlx"; content = web_counter_ml name };
     { path = "web/register.ml"; content = web_register_ml name };
     (* lib/contract/ — separate dune library *)
     { path = "lib/contract/dune"; content = contract_boundary_dune };

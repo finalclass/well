@@ -274,7 +274,7 @@ let () = Oauth._handle_get_ref := (fun path handler ->
   Router.get path (fun req ->
     match handler req with
     | Oauth.ORedirect url -> (`Redirect url :> response)
-    | Oauth.OHtml (body, code) -> (status code (`Html body) :> response)
+    | Oauth.OHtml (body, code) -> (status code (Html.raw body :> response) :> response)
     | Oauth.ORedirectWithRegenerate url ->
       let (_new_req, set_cookie) = session_regenerate req in
       (set_cookie (`Redirect url) :> response)))
@@ -1130,7 +1130,7 @@ open struct
       Cap_hook._register_cap_get := (fun path handler ->
         Router.register_cap "GET" path (fun req ->
           match handler req with
-          | Cap_hook.CRHtml s -> `Html s
+          | Cap_hook.CRHtml s -> (Html.raw s :> Types.response)
           | Cap_hook.CRRedirect url -> `Redirect url
           | Cap_hook.CRJson s ->
               `Text s |> header "content-type" "application/json"
@@ -1139,7 +1139,7 @@ open struct
       Cap_hook._register_cap_post := (fun path handler ->
         Router.register_cap "POST" path (fun req ->
           match handler req with
-          | Cap_hook.CRHtml s -> `Html s
+          | Cap_hook.CRHtml s -> (Html.raw s :> Types.response)
           | Cap_hook.CRRedirect url -> `Redirect url
           | Cap_hook.CRJson _ | Cap_hook.CRJs _ ->
               `Text "Method Not Allowed" |> status 405));

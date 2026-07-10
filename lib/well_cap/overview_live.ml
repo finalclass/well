@@ -125,7 +125,8 @@ let view model =
       in
       Printf.sprintf {|<div class="log-stream" style="max-height:300px">%s</div>|} entries
   in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<div>%s%s
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div class="card">

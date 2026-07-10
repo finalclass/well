@@ -1,5 +1,4 @@
 (library
  (name well_html)
  (public_name well.html)
- (wrapped false)
- (libraries str))
+ (wrapped false))

@@ -11,13 +11,15 @@
     Bridge — ich wzajemne powiązania i kolejkowanie.
 
     Re-eksportuje z ComponentAccess wszystko, czego aplikacja potrzebuje:
-    [COMPONENT], [Vdom.t], [Props.t], [Cmd.t], [emits]. *)
+    [COMPONENT], [Html] (jako [Vdom], z [Html.node]/[Html.vdom]),
+    [Props.t], [Cmd.t], [emits]. *)
 
 module type COMPONENT = Component_access.COMPONENT
 (** Kontrakt modułu komponentu (init/update/view/props/emits). *)
 
-module Vdom = Component_access.Vdom
-(** Typ węzła virtual DOM (generyczny nad msg). *)
+module Vdom = Html
+(** Typ węzła virtual DOM (generyczny nad msg). Aliased to [Html]:
+    ujednolicony typ vdom dla backendu i frontendu. *)
 
 module Props = Component_access.Props
 (** Deklaratywne, typowane wejścia komponentu. *)

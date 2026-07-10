@@ -317,7 +317,8 @@ let view model =
         </div>|}
         (esc model.call_result)
   in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<style>
       .svc-navbar { display:flex; gap:0; border-bottom:1px solid var(--border); margin-bottom:0 }
       .svc-nav-item { position:relative }

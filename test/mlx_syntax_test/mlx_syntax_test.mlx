@@ -1,6 +1,6 @@
 open Well_test
 
-let render (`Html s) = s
+let render (`Html v : _ Html.node) = Html.element_to_string (`Html v)
 
 let () =
   describe "Well MLX syntax" (fun () ->
@@ -37,5 +37,16 @@ let () =
     it "keeps explicit attrs compatible" (fun () ->
       let html = <div attrs=[("data-x", "1")] class'="flex" /> |> render in
       expect html |> to_equal_string {|<div data-x="1" class="flex"></div>|}
+    );
+
+    it "routes on_* attributes to handlers, not attrs" (fun () ->
+      let click _ = None in
+      let html = <button on_click=click>(Html.txt "go")</button> |> render in
+      expect html |> to_equal_string {|<button>go</button>|}
+    );
+
+    it "renders bare-string children as escaped text" (fun () ->
+      let html = <p>"hi & bye"</p> |> render in
+      expect html |> to_equal_string {|<p>hi &amp; bye</p>|}
     )
   )

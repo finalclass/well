@@ -4,11 +4,11 @@
     (przy pierwszym vdom instancji) lub aktualizuje mirror-tree ([ctrl]),
     który trzyma węzeł DOM, źródłowy vdom oraz dzieci. Vdom na Busie jest
     egzystencjalny (TransportAny); Rendering traktuje go jako
-    [Vdom.t] przez konwersję [Obj] (jak LoopManager/ComponentAccess).
+    [Html.node] przez konwersję [Obj] (jak LoopManager/ComponentAccess).
 
     Algorytm diff jest pozycyjny (children matchowane po indeksie, bez
     keying) — zapożyczony, uproszczony wariant LexiFi/ocaml-vdom.
-    Keyed-diff pojawi się, gdy [Vdom.t] dostanie pole [key]. *)
+    Keyed-diff pojawi się, gdy [Html.vdom] dostanie pole [key]. *)
 
 (** Mirror-tree: korekspodobny węzeł DOM + jego źródłowy vdom + dzieci
     ctrl + funkcje odpięcia listenerów. Wewnętrzny; Rendering trzyma
@@ -32,7 +32,7 @@ type ctrl
     (STOP)
     ```
 *)
-val blit : 'msg Component_access.Vdom.t -> ctrl
+val blit : 'msg Html.node -> ctrl
 
 (** Sync — załatcz istniejący ctrl nowym vdom (pozycyjny diff attrs,
     handlers, text, children). Reaguje na kolejny vdom z MessageBus.
@@ -52,7 +52,7 @@ val blit : 'msg Component_access.Vdom.t -> ctrl
     (STOP)
     ```
 *)
-val sync : ctrl -> 'msg Component_access.Vdom.t -> unit
+val sync : ctrl -> 'msg Html.vdom -> unit
 
 (** Init — zapisz się na topic "vdom" na MessageBus (raz, lazy). Dla każdej
     koperty: znajdz root ctrl w wewnętrznej tabeli (lub blit nowy pod host

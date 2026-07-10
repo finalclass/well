@@ -87,7 +87,8 @@ let view model =
       {|<button class="tab-bar-btn%s" data-lv-click="%s">%s</button>|}
       active (esc (Printf.sprintf {|["SetLevel","%s"]|} level)) (esc label)
   in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<div class="log-viewer">
       <div class="log-header">
         <div class="card-title" style="margin-bottom:0">Application Logs</div>

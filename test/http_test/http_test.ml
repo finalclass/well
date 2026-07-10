@@ -13,7 +13,7 @@ let () =
 
   (* response constructors *)
   (match Well.html "<h1>hi</h1>" with
-   | `Html s -> check "html variant" (s = "<h1>hi</h1>")
+   | `Html v -> check "html variant" (Html.element_to_string (`Html v) = "<h1>hi</h1>")
    | _ -> check "html variant" false);
 
   (match Well.text "hello" with
@@ -32,7 +32,7 @@ let () =
   (match Well.html "x" |> Well.status 201 with
    | `Custom c ->
        check "status wraps Custom" (c.status = Some 201);
-       (match c.body with `Html s -> check "status body" (s = "x") | _ -> check "status body" false)
+       (match c.body with `Html v -> check "status body" (Html.element_to_string (`Html v) = "x") | _ -> check "status body" false)
    | _ -> check "status wraps Custom" false);
 
   (match Well.html "x" |> Well.header "X-Foo" "bar" with

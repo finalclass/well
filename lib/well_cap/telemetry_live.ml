@@ -64,7 +64,8 @@ let view model =
   in
   let errors_cls = if c.errors_5xx > 0 then " red" else "" in
   let load_str = Printf.sprintf "%.2f / %.2f / %.2f" s.load_1m s.load_5m s.load_15m in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<div data-lv-hook="TelemetryRefresh">
       <div class="card" style="margin-bottom:16px">
         <div class="card-title">HTTP</div>

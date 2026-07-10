@@ -83,29 +83,7 @@ module Props = struct
     make ~name ~parse:(fun _ -> None) ~equal ~on:on'
 end
 
-module Vdom = struct
-  type 'msg handler = Bridge.event -> 'msg option
-
-  type 'msg t = {
-    tag : string;
-    attrs : (string * string) list;
-    children : 'msg t list;
-    handlers : (string * 'msg handler) list;
-    text : string option;
-  }
-
-  let element ?(attrs = []) ?(handlers = []) ?(children = []) ?text tag =
-    { tag; attrs; handlers; children; text }
-
-  let text str : 'msg t =
-    { tag = ""; attrs = []; handlers = []; children = []; text = Some str }
-
-  let on_click (msg : 'msg) : 'msg handler =
-    Fun.const (Some msg)
-
-  let on_event (name : string) (handler : 'msg handler) (node : 'msg t) : 'msg t =
-    { node with handlers = (name, handler) :: node.handlers }
-end
+module Vdom = Html
 
 module Cmd = struct
   type ('msg, 'emits) t =
@@ -147,7 +125,7 @@ module type COMPONENT = sig
   val props  : msg Props.t
   val init   : dispatch:(msg -> unit) -> state * (msg, emits) Cmd.t
   val update : state -> msg -> state * (msg, emits) Cmd.t
-  val view   : state -> (msg -> unit) -> 'a Vdom.t -> msg Vdom.t
+  val view   : state -> (msg -> unit) -> 'a Html.node -> msg Html.node
 end
 
 type instance = Instance : {

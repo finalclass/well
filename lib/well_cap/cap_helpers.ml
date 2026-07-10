@@ -1,5 +1,7 @@
 let esc = Html.escape_html
 
+let html_raw s = Html.raw s
+
 let method_badge m =
   let cls = match String.uppercase_ascii m with
     | "GET" -> "badge-get" | "POST" -> "badge-post"

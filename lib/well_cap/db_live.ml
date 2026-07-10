@@ -363,7 +363,8 @@ let view model =
         (esc model.sql_result)
     else ""
   in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<div>
       <div class="card">
         <div class="card-title">Database</div>

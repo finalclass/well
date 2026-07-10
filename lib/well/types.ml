@@ -39,12 +39,17 @@ and response =
   | `Intlit of string
   | `List of Yojson.Safe.t list
   | `Assoc of (string * Yojson.Safe.t) list
-  | `Html of string
+  | `Html of unit Html.vdom
   | `Text of string
   | `Redirect of string
   | `Custom of custom
   | `Stream of stream_config
   ]
+
+(** A server-side vdom node carried in a response. Instantiated at [unit]:
+    server-rendered nodes never carry handlers, so ['msg] is always [unit] at
+    the response boundary. MLX-produced ['a vdom] widens to this via covariance. *)
+type html_node = unit Html.vdom
 
 (** Request handler function type. *)
 type handler = request -> response
@@ -64,8 +69,9 @@ type resolved = {
 
 (* ── Response constructors ─────────────────────────────────────────── *)
 
-(** Create an HTML response with [text/html] content type. *)
-let html s : response = `Html s
+(** Create an HTML response from a raw HTML string. The string is emitted
+    verbatim; for escaping use [Html.txt] and the [Html] tag helpers. *)
+let html s : response = (Html.raw s :> response)
 
 (** Create a plain text response with [text/plain] content type. *)
 let text s : response = `Text s
@@ -114,10 +120,10 @@ let rec resolve (resp : response) : resolved =
       { r_status = 200;
         r_headers = [ ("Content-Type", "application/json") ];
         r_body = Yojson.Safe.to_string (json :> Yojson.Safe.t) }
-  | `Html s ->
+  | `Html v ->
       { r_status = 200;
         r_headers = [ ("Content-Type", "text/html; charset=utf-8") ];
-        r_body = s }
+        r_body = Html.element_to_string (`Html v) }
   | `Text s ->
       { r_status = 200;
         r_headers = [ ("Content-Type", "text/plain; charset=utf-8") ];

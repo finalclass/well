@@ -9,35 +9,16 @@
     Stan instancji żyje w StateAccess (ComponentAccess nie przechowuje stanu).
 
     Definiuje współdzielone typy: [COMPONENT] (kontrakt modułu komponentu),
-    [Vdom.t], [Props.t], [Cmd.t], [emits], re-eksportowane przez Clienta. *)
+    [Html] (jako [Vdom], z [Html.node]/[Html.vdom]), [Props.t], [Cmd.t],
+    [emits], re-eksportowane przez Clienta. *)
 
 (* ── Współdzielone typy (re-eksportowane w Client) ── *)
 
-(** Typ węzła virtual DOM (generyczny nad msg, D16). *)
-module Vdom : sig
-  type 'msg handler = Bridge.event -> 'msg option
-
-  type 'msg t = {
-    tag : string;
-    attrs : (string * string) list;
-    children : 'msg t list;
-    handlers : (string * 'msg handler) list;
-    text : string option;
-  }
-
-  val element :
-    ?attrs:(string * string) list ->
-    ?handlers:(string * 'msg handler) list ->
-    ?children:'msg t list ->
-    ?text:string ->
-    string -> 'msg t
-
-  val text : string -> 'msg t
-
-  val on_click : 'msg -> 'msg handler
-
-  val on_event : string -> 'msg handler -> 'msg t -> 'msg t
-end
+(** Typ węzła virtual DOM. Aliased to [Html]: jeden typ vdom dla backendu
+    (serializacja do stringa) i frontendu (renderowanie do live DOM).
+    Generyczny nad ['msg] — handlery niosą msg komponentu; na backendzie
+    zawsze [unit]. D16. *)
+module Vdom = Html
 
 (** Deklaratywne, typowane wejścia komponentu (D18). *)
 module Props : sig
@@ -97,7 +78,7 @@ module type COMPONENT = sig
   val update : state -> msg -> state * (msg, emits) Cmd.t
   (** Czysta funkcja: (stan, wiadomość) → (nowy stan, komenda). *)
 
-  val view   : state -> (msg -> unit) -> 'a Vdom.t -> msg Vdom.t
+  val view   : state -> (msg -> unit) -> 'a Html.node -> msg Html.node
   (** Renderowanie stanu do vdom. Trzeci argument = projected children
       (pochodzące z komponentu-rodzica, mające własny typ msg — polimorficzne).
       Zwracany vdom niesie msg tego komponentu (handlery wołają dispatch). *)
@@ -207,4 +188,4 @@ val update_state :
     (STOP)
     ```
 *)
-val render_view : instance_id:string -> state envelope -> 'msg Vdom.t envelope
+val render_view : instance_id:string -> state envelope -> 'msg Html.node envelope

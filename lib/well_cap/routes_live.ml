@@ -39,7 +39,8 @@ let view model =
         ) model.routes)
   in
   let count = List.length model.routes in
-  `Html (Printf.sprintf
+  
+html_raw (Printf.sprintf
     {|<div>
       <div class="stat-grid">
         <div class="stat-card">
