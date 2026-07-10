@@ -19,7 +19,7 @@ let dune_project name =
  (allow_empty)
  (synopsis "A well web application")
   (depends
-  (ocaml (>= 5.4))
+  (ocaml (and (>= 5.4) (< 5.5)))
   mlx
   well
   eio
@@ -27,7 +27,10 @@ let dune_project name =
   yojson
   sqlite3
   ppx_deriving
-  ppx_deriving_yojson))
+  ppx_deriving_yojson
+  (js_of_ocaml (= 6.2.0))
+  (js_of_ocaml-compiler (= 6.2.0))
+  (js_of_ocaml-ppx (= 6.2.0))))
 |}
     name
 
@@ -178,6 +181,95 @@ let lib_app_dune _name =
  (preprocess (pps ppx_deriving_yojson well.ppx)))
 |}
 
+let lib_web_dune _name =
+  {|; TEA web components → app.js (js_of_ocaml target, served as /static/app.js)
+
+(executable
+ (name register)
+ (modes js)
+ (modules register counter)
+ (libraries well.web js_of_ocaml js_of_ocaml-ppx)
+ (preprocess (pps js_of_ocaml-ppx)))
+|}
+
+let web_counter_ml _name =
+  {|(* Counter — komponent webowy (The Elm Architecture) produkujący Web Component.
+
+     Typowy TEA: init/update/view. Modul pliku (Counter) jest w pelni
+     komponentem: typy state/msg/emits + props + init/update/view na poziomie
+     pliku, wiec register.ml moze przekazac go jako (module Counter).
+     Rejestrowany jako <well-counter>. Patrzac na ten kod widzisz pelna petle
+     runtime well.web: click DOM -> handler (dispatch msg) -> update -> nowy
+     stan -> render vdom -> DOM. *)
+
+type state = { count : int }
+type msg = Increment | Decrement | Reset
+type emits = Changed of int
+
+let props : msg Well_web.Props.t = []
+
+let init ~dispatch:_ = ({ count = 0 }, Well_web.Cmd.none)
+
+let update state : msg -> state * (msg, emits) Well_web.Cmd.t = function
+  | Increment ->
+    let next = state.count + 1 in
+    ({ count = next }, Well_web.Cmd.emit (Changed next))
+  | Decrement ->
+    let next = state.count - 1 in
+    ({ count = next }, Well_web.Cmd.emit (Changed next))
+  | Reset -> ({ count = 0 }, Well_web.Cmd.emit (Changed 0))
+
+let view state _dispatch _children : msg Well_web.Vdom.t =
+  let open Well_web.Vdom in
+  let count_txt = string_of_int state.count in
+  element
+    ~attrs:[ ("style", "display:flex; gap:8px; align-items:center;") ]
+    ~children:[
+      element
+        ~handlers:[ ("click", on_click Decrement) ]
+        ~text:"-"
+        "button";
+      element
+        ~attrs:[ ("style", "font-family:monospace; width:32px; text-align:center;")
+               ; ("class", "count") ]
+        ~text:count_txt
+        "span";
+      element
+        ~handlers:[ ("click", on_click Increment) ]
+        ~text:"+"
+        "button";
+      element
+        ~handlers:[ ("click", on_click Reset) ]
+        ~text:"reset"
+        "button";
+    ]
+    "div"
+|}
+
+let web_register_ml _name =
+  {|(* Rejestracja komponentów webowych w runtime well.web.
+
+     Skompilowany do app.js (js_of_ocaml) i serwowany jako /static/app.js.
+     Po załadowaniu <well-counter> staje się działającym custom elementem. *)
+
+let () =
+  Well_web.component ~module_:(module Counter) ~tag_name:"well-counter" ()
+|}
+
+let web_counter_page _name =
+  {|Well.get "/web-counter" @@ fun _req ->
+let open Html in
+<Layout title="Web Counter">
+<div>
+  <h1>(txt "Web Counter (TEA + Web Components)")</h1>
+  <p>(txt "Przyklad uzycia well.web — runtime TEA produkujacy Web Components.")</p>
+  <well-counter></well-counter>
+  <script attrs=[("type", "module"); ("src", "/static/app.js")] />
+  <p><a attrs=[("href", "/")]>(txt "< Back")</a></p>
+</div>
+</Layout>
+|}
+
 let app_ml _name =
   {|let run () =
   (* Middleware — executed top-to-bottom on every request *)
@@ -261,6 +353,7 @@ in
     <p>(txt "Edit lib/pages/home_page.mlx to get started.")</p>
     auth_section
     <p><a attrs=[("href", "/counter")]>(txt "Counter — LiveView demo")</a></p>
+    <p><a attrs=[("href", "/web-counter")]>(txt "Web Counter — well.web TEA + Web Components demo")</a></p>
     <p><a attrs=[("href", "/dashboard")]>(txt "Dashboard — LiveView communication demo")</a></p>
     <p><a attrs=[("href", "/notes")]>(txt "Notes — SQLite demo (login required)")</a></p>
     <p><a attrs=[("href", "/tasks")]>(txt "Tasks — Contract/RPC demo")</a></p>
@@ -2387,6 +2480,14 @@ let static_dune =
   (source_tree ../lib/contract/build/ts))
  (mode promote)
  (action (run bun build ts/tasks.ts --outdir . --minify)))
+
+; app.js — web components built with js_of_ocaml (TEA runtime well.web).
+; Copy the compiled register.bc.js from web/ into static/app.js.
+(rule
+ (target app.js)
+ (deps ../web/register.bc.js)
+ (mode promote)
+ (action (copy ../web/register.bc.js %{target})))
 |}
 
 let task_access_impl _name =
@@ -6255,9 +6356,14 @@ let project_files name =
     { path = "lib/pages/upload_page.mlx"; content = upload_page name };
     { path = "lib/pages/login_page.mlx"; content = login_page name };
     { path = "lib/pages/signup_page.mlx"; content = signup_page name };
+    { path = "lib/pages/web_counter_page.mlx"; content = web_counter_page name };
     (* lib/live/ *)
     { path = "lib/live/counter_live.mlx"; content = counter_live name };
     { path = "lib/live/activity_log_live.mlx"; content = activity_log_live name };
+    (* web/ — TEA web components (js_of_ocaml → app.js) *)
+    { path = "web/dune"; content = lib_web_dune name };
+    { path = "web/counter.ml"; content = web_counter_ml name };
+    { path = "web/register.ml"; content = web_register_ml name };
     (* lib/contract/ — separate dune library *)
     { path = "lib/contract/dune"; content = contract_boundary_dune };
     { path = "lib/contract/build/ocaml/dune"; content = contract_dune_file };
