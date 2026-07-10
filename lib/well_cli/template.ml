@@ -128,7 +128,7 @@ let agents_md =
   - Wrong: `<span>{count}</span>`
 - `{...}` in MLX is record syntax only. Use `(expr)` for function calls, conditionals, matches, list rendering, and other expressions.
 - For conditional empty output, use `(txt "")`.
-- For lists of nodes, map to nodes and render with `cat |> raw` inside MLX: `(items |> List.map render_item |> cat |> raw)`.
+- For lists of nodes, map to nodes and render with `cat` inside MLX: `(items |> List.map render_item |> cat)`. `cat` returns a fragment node; no `raw` wrapper needed.
 
 ## Verification
 
@@ -204,8 +204,10 @@ let web_counter_ml _name =
      runtime well.web: click DOM -> handler (dispatch msg) -> update -> nowy
      stan -> render vdom -> DOM.
 
-     View jest napisane w MLX (JSX). on_click=(fun _ -> Some Msg) to handler
-     typu Obj.t -> msg option — handler woła dispatch tylko gdy zwróci Some. *)
+     View jest napisane w MLX (JSX). on_click=handler to handler typu
+     Obj.t -> msg option (Well_web.Vdom.handler) — handler woła dispatch
+     tylko gdy zwróci Some. Wartość atrybutu musi być nazwaną funkcją
+     (inline `fun` nie jest akceptowane przez gramatykę MLX). *)
 
 type state = { count : int }
 type msg = Increment | Decrement | Reset
@@ -230,10 +232,10 @@ let view state _dispatch _children : msg Html.node =
   let inc _ = Some Increment in
   let reset _ = Some Reset in
   <div attrs=[("style", "display:flex; gap:8px; align-items:center;")]>
-    <button on_click=dec>(txt "-")</button>
-    <span attrs=[("style", "font-family:monospace; width:32px; text-align:center;"); ("class", "count")]>(txt count_txt)</span>
-    <button on_click=inc>(txt "+")</button>
-    <button on_click=reset>(txt "reset")</button>
+    <button on_click=dec>(Html.txt "-")</button>
+    <span attrs=[("style", "font-family:monospace; width:32px; text-align:center;"); ("class", "count")]>(Html.txt count_txt)</span>
+    <button on_click=inc>(Html.txt "+")</button>
+    <button on_click=reset>(Html.txt "reset")</button>
   </div>
 |}
 
@@ -377,7 +379,7 @@ let layout name =
       (Well.LiveView.live_preconnect_script ())
     </head>
     <body>
-      <main>(children |> cat |> raw)</main>
+      <main>(children |> cat)</main>
       <footer>
         <p>(txt "Powered by %s & well")</p>
       </footer>
@@ -555,7 +557,7 @@ let result = Note_access.list ~ctx ~limit:0 in
         <strong>(txt n.title)</strong>
         (txt (" — " ^ n.body))
       </li>
-    ) |> cat |> raw)
+    ) |> cat)
   </ul>
   <p><a attrs=[("href", "/")]>(txt "← Back")</a></p>
 </div>
@@ -804,14 +806,14 @@ let view model =
       (txt (string_of_int (List.length model.entries)))
       (txt " events captured")
     </p>
-    (each ~id:"log-entries" ~tag_name:"ul" model.entries
-       ~key:(fun e -> string_of_int e.id)
-       (fun e ->
+    (model.entries
+       |> List.map (fun e ->
          <li attrs=[("class", "log-entry")]>
            <span attrs=[("class", "log-action " ^ e.action)]>(txt e.action)</span>
            (txt " → ")
            <span attrs=[("class", "log-value")]>(txt (string_of_int e.value))</span>
-         </li>))
+         </li>)
+       |> cat)
   </div>
 |}
 
@@ -2725,7 +2727,7 @@ let files = try Array.to_list (Sys.readdir upload_dir) with Sys_error _ -> [] in
            <li>
              <a attrs=[("href", "/upload/download/" ^ name)]>(txt name)</a>
            </li>
-         ) |> cat |> raw)
+         ) |> cat)
        </ul>
      </div>)
   <p><a attrs=[("href", "/")]>(txt "\xe2\x86\x90 Back")</a></p>
@@ -3248,13 +3250,11 @@ val field_error : (string * string) list -> string -> node
 (* Renders error message for a form field if present in errors list *)
 ```
 
-### LiveView Rendering Helpers
+### List Rendering
 
 ```ocaml
-val each : id:string -> ?tag_name:string -> 'a list -> key:('a -> string) -> ('a -> node) -> node
-(* Keyed list rendering with automatic diffing *)
-(* each ~id:"items" items ~key:(fun i -> string_of_int i.id) (fun i -> <div>...</div>) *)
-(* Default tag_name is "div". Container gets data-lv-each="id" *)
+(* Render a list of nodes via cat (fragment node): *)
+items |> List.map render_item |> cat
 ```
 
 ---
@@ -3442,7 +3442,7 @@ let createElement ?title:(page_title = "") ?(children = []) () =
       (Well.LiveView.live_preconnect_script ())
     </head>
     <body>
-      <main>(children |> cat |> raw)</main>
+      <main>(children |> cat)</main>
       <script attrs=[("type", "module"); ("src", "/static/well.js")] />
     </body>
   </html>
