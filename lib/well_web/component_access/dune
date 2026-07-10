@@ -1,0 +1,5 @@
+(library
+ (name component_access)
+ (public_name well.web.component_access)
+ (wrapped false)
+ (libraries well.web.bridge))

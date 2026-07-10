@@ -1,4 +1,4 @@
-(version 1.0.0)
+(version 1.1.0)
 
 (build
  (all_platforms
@@ -14,6 +14,6 @@
 (source
  (fetch
   (url
-   https://github.com/robur-coop/kdf/releases/download/v1.0.0/kdf-1.0.0.tbz)
+   https://github.com/robur-coop/kdf/releases/download/v1.1.0/kdf-1.1.0.tbz)
   (checksum
-   sha256=d161582b0efe66d958dd6b8c9c21068e9f6454ce218377d6cf87823dec62e0ce)))
+   sha256=996c165b6e9532816d4ae5c7e77527a70d2f111a25583c0aeb72f4b0278569c5)))

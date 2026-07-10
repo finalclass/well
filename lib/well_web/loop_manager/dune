@@ -1,0 +1,5 @@
+(library
+ (name loop_manager)
+ (public_name well.web.loop_manager)
+ (wrapped false)
+ (libraries well.web.state_access well.web.component_access well.web.message_bus js_of_ocaml))

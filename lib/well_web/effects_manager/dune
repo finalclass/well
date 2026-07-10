@@ -1,0 +1,5 @@
+(library
+ (name effects_manager)
+ (public_name well.web.effects_manager)
+ (wrapped false)
+ (libraries well.web.bridge well.web.message_bus js_of_ocaml))

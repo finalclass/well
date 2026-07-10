@@ -30,4 +30,7 @@
   ppx_deriving
   ppx_deriving_yojson
   otoml
-  camlzip))
+  camlzip
+  (js_of_ocaml (= 6.2.0))
+  (js_of_ocaml-compiler (= 6.2.0))
+  (js_of_ocaml-ppx (= 6.2.0))))

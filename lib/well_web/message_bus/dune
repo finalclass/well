@@ -1,0 +1,5 @@
+(library
+ (name message_bus)
+ (public_name well.web.message_bus)
+ (wrapped false)
+ (libraries js_of_ocaml))

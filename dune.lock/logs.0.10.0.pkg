@@ -22,7 +22,14 @@
 
 (depends
  (all_platforms
-  (ocaml ocamlfind ocamlbuild topkg fmt base-threads)))
+  (ocaml
+   ocamlfind
+   ocamlbuild
+   topkg
+   cmdliner
+   js_of_ocaml-compiler
+   fmt
+   base-threads)))
 
 (source
  (fetch

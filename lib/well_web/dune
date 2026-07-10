@@ -1,0 +1,42 @@
+; ── well.web: TEA runtime + Web Components (js_of_ocaml target) ──
+
+(library
+ (name well_web)
+ (public_name well.web)
+ (wrapped false)
+ (libraries well.web.component_access well.web.bridge well.web.state_access well.web.loop_manager well.web.effects_manager well.web.message_bus js_of_ocaml js_of_ocaml-ppx)
+ (preprocess (pps js_of_ocaml-ppx))
+ (modules :standard \ hello spike_mlx spike_stack spike_ffi))
+
+; ── Spike Fazy 0: hello.ml → hello.js (custom element <hello-world>) ──
+(executable
+ (name hello)
+ (modes js)
+ (modules hello)
+ (libraries well_web)
+ (preprocess (pps js_of_ocaml-ppx)))
+
+; ── Spike Fazy 0: spike_mlx.mlx → spike_mlx.js (czy MLX działa przez jsoo?) ──
+(executable
+ (name spike_mlx)
+ (modes js)
+ (modules spike_mlx)
+ (libraries well_web))
+
+; ── Spike Fazy 0: spike_stack.ml — sourcemap round-trip test ──
+(executable
+ (name spike_stack)
+ (modes js)
+ (modules spike_stack)
+ (libraries well_web))
+
+; ── Spike S7: spike_ffi.ml — czy typowane FFI (##, Js.t) działa? ──
+(executable
+ (name spike_ffi)
+ (modes js)
+ (modules spike_ffi)
+ (libraries well_web yojson)
+ (preprocess (pps js_of_ocaml-ppx)))
+
+; Sourcemap: jsoo generuje mapę, ale potrzebuje debug info w bytecodzie.
+(env (byte (flags :standard -g)))

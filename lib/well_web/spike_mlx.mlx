@@ -1,0 +1,16 @@
+(* Spike Fazy 0: czy dialekt MLX współistnieje z js_of_ocaml?
+
+   To jest .mlx (nie .ml). MLX jest dialektem projektu (dune-project),
+   preprocessowanym przez well-mlx-pp. jsoo kompiluje bytecode, więc
+   MLX -> AST -> bytecode -> JS powinno działać bez modyfikacji.
+
+   Cel: udowodnic, ze <hello-world> zarejestrowany z kodu MLX dziala.
+   Jesli tak — D15 (js_of_ocaml) jest pelnie uzasadnione. *)
+
+open Js_of_ocaml
+
+let js_code =
+  "customElements.define('hello-mlx', class extends HTMLElement { \
+   connectedCallback() { this.textContent = 'Hello from MLX via jsoo!'; } });"
+
+let () = Js.Unsafe.eval_string js_code

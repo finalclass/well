@@ -1,0 +1,8 @@
+; E2E test: Counter komponent → counter_test.bc.js (js_of_ocaml target).
+; Udowadnia pełną pętlę runtime well.web w przeglądarce.
+
+(executable
+ (name counter_test)
+ (modes js)
+ (modules counter_test)
+ (libraries well_web))
