@@ -6,10 +6,29 @@
     message type through [handlers]; on the server it is always [unit] since
     server-rendered nodes never carry handlers. *)
 
-(** A DOM event handler. The event arrives as an [Obj.t] (a JS event on the
-    frontend; never produced on the server). Returns [Some msg] to dispatch,
-    [None] to ignore. *)
-type 'msg handler = Obj.t -> 'msg option
+(** A DOM event handler. Specialized per known event shape so the common case
+    ([on_click=Msg] — a bare message value) carries no [Some]/[None]
+    boilerplate; only the generic fallback ([On_event]) and the explicit
+    no-op ([Ignore]) deal in optionality.
+
+    - [Msg m]: dispatch [m], ignore the event — [on_click], [on_submit],
+      [on_blur], [on_focus], [on_dblclick].
+    - [On_key f]: read [event.key], dispatch [f key] — [on_keydown],
+      [on_keyup], [on_keypress]. Always dispatches.
+    - [On_value f]: read [event.target.value], dispatch [f value] —
+      [on_input], [on_change]. Always dispatches.
+    - [On_event f]: the whole event as [Obj.t], optional — generic fallback
+      for unknown events ([on_wheel], [on_scroll], ...).
+    - [Ignore]: never dispatch.
+
+    Covariant in ['msg]: a handler that carries no message widens to
+    [unit handler] on the server, where handlers are never serialized. *)
+type +'msg handler =
+  | Msg of 'msg
+  | On_key of (string -> 'msg)
+  | On_value of (string -> 'msg)
+  | On_event of (Obj.t -> 'msg option)
+  | Ignore
 
 (** A virtual DOM node. Covariant in ['msg]: a ['msg vdom] widens to
     [unit vdom] (the server/response instantiation) wherever handlers are
@@ -255,8 +274,11 @@ let field_error errors field_name : 'a node =
 
 (* ── Handler helpers (frontend) ──────────────────────────────────── *)
 
-(** A handler that always dispatches the given [msg], ignoring the event. *)
-let on_click (msg : 'msg) : 'msg handler = Fun.const (Some msg)
+(** A handler that always dispatches the given [msg], ignoring the event.
+    Convenience for the [Msg] constructor; use directly as an attribute value
+    ([on_click=Increment]) or programmatically
+    ([~handlers:[("click", on_click Increment)]]). *)
+let on_click (msg : 'msg) : 'msg handler = Msg msg
 
 (** Attach a named event handler to a node. *)
 let on_event (name : string) (handler : 'msg handler) (node : 'msg vdom) : 'msg vdom =

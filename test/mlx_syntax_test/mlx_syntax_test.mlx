@@ -40,13 +40,46 @@ let () =
     );
 
     it "routes on_* attributes to handlers, not attrs" (fun () ->
-      let click _ = None in
-      let html = <button on_click=click>(Html.txt "go")</button> |> render in
+      let html = <button on_click=()>(Html.txt "go")</button> |> render in
       expect html |> to_equal_string {|<button>go</button>|}
+    );
+
+    it "desugars Msg handlers (on_click / on_submit / on_blur / on_focus / on_dblclick)" (fun () ->
+      let html =
+        <div on_click=() on_submit=() on_blur=() on_focus=() on_dblclick=()>
+          (Html.txt "x")
+        </div>
+        |> render
+      in
+      expect html |> to_equal_string {|<div>x</div>|}
+    );
+
+    it "desugars On_key handlers (on_keydown / on_keyup / on_keypress)" (fun () ->
+      let handle_key _ = () in
+      let html =
+        <input on_keydown=handle_key on_keyup=handle_key on_keypress=handle_key />
+        |> render
+      in
+      expect html |> to_equal_string {|<input></input>|}
+    );
+
+    it "desugars On_value handlers (on_input / on_change)" (fun () ->
+      let handle_value _ = () in
+      let html = <input on_input=handle_value on_change=handle_value /> |> render in
+      expect html |> to_equal_string {|<input></input>|}
+    );
+
+    it "desugars unknown on_* to the On_event fallback" (fun () ->
+      let handle_event _ = None in
+      let html = <div on_wheel=handle_event on_custom_thing=handle_event>(Html.txt "x")</div> |> render in
+      expect html |> to_equal_string {|<div>x</div>|}
     );
 
     it "renders bare-string children as escaped text" (fun () ->
       let html = <p>"hi & bye"</p> |> render in
       expect html |> to_equal_string {|<p>hi &amp; bye</p>|}
     )
-  )
+  );
+
+  run ~source_file:__FILE__ () |> exit_with_result
+

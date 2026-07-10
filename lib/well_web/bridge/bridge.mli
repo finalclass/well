@@ -296,3 +296,30 @@ val get_input_value : element -> string
     ```
 *)
 val set_value : element -> string -> unit
+
+(** EventKey — czytaj [event.key] (np. "Enter", "Escape").
+    Używane przez Rendering przy interpretacji handlera [On_key].
+
+    ```use-case
+    (START)
+    [Odbierz zdarzenie DOM]
+    [Czytaj event.key przez FFI]
+    [Zwróć jako string]
+    (STOP)
+    ```
+*)
+val event_key : event -> string
+
+(** EventValue — czytaj [event.target.value] (aktualna wartość elementu
+    formularza, który wyemitował zdarzenie). Używane przez Rendering przy
+    interpretacji handlera [On_value] ([on_input], [on_change]).
+
+    ```use-case
+    (START)
+    [Odbierz zdarzenie DOM]
+    [Czytaj event.target.value przez FFI (ścieżka zagnieżdżona)]
+    [Zwróć jako string]
+    (STOP)
+    ```
+*)
+val event_value : event -> string

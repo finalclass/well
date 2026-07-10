@@ -217,3 +217,9 @@ let get_input_value (el : element) : string =
 
 let set_value (el : element) (value : string) : unit =
   Js.Unsafe.set el (Js.string "value") (Js.Unsafe.inject (Js.string value))
+
+let event_key (ev : event) : string =
+  get_string ev "key"
+
+let event_value (ev : event) : string =
+  get_string ev "target.value"

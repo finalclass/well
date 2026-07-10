@@ -43,6 +43,24 @@ let tuple2 ~loc a b = mkexp ~loc (Pexp_tuple [ a; b ])
 let ident_exp ~loc name =
   mkexp ~loc (Pexp_ident { loc = make_loc loc; txt = Lident name })
 
+(** Wrap a handler-attribute expression in the [Html.handler] variant that
+    matches its event name. Known events specialize (extracting [event.key]
+    or [event.target.value] at render time); anything else falls back to
+    [On_event] with the whole event. Constructors are qualified [Html.…] so
+    they resolve whether or not the call site has [open Html]. *)
+let wrap_handler ~loc event_name expr =
+  let ctor name =
+    mkexp ~loc
+      (Pexp_construct
+         ( { txt = Ldot (Lident "Html", name); loc = make_loc loc },
+           Some expr ))
+  in
+  match event_name with
+  | "click" | "dblclick" | "submit" | "blur" | "focus" -> ctor "Msg"
+  | "keydown" | "keyup" | "keypress" -> ctor "On_key"
+  | "input" | "change" -> ctor "On_value"
+  | _ -> ctor "On_event"
+
 let append_exp ~loc left right =
   mkexp ~loc
     (Pexp_apply
@@ -168,7 +186,8 @@ let make_jsx_element ~raise ~loc:_ ~tag ~end_tag ~props ~children () =
           | loc, `Prop (name, expr) when String.length name > 3 && String.sub name 0 3 = "on_" ->
               let event_name = String.sub name 3 (String.length name - 3) in
               let event_label = string_exp ~loc event_name in
-              (attrs, bool_attrs, tuple2 ~loc event_label expr :: handlers, attrs_base, bool_attrs_base)
+              let handler_expr = wrap_handler ~loc event_name expr in
+              (attrs, bool_attrs, tuple2 ~loc event_label handler_expr :: handlers, attrs_base, bool_attrs_base)
           | loc, `Prop (name, expr) ->
               let name = string_exp ~loc (attr_name name) in
               (tuple2 ~loc name expr :: attrs, bool_attrs, handlers, attrs_base, bool_attrs_base)

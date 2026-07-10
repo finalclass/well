@@ -18,6 +18,11 @@ type ctrl
 (** Blit — początkowe przełożenie vdom → DOM przez Bridge. Tworzy węzeł,
     ustawia attrs, wiesza listenery, blit'uje dzieci rekursywnie.
 
+    Listenery interpretują wariant [Html.handler]: [Msg] dispatchuje msg
+    ignorując event; [On_key]/[On_value] wyciągają [event.key]/
+    [event.target.value] przez Bridge i dispatchują wynik; [On_event] dostaje
+    cały event jako [Obj.t]; [Ignore] nie wiesza nic.
+
     ```use-case
     (START)
     [Odbierz vdom]
@@ -26,7 +31,7 @@ type ctrl
     <Węzeł elementu>
       [Utwórz element przez Bridge]
       [Ustaw attrs]
-      [Dodaj listenery]
+      [Dodaj listenery (interpretacja wariantu handlera)]
       [Blit dzieci rekursywnie]
     [Zwróć ctrl]
     (STOP)

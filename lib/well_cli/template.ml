@@ -118,7 +118,12 @@ let agents_md =
 - In `.ml` files that need to produce HTML, use the programmatic `Html` API (`div ~attrs ~children ()`, `txt`, `cat`, etc.) instead of formatting strings.
 - Components should be normal MLX components with `createElement` when they are used as JSX tags. Use `<Layout>...</Layout>` / `<Component ... />` instead of manually calling component internals or assembling their output strings.
 - Prefer native MLX attributes when available: `<div class'="panel" id="main">`, `<button data-lv-click="Save">`, `<input type="text" required />`. Use `attrs=[...]` only for dynamic attribute lists or when it is clearer.
-- Event handlers use `on_<event>` attributes: `<button on_click=handler>`. The value is a function of type `Obj.t -> 'msg option` (a `Well_web.Vdom.handler`); return `Some msg` to dispatch, `None` to ignore. Define the handler as a named function (`let inc _ = Some Increment in <button on_click=inc>...`) — inline `(fun ...)` is not accepted as an attribute value by MLX. `on_click` desugars to `~handlers:[("click", ...)]`, never to `~attrs`.
+- Event handlers use `on_<event>` attributes. The attribute value's shape depends on the event (a `Well_web.Vdom.handler` variant, desugared by MLX):
+  - `on_click=Increment`, `on_submit=Save`, `on_blur=Blurred`, `on_focus=Focused`, `on_dblclick=Dbl` — a bare message value. No `Some`/`None` boilerplate.
+  - `on_keydown=handle_key`, `on_keyup=...`, `on_keypress=...` — a named function `string -> msg` receiving `event.key`.
+  - `on_input=handle_value`, `on_change=...` — a named function `string -> msg` receiving `event.target.value`.
+  - `on_wheel=...`, `on_scroll=...`, any other `on_*` — a named function `Obj.t -> msg option` receiving the whole event (generic fallback).
+  To ignore an event conditionally in the key/value cases, dispatch a `NoOp` msg or use the generic `on_<event>=handler` fallback (which returns `option`). Inline `(fun ...)` is not accepted as an attribute value by MLX — define the handler as a named function (`let handle_key k = ... in <input on_keydown=handle_key />`). `on_*` desugars to `~handlers:[("event", ...)]`, never to `~attrs`.
 - Bare-string children are escaped automatically (desugar to `Html.txt`); for any other expression child use `(expr)` (e.g. `(txt x)`, `(count_txt)`).
 - All user-controlled or variable text rendered in tags must go through `txt`. Use `raw` only for trusted HTML that is already intentionally HTML.
 - MLX children use OCaml expression syntax, not JavaScript interpolation:
@@ -204,10 +209,12 @@ let web_counter_ml _name =
      runtime well.web: click DOM -> handler (dispatch msg) -> update -> nowy
      stan -> render vdom -> DOM.
 
-     View jest napisane w MLX (JSX). on_click=handler to handler typu
-     Obj.t -> msg option (Well_web.Vdom.handler) — handler woła dispatch
-     tylko gdy zwróci Some. Wartość atrybutu musi być nazwaną funkcją
-     (inline `fun` nie jest akceptowane przez gramatykę MLX). *)
+     View jest napisane w MLX (JSX). on_click=Msg to handler typu
+     Well_web.Vdom.handler — wariant specjalizowany per znany event.
+     on_click przyjmuje wartość msg (bez Some/None boilerplate); on_keydown/
+     on_input przyjmują nazwaną funkcję string -> msg (wyciągając event.key
+     / event.target.value). Wartość atrybutu musi być nazwaną funkcją lub
+     wartością (inline `fun` nie jest akceptowane przez gramatykę MLX). *)
 
 type state = { count : int }
 type msg = Increment | Decrement | Reset
@@ -228,14 +235,11 @@ let update state : msg -> state * (msg, emits) Well_web.Cmd.t = function
 
 let view state _dispatch _children : msg Html.node =
   let count_txt = string_of_int state.count in
-  let dec _ = Some Decrement in
-  let inc _ = Some Increment in
-  let reset _ = Some Reset in
-  <div attrs=[("style", "display:flex; gap:8px; align-items:center;")]>
-    <button on_click=dec>(Html.txt "-")</button>
-    <span attrs=[("style", "font-family:monospace; width:32px; text-align:center;"); ("class", "count")]>(Html.txt count_txt)</span>
-    <button on_click=inc>(Html.txt "+")</button>
-    <button on_click=reset>(Html.txt "reset")</button>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <button on_click=Decrement>(Html.txt "-")</button>
+    <span style="font-family:monospace; width:32px; text-align:center;" class'="count">(Html.txt count_txt)</span>
+    <button on_click=Increment>(Html.txt "+")</button>
+    <button on_click=Reset>(Html.txt "reset")</button>
   </div>
 |}
 

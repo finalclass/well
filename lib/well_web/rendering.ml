@@ -13,9 +13,17 @@ let is_text_node (v : 'msg Html.vdom) = v.tag = ""
 
 let attach_listener dispatch node (name, handler) =
   let cb ev =
-    match handler (Obj.repr ev) with
-    | None -> ()
-    | Some msg -> dispatch (Obj.repr msg)
+    let msg_opt =
+      match handler with
+      | Html.Msg msg -> Some msg
+      | Html.On_key f -> Some (f (Bridge.event_key ev))
+      | Html.On_value f -> Some (f (Bridge.event_value ev))
+      | Html.On_event f -> f (Obj.repr ev)
+      | Html.Ignore -> None
+    in
+    (match msg_opt with
+     | None -> ()
+     | Some msg -> dispatch (Obj.repr msg))
   in
   Bridge.add_event_listener node ~event_name:name (Bridge.fn1 cb)
 
