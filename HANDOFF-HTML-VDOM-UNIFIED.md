@@ -24,21 +24,34 @@
 ## 2. Stan docelowy (Co chcemy osiągnąć)
 
 Wprowadzamy jeden wspólny typ o nazwie `vdom`.
-W pliku `lib/well_html/html.ml` zmieniamy definicję `node`:
+W pliku `lib/well_html/html.ml` wprowadzamy nowy typ `vdom`.
+
+**KRYTYCZNE: Typ `vdom` musi być generyczny nad `'msg`, aby zachować type-safety w komponentach TEA.** Komponenty frontendu piszą `<button on_click=(fun _ -> Increment)/>` i kompilator musi wiedzieć, że `Increment` to poprawny `msg`. Bez parametru `'msg` tracimy type-safety.
 
 ```ocaml
-type vdom = {
+type 'msg vdom = {
   tag : string;
   attrs : (string * string) list;
-  handlers : (Obj.t -> Obj.t option) list; (* egzystencjalne, dla backendu ignorowane *)
-  children : vdom list;
+  handlers : (string * 'msg handler) list;  (* type-safe! *)
+  children : 'msg vdom list;
   text : string option;
 }
-
-type node = [ `Html of vdom ]
 ```
 
-*(Uwaga: nazwa typu to `vdom`, a pole `handlers` na backendzie będzie po prostu ignorowane przy serializacji. Typ handlera musi być egzystencjalny / `Obj.t`, aby backend mógł istnieć bez znajomości typów msg TEA).*
+- **Frontend (komponenty TEA):** `view` zwraca `msg vdom` (konkretny msg, type-safe).
+- **Backend (strony serwerowe):** `<div>(txt "Hello")</div>` nie ma msg, więc MLX produkuje `'a vdom` (polimorficzny, `'a` nieużywane bo `handlers=[]`).
+- **Transport runtime:** gdy vdom przepływa przez MessageBus do Rendering, i tak jest `Obj.magic` (egzystencjalne). Type-safety żyje tylko w ciele komponentu (przy pisaniu `view`), w transporcie jest egzystencjalne — i to jest OK.
+
+### Problem do rozwiązania przez agenta: `Html.node` i automatyczna coercion
+
+Typ `Html.node` (który jest subtype `Well.response` i musi coercion'ować automatycznie z MLX `<div/>`) musi zostać **konkretny** (nie polimorficzny), żeby coercion działało. Ale `'msg vdom` jest polimorficzny.
+
+Agent musi wybrać jedno z rozwiązań:
+1. **Polimorficzny wariant OCaml:** `type node = [ \`Html of 'a. 'a vdom ]` — pozwala na automatyczną coercion z dowolnego `'msg vdom`.
+2. **Egzystencjalny wrapper:** `type node = Node : 'msg vdom -> node` albo podobnie — wymaga explicite opakowania (może być chowane w MLX preprocesorze albo w `Html.tag`).
+3. **Konkretny `'a vdom` na backendzie:** backend MLX produkuje konkretny (np. `unit vdom`), frontend ma `msg vdom`, konwersja na granicy.
+
+Najważniejsze: **API komponentu dla użytkownika to `msg vdom` (type-safe)**. Implementacja `Html.node` / coercion to szczegół wewnętrzny, który agent musi dopracować.
 
 ## 3. Mechanizm działania (Krok po kroku)
 
@@ -56,12 +69,14 @@ Dla zwykłych tagów generuje wywołanie `Html.tag` tak jak wcześniej. Różnic
 - Musi dodać go do nowej listy `~handlers` w wywołaniu `Html.tag`.
 
 ### C. Moduł `Html` (`html.ml`)
-Funkcja `Html.tag` przestaje używać `Printf.sprintf`. Buduje rekord `vdom`:
+Funkcja `Html.tag` przestaje używać `Printf.sprintf`. Buduje rekord `'msg vdom`:
 ```ocaml
-let tag name ~attrs ~bool_attrs ~handlers ~children () =
-  `Html { tag = name; attrs = attrs; handlers = handlers; children = children; text = None }
+let tag name ~attrs ~bool_attrs ~handlers ~children () : 'msg vdom =
+  { tag = name; attrs = attrs; handlers = handlers; children = children; text = None }
 ```
-*(Musimy obsłużyć `text` np. z `Html.txt`, żeby stawało się `text = Some "..."` bez zagnieżdżonych dzieci)*.
+*(Musimy obsłużyć `text` np. z `Html.txt`, żeby stawało się `text = Some "..."` bez zagnieżdżonych dzieci).*
+
+`Html.tag` zwraca `'msg vdom`. Na backendzie (gdy nie ma handlerów) jest polimorficzny `'a vdom`. Agent musi rozwiązać jak ten `'msg vdom` coercion'uje się do `Html.node`/`response` (patrz problem "Html.node i automatyczna coercion" wyżej).
 
 ### D. Serwer HTTP (`lib/well/well.ml` lub `router.ml`)
 W miejscu, gdzie response jest wysyłany do przeglądarki, musimy sprowadzić `vdom` z powrotem do Stringa:
