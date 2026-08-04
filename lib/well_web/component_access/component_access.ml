@@ -90,16 +90,34 @@ module Cmd = struct
     | None
     | Msg of 'msg
     | Emit of 'emits
+    | Emit_dom of string * Obj.t option
     | Focus of string
+    | Batch of ('msg, 'emits) t list
+    | Perform of (dispatch:('msg -> unit) -> unit)
 
   let none = None
   let msg m = Msg m
   let emit e = Emit e
+  let emit_dom ~name ?detail () =
+    Emit_dom (name, match detail with None -> None | Some d -> Some (Obj.repr d))
   let focus selector = Focus selector
+  let batch cs = Batch cs
+  let perform f = Perform f
 
-  let is_none : (_, _) t -> bool = function
+  let rec is_none : (_, _) t -> bool = function
     | None -> true
+    | Batch cs -> List.for_all is_none cs
     | _ -> false
+
+  let rec iter ~none ~msg ~emit ~emit_dom ~focus ~perform cmd =
+    match cmd with
+    | None -> none ()
+    | Msg m -> msg m
+    | Emit e -> emit e
+    | Emit_dom (name, detail) -> emit_dom ~name ~detail
+    | Focus s -> focus s
+    | Batch cs -> List.iter (iter ~none ~msg ~emit ~emit_dom ~focus ~perform) cs
+    | Perform f -> perform f
 end
 
 type emits = Obj.t
@@ -174,14 +192,17 @@ let state_key ~instance_id =
     failwith ("ComponentAccess.state_key: unknown instance " ^ instance_id)
   | Some (Instance r) -> r.state_key
 
-let init_state ~instance_id =
+let init_state ~instance_id ~dispatch =
   match Hashtbl.find_opt instances instance_id with
   | None ->
     failwith ("ComponentAccess.init_state: unknown instance " ^ instance_id)
   | Some (Instance r) ->
     let (module M) = r.module_ in
-    let (st, _cmd) = M.init ~dispatch:(fun (_ : M.msg) -> ()) in
-    { instance_id; payload = Obj.obj (Obj.repr st) }
+    let dispatch_m (m : M.msg) =
+      dispatch (Obj.obj (Obj.repr m) : msg)
+    in
+    let (st, cmd) = M.init ~dispatch:dispatch_m in
+    { instance_id; payload = Obj.obj (Obj.repr (st, cmd)) }
 
 let update_state ~instance_id state_env msg_env =
   match Hashtbl.find_opt instances instance_id with

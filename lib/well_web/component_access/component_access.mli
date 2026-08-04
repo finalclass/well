@@ -32,14 +32,41 @@ module Props : sig
   val of_eq  : string -> eq:('a -> 'a -> bool) -> on:('a      -> 'msg) -> 'msg decl
 end
 
-(** Komenda — efekt wychodzący z komponentu (D18). *)
+(** Komenda — efekt wychodzący z komponentu (D18 + perform/batch).
+
+    [update]/[init] only *construct* commands; EffectsManager runs them.
+
+    - [none] — no effect
+    - [msg] — re-enter update with this message (async bus hop)
+    - [emit] — CustomEvent ["well-emit"] on host with [detail = emits]
+      (typed payload). For a specific DOM event name use [emit_dom].
+    - [emit_dom] — CustomEvent [name] on host (optional detail)
+    - [focus] — rAF + querySelector on host + [.focus()]
+    - [batch] — run children in order (nested batch OK)
+    - [perform] — call [run ~dispatch] with a live dispatch that publishes
+      on topic ["msg"] for this instance. [run] must schedule async work
+      (XHR, timeout, Promise) and not block the TEA loop.
+*)
 module Cmd : sig
   type ('msg, 'emits) t
-  val none   : ('msg, 'emits) t
-  val msg    : 'msg -> ('msg, 'emits) t
-  val emit   : 'emits -> ('msg, 'emits) t
-  val focus  : string -> ('msg, 'emits) t
+  val none    : ('msg, 'emits) t
+  val msg     : 'msg -> ('msg, 'emits) t
+  val emit    : 'emits -> ('msg, 'emits) t
+  val emit_dom : name:string -> ?detail:'a -> unit -> ('msg, 'emits) t
+  val focus   : string -> ('msg, 'emits) t
+  val batch   : ('msg, 'emits) t list -> ('msg, 'emits) t
+  val perform : (dispatch:('msg -> unit) -> unit) -> ('msg, 'emits) t
   val is_none : ('msg, 'emits) t -> bool
+
+  (** Fold over the command tree for EffectsManager (order-preserving for batch). *)
+  val iter :
+    none:(unit -> unit) ->
+    msg:('msg -> unit) ->
+    emit:('emits -> unit) ->
+    emit_dom:(name:string -> detail:Obj.t option -> unit) ->
+    focus:(string -> unit) ->
+    perform:((dispatch:('msg -> unit) -> unit) -> unit) ->
+    ('msg, 'emits) t -> unit
 end
 
 (** Deklarowane wyjścia komponentu (typowany wariant, D18). *)
@@ -160,7 +187,13 @@ val state_key : instance_id:string -> unit ref
     (STOP)
     ```
 *)
-val init_state : instance_id:string -> state envelope
+val init_state :
+  instance_id:string ->
+  dispatch:(msg -> unit) ->
+  (state * cmd) envelope
+(** Run component [init] with a live [dispatch] (publishes on ["msg"]).
+    Returns initial state and the init command (caller must flush cmd
+    after the instance is registered and bus subscribers are ready). *)
 
 (** UpdateState — wykonaj update na module komponentu.
     State jest pobierany z StateAccess przez LoopManagera i przekazywany

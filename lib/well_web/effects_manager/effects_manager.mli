@@ -1,24 +1,23 @@
-(** EffectsManager — wykonanie asynchronicznych efektów wychodzących.
+(** EffectsManager — interpretacja komend (Cmd) z MessageBus.
 
-    Manager odpowiedzialny za interpretację komend (Cmd) odbieranych
-    asynchronicznie z [MessageBus]. Tłumaczy komendy na efekty w świecie
-    zewnętrznym (emit, Promise, focus, DOM-ops) używając [Bridge],
-    a następnie publikuje wynik (msg lub null) z powrotem na [MessageBus]. *)
+    Subskrybent topicu ["cmd"]. Tłumaczy komendy na efekty zewnętrzne
+    (emit CustomEvent, focus, perform/async dispatch) przez Bridge /
+    MessageBus. Wynikowe msg wracają na topic ["msg"]. *)
 
-(* Envelope lokalny EffectsManagera (zasada separacji typów — każda usługa ma
-   własny; MessageBus ma swój, ComponentAccess swój). *)
 type 'a envelope
 
-(** RunEffect — wykonanie komendy i publikacja rezultatu.
+(** RunEffect — wykonanie komendy.
 
     ```use-case
     (START)
     [Odbierz komendę (envelope) z MessageBus]
-    [Zinterpretuj komendę (Cmd) używając Bridge]
-    <Komenda powoduje wysłanie wiadomości>
-      [Wyślij wiadomość asynchronicznie na MessageBus]
-    <_>
-      (STOP)
+    [Zinterpretuj Cmd (none/msg/emit/emit_dom/focus/batch/perform)]
+    <msg lub perform→dispatch>
+      [Opublikuj na topic "msg"]
+    <emit / emit_dom>
+      [CustomEvent na hoście DOM]
+    <focus>
+      [rAF → querySelector → focus]
     (STOP)
     ```
 *)

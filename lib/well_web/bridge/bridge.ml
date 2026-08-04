@@ -223,3 +223,17 @@ let event_key (ev : event) : string =
 
 let event_value (ev : event) : string =
   get_string ev "target.value"
+
+let query_selector_in (el : element) (selector : string) : element option =
+  let result =
+    Js.Unsafe.meth_call el "querySelector"
+      [| Js.Unsafe.inject (Js.string selector) |]
+  in
+  Js.Opt.to_option (Obj.magic result : element Js.opt)
+
+let focus (el : element) : unit =
+  let _ : Js.Unsafe.any =
+    Js.Unsafe.meth_call el "focus" [||]
+  in
+  ()
+

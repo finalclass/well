@@ -323,3 +323,10 @@ val event_key : event -> string
     ```
 *)
 val event_value : event -> string
+
+(** QuerySelectorIn — querySelector scoped to an element (host). *)
+val query_selector_in : element -> string -> element option
+
+(** Focus — call element.focus(); missing / non-focusable = no-op at call site. *)
+val focus : element -> unit
+

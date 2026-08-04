@@ -57,3 +57,16 @@ który spiná całą architekturę. Krytyczne:
 - Czy `dispatch_event` (emit) z `update` dociera do parenta w HTML (event-w-górę).
 - Czy usunięcie elementu z DOM wywołuje cleanup (destroy_instance,
   unsubscribe, destroy_state).
+
+## Cmd bus + init flush
+
+Przy pierwszym `component` runtime:
+
+1. Subskrybuje topic `"msg"` → `LoopManager.handle_msg` (raz, globalnie).
+2. Subskrybuje topic `"cmd"` → `EffectsManager.handle_cmd` (raz, globalnie).
+3. Przy `connectedCallback`: `init ~dispatch` z żywym dispatchem (publish `"msg"`),
+   persist state, publish initial vdom, **flush init cmd** na `"cmd"` jeśli nie-none.
+
+`Cmd.perform` / `batch` / `focus` / `emit` są interpretowane wyłącznie w
+EffectsManager — nie w `update`.
+

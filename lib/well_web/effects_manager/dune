@@ -2,4 +2,5 @@
  (name effects_manager)
  (public_name well.web.effects_manager)
  (wrapped false)
- (libraries well.web.bridge well.web.message_bus js_of_ocaml))
+ (libraries well.web.bridge well.web.message_bus well.web.component_access js_of_ocaml js_of_ocaml-ppx)
+ (preprocess (pps js_of_ocaml-ppx)))

@@ -188,18 +188,36 @@ In HTML: `<well-counter step="2"></well-counter>` → dispatches `Set_step 2` on
 ```ocaml
 module Cmd : sig
   type ('msg, 'emits) t
-  val none   : ('msg, 'emits) t
-  val msg    : 'msg -> ('msg, 'emits) t           (* self-message (async loop) *)
-  val emit   : 'emits -> ('msg, 'emits) t          (* event-w-górę to parent *)
-  val focus  : string -> ('msg, 'emits) t          (* focus a DOM element by selector *)
-  val is_none : ('msg, 'emits) t -> bool
+  val none     : ('msg, 'emits) t
+  val msg      : 'msg -> ('msg, 'emits) t
+  val emit     : 'emits -> ('msg, 'emits) t
+  val emit_dom : name:string -> ?detail:'a -> unit -> ('msg, 'emits) t
+  val focus    : string -> ('msg, 'emits) t
+  val batch    : ('msg, 'emits) t list -> ('msg, 'emits) t
+  val perform  : (dispatch:('msg -> unit) -> unit) -> ('msg, 'emits) t
+  val is_none  : ('msg, 'emits) t -> bool
 end
 ```
 
 - `Cmd.none` — no effect (the common case).
-- `Cmd.emit (CountChanged n)` — declare an output to the **parent** (Manager state). The component does NOT mutate the parent's state; it only emits.
-- `Cmd.msg m` — schedule a self-message (async).
-- `Cmd.focus "selector"` — focus an input after render.
+- `Cmd.emit (CountChanged n)` — typed emit → host `CustomEvent` **`well-emit`** with `detail = emits`. Parent may also use `Cmd.emit_dom ~name:"…"` for a specific event name.
+- `Cmd.msg m` — schedule a self-message (async bus hop through EffectsManager → LoopManager).
+- `Cmd.focus "selector"` — rAF + `querySelector` on host + `.focus()`.
+- `Cmd.batch [c1; c2]` — run commands in order (nested OK).
+- `Cmd.perform (fun ~dispatch -> …)` — general effect. Keep `update` pure; schedule XHR/timeout inside `perform` and `dispatch` completion msgs from callbacks:
+
+```ocaml
+| Submit ->
+    ({ state with loading = true },
+     Well_web.Cmd.perform (fun ~dispatch ->
+       Http.post ~url ~fields ~on_done:(fun r -> dispatch (Got_result r))))
+| Got_result r ->
+    (* pure map result → state / Cmd.emit / Cmd.msg *)
+```
+
+`init`'s returned cmd is flushed after mount; `init ~dispatch` is a **live**
+dispatch (not a no-op). Do not stash `dispatch` in a `ref` as the primary async
+pattern — use `Cmd.perform`.
 
 ## emits — declared outputs
 

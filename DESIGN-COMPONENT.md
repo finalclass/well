@@ -781,3 +781,26 @@ js_of_ocaml to daje.
 - **D11.** Trzy różnice względem TS: pominięto `cmp` w `update` i
   `onRefChange` w `init`; `view` dostała `dispatch` i zachowała
   projected `children` jako trzeci arg.
+
+---
+
+## Addendum (2026-08-04): `Cmd.perform` + real EffectsManager
+
+D8 historycznie obiecywało `batch` / `then_`; D18 miało `batch` w szkicu API,
+ale runtime był stubem (`EffectsManager.handle_cmd = fun _ -> ()`, brak
+subskrypcji topicu `"cmd"`, `init` odrzucało cmd i podawało no-op dispatch).
+
+**Aktualny kontrakt publiczny** (`Well_web.Cmd` / `Component_access.Cmd`):
+
+- `none`, `msg`, `emit`, `emit_dom`, `focus`, `batch`, `perform`
+- `perform : (dispatch:('msg -> unit) -> unit) -> …` — ogólny efekt;
+  aplikacja woła XHR/timeout w closure i `dispatch` z callbacków.
+- `then_` (Promise sugar) — **opcjonalne później**; nie blokuje, gdy `perform`
+  wystarcza.
+- `emit e` → DOM `CustomEvent` nazwa **`well-emit`**, `detail = e`.
+- `emit_dom ~name ?detail` — gdy parent słucha konkretnej nazwy zdarzenia
+  (np. panele DG: `want-remind`).
+
+EffectsManager jest zaimplementowany; LoopManager nadal tylko publikuje
+nie-none cmd na `"cmd"`.
+

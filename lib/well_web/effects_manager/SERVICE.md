@@ -2,36 +2,41 @@
 
 ## Role
 
-Koordynuje wykonanie asynchronicznych efektów wychodzących: odbiera komendy
-(Cmd) z MessageBus, interpretuje je (emit CustomEvent, Promise, focus, DOM-ops)
-używając Bridge, i publikuje wynikową wiadomość (lub null) z powrotem na
-MessageBus.
+Koordynuje wykonanie efektów wychodzących: odbiera komendy (`Cmd`) z
+MessageBus (topic `"cmd"`), interpretuje je przez Bridge / MessageBus i
+publikuje wynikowe wiadomości na topic `"msg"` gdy komenda tego wymaga.
 
 ## Abstraction boundary
 
-Enkapsuluje V-side-effects — słownik + interpretacja Cmd: jakie Cmd są
-wspierane, jak się tłumaczy na efekty w świecie zewnętrznym (przez Bridge do
-JS/DOM). To, co ukrywa: **jak** komenda jest wykonana; LoopManager wie tylko
-„wyślij komendę, dostaniesz kiedyś msg-or-null".
+Enkapsuluje V-side-effects — słownik + interpretacja Cmd. LoopManager wie
+tylko „opublikuj cmd”; EffectsManager wie **jak** ją wykonać.
+
+## Wspierane Cmd
+
+| Cmd | Działanie |
+|-----|-----------|
+| `none` | no-op |
+| `msg m` | `MessageBus.publish ~topic:"msg"` dla tej instancji |
+| `emit e` | `CustomEvent "well-emit"` na hoście, `detail = e` (typed emits) |
+| `emit_dom ~name ?detail` | `CustomEvent name` na hoście (stringowa nazwa dla parent DOM) |
+| `focus sel` | `requestAnimationFrame` → `querySelector` na hoście → `.focus()` |
+| `batch cs` | sekwencyjnie, zachowana kolejność, zagnieżdżenia OK |
+| `perform f` | `f ~dispatch` z żywym `dispatch` publikującym na `"msg"`; wyjątki z setupu są połykane |
 
 ## Assumptions
 
-- `Cmd_envelope.t` jest skonstruowany poprawnie (ID instancji wskazuje na
-  zarejestrowany komponent, Cmd jest typu zgodnego z `emits` tego komponentu).
-- Bridge jest zawsze gotowy (FFI do JS-runtime/DOM nie rzuca przy wywołaniu).
-- `Cmd.then_` (Promise) zawsze się rozwiązuje (resolve lub reject; reject jest
-  konwertowany na null-msg, nie propaguje wyjątku).
-- Publikacja wyniku na MessageBus nie rzuca (Bus zawsze gotowy).
+- Envelope `cmd` ma poprawne `instance_id` i payload typu `Cmd.t` komponentu.
+- Host DOM istnieje dla `emit` / `focus` (brak hosta = no-op).
+- `perform` nie blokuje pętli TEA — app planuje async (XHR, timeout, Promise)
+  i woła `dispatch` z callbacków.
+- Subskrypcja topicu `"cmd"` jest rejestrowana raz przy starcie runtime
+  (`Well_web.ensure_runtime`).
 
 ## Scenarios
 
-- [RunEffect](effects_manager.mli) — jedyny publiczny use case; wykonanie
-  komendy i publikacja rezultatu.
+- [RunEffect](effects_manager.mli) — jedyny publiczny use case.
 
 ## Verification strategy
 
-Manager to warstwa integracji — weryfikujemy kompletny przepływ, **bez mocków**,
-na jednym konkretnym przykładzie komponentu (np. `Counter` z
-`DESIGN-COMPONENT.md`). Testy integracyjne na samym końcu, gdy cała
-architektura jest zmontowana. Brak batchowania — jeden `Cmd_envelope.t` to
-jeden efekt.
+- Unit: `test/cmd_effects_test` — `is_none`, `iter`/`batch` order, `perform` ctor.
+- Integracja e2e: `test_e2e_counter` (emit path); perform/init — ręcznie / app.

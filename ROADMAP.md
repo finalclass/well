@@ -1211,3 +1211,8 @@ powinien to wymuszać przez API (aktor dostaje `db` w `init`, nie z zewnątrz).
 - **Type-safe SQL** — `let%query` + `[@@deriving table]`
 - **Kontrakty TOML** — sprawdzony format z dg, wbudowane w framework
 - **Aktorzy** — Erlang-inspired na EIO fibers, izolacja crashy
+
+
+## well.web effects (2026-08-04)
+
+`Cmd.perform` / `batch` / live EffectsManager + `"cmd"` bus subscription + init cmd flush — shipped.
