@@ -24,12 +24,19 @@ lock:
 dev:
 	$(DUNE) exec bin/main.exe
 
+# Editor tooling (ocamllsp/Merlin) needs well-mlx-pp + ocamlmerlin-well on PATH.
+# Same destination as CLI: $(INSTALL_DIR) (default ~/.local/bin).
 install: build
 	@mkdir -p $(INSTALL_DIR)
-	@rm -f $(INSTALL_DIR)/well
-	@cp _build/default/bin/main.exe $(INSTALL_DIR)/well
-	@chmod 755 $(INSTALL_DIR)/well
-	@echo "Installed well to $(INSTALL_DIR)/well"
+	@rm -f $(INSTALL_DIR)/well $(INSTALL_DIR)/well-mlx-pp $(INSTALL_DIR)/ocamlmerlin-well
+	@cp -fL _build/install/default/bin/well $(INSTALL_DIR)/well
+	@cp -fL _build/install/default/bin/well-mlx-pp $(INSTALL_DIR)/well-mlx-pp
+	@cp -fL _build/install/default/bin/ocamlmerlin-well $(INSTALL_DIR)/ocamlmerlin-well
+	@chmod 755 $(INSTALL_DIR)/well $(INSTALL_DIR)/well-mlx-pp $(INSTALL_DIR)/ocamlmerlin-well
+	@echo "Installed to $(INSTALL_DIR)/:"
+	@echo "  well"
+	@echo "  well-mlx-pp      (dune dialect + merlin reader backend)"
+	@echo "  ocamlmerlin-well (merlin_reader well -> ocamllsp)"
 
 release: build
 	@echo "==> Creating release bundle..."
