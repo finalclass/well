@@ -6,6 +6,7 @@ let dune_project name =
  (name mlx)
  (implementation
   (extension mlx)
+  (merlin_reader well)
   (preprocess
    (run well-mlx-pp %%{input-file}))))
 

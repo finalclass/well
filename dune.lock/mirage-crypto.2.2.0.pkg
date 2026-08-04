@@ -1,4 +1,4 @@
-(version 2.1.0)
+(version 2.2.0)
 
 (build
  (all_platforms
@@ -14,6 +14,6 @@
 (source
  (fetch
   (url
-   https://github.com/mirage/mirage-crypto/releases/download/v2.1.0/mirage-crypto-2.1.0.tbz)
+   https://github.com/mirage/mirage-crypto/releases/download/v2.2.0/mirage-crypto-2.2.0.tbz)
   (checksum
-   sha256=fbeda89a3d7bfa9992fdbef3ebbfc7280fcefdd425a0405e33305125cd409815)))
+   sha256=4b87091b6a77843bf97a74aae2e7da21310307ff7d2105712c4369680122d80a)))

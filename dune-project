@@ -5,6 +5,7 @@
  (name mlx)
  (implementation
   (extension mlx)
+  (merlin_reader well)
   (preprocess
    (run well-mlx-pp %{input-file}))))
 
@@ -17,6 +18,7 @@
   mlx
   menhir
   menhirLib
+  merlin-extend
   eio
   eio_main
   yojson

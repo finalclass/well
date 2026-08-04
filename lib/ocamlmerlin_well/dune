@@ -1,0 +1,15 @@
+;; Merlin reader for Well MLX.
+;; Spawns well-mlx-pp on the buffer text and feeds the resulting AST to Merlin.
+;; Must stay binary-compatible with well-mlx-pp's stdout format.
+
+(executable
+ (name ocamlmerlin_well)
+ (package well)
+ (public_name ocamlmerlin-well)
+ (modules ocamlmerlin_well)
+ (libraries
+  unix
+  ppxlib
+  ocaml-compiler-libs.common
+  ocaml-compiler-libs.shadow
+  merlin-extend))
