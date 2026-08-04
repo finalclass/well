@@ -45,6 +45,20 @@ install: build ocamlformat-mlx
 	@echo "  well-mlx-pp       (dune dialect + merlin reader backend)"
 	@echo "  ocamlmerlin-well  (merlin_reader well -> ocamllsp)"
 	@echo "  ocamlformat-mlx   (Well JSX-aware formatter for ocamllsp)"
+	@# ocamllsp uses Bin.which on PATH; envrc/opam often wins over ~/.local/bin.
+	@# Overwrite switch binary (backup stock once) so format always hits Well.
+	@if [ -n "$$OPAM_SWITCH_PREFIX" ] && [ -d "$$OPAM_SWITCH_PREFIX/bin" ]; then \
+	  if [ -x "$$OPAM_SWITCH_PREFIX/bin/ocamlformat-mlx" ] \
+	     && [ ! -e "$$OPAM_SWITCH_PREFIX/bin/ocamlformat-mlx.stock" ]; then \
+	    cp -fL "$$OPAM_SWITCH_PREFIX/bin/ocamlformat-mlx" \
+	      "$$OPAM_SWITCH_PREFIX/bin/ocamlformat-mlx.stock"; \
+	    echo "  (backed up opam ocamlformat-mlx -> .stock)"; \
+	  fi; \
+	  cp -fL tools/ocamlformat-mlx/ocamlformat-mlx \
+	    "$$OPAM_SWITCH_PREFIX/bin/ocamlformat-mlx"; \
+	  chmod 755 "$$OPAM_SWITCH_PREFIX/bin/ocamlformat-mlx"; \
+	  echo "  also -> $$OPAM_SWITCH_PREFIX/bin/ocamlformat-mlx"; \
+	fi
 
 release: build
 	@echo "==> Creating release bundle..."

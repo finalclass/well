@@ -24,3 +24,13 @@ so ocamllsp picks the Well binary (ocamllsp hardcodes the name `ocamlformat-mlx`
 
 Upstream pin: ocamlformat-mlx **0.28.1.2** (override with `OCAMLFORMAT_MLX_VERSION` /
 `OCAMLFORMAT_MLX_SRC`).
+
+## PATH / ocamllsp
+
+`ocamllsp` resolves `ocamlformat-mlx` with `Bin.which` on the process PATH.
+`envrc` / `opam env` often put `$OPAM_SWITCH_PREFIX/bin` **before** `~/.local/bin`,
+so install also overwrites the switch binary (stock saved once as
+`ocamlformat-mlx.stock`).
+
+Doom additionally formats `.mlx` via absolute `~/.local/bin/ocamlformat-mlx`
+and disables ocamllsp documentFormatting for `mlx-mode`.
