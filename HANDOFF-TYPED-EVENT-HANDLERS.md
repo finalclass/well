@@ -159,14 +159,14 @@ OK   | <div on_click=Increment />
 OK   | <div on_click=(Increment) />
 OK   | <div on_keydown=handler />          (named handler)
 OK   | <div on_change=handler />           (named handler)
-FAIL | <div on=(fun ev -> ...) />          (inline fun)
-FAIL | <div on_change=(fun ev -> ...) />   (inline fun)
+OK   | <div on_change=(fun ev -> ...) />   (parenthesized inline fun)
+FAIL | <div on_change=fun ev -> ... />     (bare fun — needs parens)
 ```
 
 Zatem w MLX:
 - `on_click=Msg` — działa (msg value).
 - `on_keydown=handle_key` — działa (named function `string -> 'msg`).
-- `on_keydown=(fun k -> ...)` — **NIE** parse'uje. Użytkownik musi nazwać funkcję.
+- `on_keydown=(fun k -> ...)` — działa (nawiasowany `expr` w atrybucie).
 
 **Zalecenie dla agenta:** po zmianie `jsx_helper.ml`, PRZED migracją scaffolda,
 przetestuj empirycznie przez `pp.exe` że docelowe formy MLX faktycznie

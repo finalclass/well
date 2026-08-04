@@ -117,6 +117,9 @@ let is_in_string = ref false
 let in_string () = !is_in_string
 let print_warnings = ref true
 let jsx_open_tag = ref false
+let jsx_expr_depth = ref 0
+
+let jsx_at_attr_name () = !jsx_open_tag && !jsx_expr_depth = 0
 
 (* Escaped chars are interpreted in strings unless they are in comments. *)
 let store_escaped_char lexbuf c =
@@ -428,7 +431,7 @@ rule token = parse
       { warn_latin1 lexbuf;
         OPTLABEL name }
   | lowercase identchar * as name
-      { if !jsx_open_tag then
+      { if jsx_at_attr_name () then
           try ignore (Hashtbl.find keyword_table name); JSX_ATTR name
           with Not_found -> LIDENT name
         else
@@ -437,7 +440,7 @@ rule token = parse
   | lowercase_latin1 identchar_latin1 * as name
       { warn_latin1 lexbuf; LIDENT name }
   | html_name as name
-      { if !jsx_open_tag && (String.contains name '-' || String.contains name ':')
+      { if jsx_at_attr_name () && (String.contains name '-' || String.contains name ':')
         then JSX_ATTR name
         else
           match split_html_name name with
@@ -450,7 +453,7 @@ rule token = parse
               (try Hashtbl.find keyword_table name
                with Not_found -> LIDENT name) }
   | "<" (html_name as name)
-      { jsx_open_tag := true; JSX_HTML_TAG name }
+      { jsx_open_tag := true; jsx_expr_depth := 0; JSX_HTML_TAG name }
   | "<" "/" (html_name as name)
       { JSX_HTML_TAG_E name }
   | uppercase identchar * as name
@@ -562,8 +565,8 @@ rule token = parse
   | "&&" { AMPERAMPER }
   | "`"  { BACKQUOTE }
   | "\'" { QUOTE }
-  | "("  { LPAREN }
-  | ")"  { RPAREN }
+  | "("  { if !jsx_open_tag then incr jsx_expr_depth; LPAREN }
+  | ")"  { if !jsx_open_tag && !jsx_expr_depth > 0 then decr jsx_expr_depth; RPAREN }
   | "*"  { STAR }
   | ","  { COMMA }
   | "->" { MINUSGREATER }
@@ -580,19 +583,19 @@ rule token = parse
   | "</" { LESSSLASH }
   | "<-" { LESSMINUS }
   | "="  { EQUAL }
-  | "["  { LBRACKET }
+  | "["  { if !jsx_open_tag then incr jsx_expr_depth; LBRACKET }
   | "[|" { LBRACKETBAR }
   | "[<" { LBRACKETLESS }
   | "[>" { LBRACKETGREATER }
-  | "]"  { RBRACKET }
-  | "{"  { LBRACE }
+  | "]"  { if !jsx_open_tag && !jsx_expr_depth > 0 then decr jsx_expr_depth; RBRACKET }
+  | "{"  { if !jsx_open_tag then incr jsx_expr_depth; LBRACE }
   | "{<" { LBRACELESS }
   | "|"  { BAR }
   | "||" { BARBAR }
   | "|]" { BARRBRACKET }
-  | ">"  { jsx_open_tag := false; GREATER }
-  | "/>" { jsx_open_tag := false; SLASHGREATER }
-  | "}"  { RBRACE }
+  | ">"  { jsx_open_tag := false; jsx_expr_depth := 0; GREATER }
+  | "/>" { jsx_open_tag := false; jsx_expr_depth := 0; SLASHGREATER }
+  | "}"  { if !jsx_open_tag && !jsx_expr_depth > 0 then decr jsx_expr_depth; RBRACE }
   | ">}" { GREATERRBRACE }
   | "[@" { LBRACKETAT }
   | "[@@"  { LBRACKETATAT }

@@ -69,6 +69,27 @@ let () =
       expect html |> to_equal_string {|<input></input>|}
     );
 
+    it "accepts parenthesized inline fun in on_* attributes" (fun () ->
+      let html =
+        <input on_input=(fun v -> ignore v; ()) on_change=(fun v -> ignore v; ()) />
+        |> render
+      in
+      expect html |> to_equal_string {|<input></input>|}
+    );
+
+    it "accepts parenthesized if/match and fun in attribute values" (fun () ->
+      let html =
+        <div
+          id=(if true then "a" else "b")
+          data-x=(match Some 1 with Some n -> string_of_int n | None -> "0")
+          title=((fun s -> s) "hello")
+        />
+        |> render
+      in
+      expect html
+      |> to_equal_string {|<div id="a" data-x="1" title="hello"></div>|}
+    );
+
     it "desugars unknown on_* to the On_event fallback" (fun () ->
       let handle_event _ = None in
       let html = <div on_wheel=handle_event on_custom_thing=handle_event>(Html.txt "x")</div> |> render in

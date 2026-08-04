@@ -93,9 +93,9 @@ Dla usług backendu z kontraktem TOML, trzeci artefakt to `lib/contract/<Service
 - **Toolchain (D15):** js_of_ocaml (NIE Melange — psuje dialekt MLX).
   `(preprocess (pps js_of_ocaml-ppx))` musi być w **executable** stanza (nie
   dziedziczy z library). Każdy executable komponentu musi to mieć.
-- **MLX grammar limit:** wartości atrybutów NIE akceptują inline `fun`.
-  `on_change=handle_change` (nazwana funkcja) działa; `on_change=(fun ev -> …)`
-  nie parsuje się. Nazywaj funkcje handlerów.
+- **MLX attribute values:** full OCaml `expr` inside parentheses works, including
+  inline `fun`: `on_change=(fun v -> Set_name v)`. Bare `on_change=fun …`
+  still fails (needs parens). Named handlers remain fine: `on_change=handle_change`.
 - `{x}` w MLX to **wyrażenie rekordowe**, NIE interpolacja. `<span>{n}</span>`
   to błąd; użyj `<span>(txt (string_of_int n))</span>`.
 - **Vdom jest zunifikowany** (`Html.node` == `Vdom.t`, generyczny nad `'msg`).
