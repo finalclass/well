@@ -1,0 +1,94 @@
+--- a/vendor/parser-standard/lexer.mll
++++ b/vendor/parser-standard/lexer.mll
+@@ -322,6 +322,12 @@
+      if Utf8_lexeme.is_lowercase name then Some name
+      else None
+ 
++(* Well MLX: inside an open JSX tag, attribute names may be OCaml keywords
++   (type=, for=) or HTML names with '-' / ':' (aria-label, data-id). *)
++let jsx_open_tag = ref false
++let jsx_expr_depth = ref 0
++let jsx_at_attr_name () = !jsx_open_tag && !jsx_expr_depth = 0
++
+ let is_keyword name =
+   Hashtbl.mem keyword_table name
+ 
+@@ -487,6 +493,9 @@
+ let uppercase = ['A'-'Z']
+ let identstart = lowercase | uppercase
+ let identchar = ['A'-'Z' 'a'-'z' '_' '\'' '0'-'9']
++let html_name_char = ['A'-'Z' 'a'-'z' '_' '\'' '0'-'9' '-' ':']
++let html_name = lowercase html_name_char*
++
+ let utf8 = ['\192'-'\255'] ['\128'-'\191']*
+ let identstart_ext = identstart | utf8
+ let identchar_ext = identchar | utf8
+@@ -571,11 +580,26 @@
+         check_label_name ~raw_escape:(escape<>"") lexbuf name;
+         OPTLABEL name
+       }
+-  | lowercase identchar * as name
+-      { find_keyword lexbuf name }
+-  | "<" (lowercase identchar * as name)
+-      { JSX_LIDENT name }
+-  | "<" "/" (lowercase identchar * as name)
++  | html_name as name
++      { if jsx_at_attr_name () then LIDENT name
++        else if String.contains name '-' || String.contains name ':' then begin
++          (* Outside JSX attrs: do not swallow foo-bar as one ident. *)
++          let idx =
++            let len = String.length name in
++            let rec loop i =
++              if i = len then 0
++              else if name.[i] = '-' || name.[i] = ':' then i
++              else loop (i + 1)
++            in
++            loop 0
++          in
++          set_lexeme_length lexbuf idx;
++          let name = String.sub name 0 idx in
++          find_keyword lexbuf name
++        end else find_keyword lexbuf name }
++  | "<" (html_name as name)
++      { jsx_open_tag := true; jsx_expr_depth := 0; JSX_LIDENT name }
++  | "<" "/" (html_name as name)
+       { JSX_LIDENT_E name }
+   | uppercase identchar * as name
+       { UIDENT name } (* No capitalized keywords *)
+@@ -703,8 +727,8 @@
+   | "&&" { AMPERAMPER }
+   | "`"  { BACKQUOTE }
+   | "\'" { QUOTE }
+-  | "("  { LPAREN }
+-  | ")"  { RPAREN }
++  | "("  { if !jsx_open_tag then incr jsx_expr_depth; LPAREN }
++  | ")"  { if !jsx_open_tag && !jsx_expr_depth > 0 then decr jsx_expr_depth; RPAREN }
+   | "*"  { STAR }
+   | ","  { COMMA }
+   | "->" { MINUSGREATER }
+@@ -721,19 +745,19 @@
+   (* | "</" { LESSSLASH } *)
+   | "<-" { LESSMINUS }
+   | "="  { EQUAL }
+-  | "["  { LBRACKET }
++  | "["  { if !jsx_open_tag then incr jsx_expr_depth; LBRACKET }
+   | "[|" { LBRACKETBAR }
+   | "[<" { LBRACKETLESS }
+   | "[>" { LBRACKETGREATER }
+-  | "]"  { RBRACKET }
+-  | "{"  { LBRACE }
++  | "]"  { if !jsx_open_tag && !jsx_expr_depth > 0 then decr jsx_expr_depth; RBRACKET }
++  | "{"  { if !jsx_open_tag then incr jsx_expr_depth; LBRACE }
+   | "{<" { LBRACELESS }
+   | "|"  { BAR }
+   | "||" { BARBAR }
+   | "|]" { BARRBRACKET }
+-  | ">"  { GREATER }
+-  | "/>" { SLASHGREATER }
+-  | "}"  { RBRACE }
++  | ">"  { jsx_open_tag := false; jsx_expr_depth := 0; GREATER }
++  | "/>" { jsx_open_tag := false; jsx_expr_depth := 0; SLASHGREATER }
++  | "}"  { if !jsx_open_tag && !jsx_expr_depth > 0 then decr jsx_expr_depth; RBRACE }
+   | ">}" { GREATERRBRACE }
+   | "[@" { LBRACKETAT }
+   | "[@@"  { LBRACKETATAT }

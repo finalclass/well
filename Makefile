@@ -4,7 +4,7 @@ RELEASE_DIR := _release
 
 INSTALL_DIR := $(HOME)/.local/bin
 
-.PHONY: build check test clean lock dev release install
+.PHONY: build check test clean lock dev release install ocamlformat-mlx
 
 build:
 	$(DUNE) build
@@ -24,19 +24,27 @@ lock:
 dev:
 	$(DUNE) exec bin/main.exe
 
-# Editor tooling (ocamllsp/Merlin) needs well-mlx-pp + ocamlmerlin-well on PATH.
-# Same destination as CLI: $(INSTALL_DIR) (default ~/.local/bin).
-install: build
+# Patched formatter for Well MLX (keywords + hyphen attrs in JSX).
+ocamlformat-mlx:
+	./tools/ocamlformat-mlx/build.sh
+
+# Editor tooling on PATH (default ~/.local/bin).
+# Prefer this directory over opam's bin in the editor so ocamllsp finds these.
+install: build ocamlformat-mlx
 	@mkdir -p $(INSTALL_DIR)
-	@rm -f $(INSTALL_DIR)/well $(INSTALL_DIR)/well-mlx-pp $(INSTALL_DIR)/ocamlmerlin-well
+	@rm -f $(INSTALL_DIR)/well $(INSTALL_DIR)/well-mlx-pp \
+		$(INSTALL_DIR)/ocamlmerlin-well $(INSTALL_DIR)/ocamlformat-mlx
 	@cp -fL _build/install/default/bin/well $(INSTALL_DIR)/well
 	@cp -fL _build/install/default/bin/well-mlx-pp $(INSTALL_DIR)/well-mlx-pp
 	@cp -fL _build/install/default/bin/ocamlmerlin-well $(INSTALL_DIR)/ocamlmerlin-well
-	@chmod 755 $(INSTALL_DIR)/well $(INSTALL_DIR)/well-mlx-pp $(INSTALL_DIR)/ocamlmerlin-well
+	@cp -fL tools/ocamlformat-mlx/ocamlformat-mlx $(INSTALL_DIR)/ocamlformat-mlx
+	@chmod 755 $(INSTALL_DIR)/well $(INSTALL_DIR)/well-mlx-pp \
+		$(INSTALL_DIR)/ocamlmerlin-well $(INSTALL_DIR)/ocamlformat-mlx
 	@echo "Installed to $(INSTALL_DIR)/:"
 	@echo "  well"
-	@echo "  well-mlx-pp      (dune dialect + merlin reader backend)"
-	@echo "  ocamlmerlin-well (merlin_reader well -> ocamllsp)"
+	@echo "  well-mlx-pp       (dune dialect + merlin reader backend)"
+	@echo "  ocamlmerlin-well  (merlin_reader well -> ocamllsp)"
+	@echo "  ocamlformat-mlx   (Well JSX-aware formatter for ocamllsp)"
 
 release: build
 	@echo "==> Creating release bundle..."
@@ -60,4 +68,3 @@ release: build
 		$(RELEASE_DIR)/bin/well
 	@echo "==> Release ready: $(RELEASE_DIR)/"
 	@echo "    Run with: cd $(RELEASE_DIR) && ./bin/well"
-

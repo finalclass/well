@@ -158,7 +158,7 @@ git clone https://github.com/anthropics/well.git
 cd well
 make lock
 make build
-make install   # well, well-mlx-pp, ocamlmerlin-well → ~/.local/bin
+make install   # well, well-mlx-pp, ocamlmerlin-well, ocamlformat-mlx → ~/.local/bin
 ```
 
 ## Stack
