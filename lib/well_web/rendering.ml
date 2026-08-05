@@ -80,18 +80,21 @@ let sync_attrs node (old_attrs : (string * string) list)
   merge (List.sort compare old_attrs) (List.sort compare new_attrs)
 
 let sync_text ctrl (old_v : 'msg Html.vdom) (new_v : 'msg Html.vdom) =
-  if new_v.children = [] then
-    match new_v.text with
-    | Some text ->
-      (match old_v.text with
-       | Some old_text when old_text <> text ->
-         Bridge.set_text ctrl.node text
-       | _ -> ())
-    | None -> ()
-  else
-    match old_v.text with
-    | Some _ -> Bridge.set_text ctrl.node ""
-    | None -> ()
+  match new_v.children with
+  | [] ->
+    (match new_v.text with
+     | Some text ->
+       (match old_v.children, old_v.text with
+        | [], Some old_text when old_text = text -> ()
+        | _ -> Bridge.set_text ctrl.node text)
+     | None ->
+       (match old_v.children with
+        | [] -> Bridge.set_text ctrl.node ""
+        | _ -> ()))
+  | _ :: _ ->
+    (match old_v.children with
+     | [] -> Bridge.set_text ctrl.node ""
+     | _ -> ())
 
 let detach_node ctrl =
   match Bridge.get_parent ctrl.node with

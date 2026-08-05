@@ -46,7 +46,8 @@ val blit : 'msg Html.node -> ctrl
     (START)
     [Odbierz ctrl i nowy vdom]
     <Zmiana text>
-      [Ustaw nowy text przez Bridge]
+      [Ustaw textContent tylko gdy liść (brak children);
+       nigdy nie czyść textContent przy elementach z dziećmi]
     <Zmiana attrs>
       [Posortowane-merge: dodaj/zmień/usuń attrs]
     <Zmiana handlers>
