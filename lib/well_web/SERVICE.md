@@ -2,26 +2,24 @@
 
 ## Role
 
-Fasada dla aplikacji — jedyny publiczny entry-point do runtime. Wewnętrznie
-organizuje 3 role jako sub-moduły:
+Fasada dla aplikacji — jedyny publiczny entry-point do runtime. Implementacja:
 
-- `registration.ml` — `val component` (rejestruje typ komponentu, stwarza
-  instancje serwisów, koordynuje rejestrację przez ComponentAccess + Bridge,
-  podpina lifecycle callbacki).
-- `inputs.ml` — nasłuch DOM eventów, atrybutów (`Props.t`), lifecycle
-  bridging (create/destroy instancji przy connect/disconnect), `subscriptions`.
-  Implementuje `on_connect`/`on_disconnect`, które Bridge woła.
-- `rendering.ml` — subscribe MessageBus, renderuje vdom → DOM przez Bridge.
-- `channels.ml` — push z WS silnika (`well.js`, D14) → publish msg na
-  MessageBus.
+- `well_web.ml` — `val component` (rejestruje typ, `ensure_runtime`, lifecycle
+  `on_connect`/`on_disconnect` wołane przez Bridge: create → init_state →
+  Client `StateAccess.persist` → vdom → Instance_table → publish_cmd).
+- `rendering.ml` — subscribe `"vdom"`, blit vdom → DOM przez Bridge; handlery
+  DOM (`attach_listener`) → publish `"msg"` (ścieżka interakcji).
+
+Planowane / **niezaimplementowane**: osobne `inputs.ml` / `registration.ml` /
+`channels.ml`. `Props.t` w kontrakcie — **brak** odczytu atrybutów przy connect.
 
 ## Abstraction boundary
 
-Enkapsuluje 3 wolatylności (V-inputs, V-rendering, V-channels) oraz
-rejestrację. Ukrywa przed aplikacją: wewnętrzne serwisy (LoopManager,
-EffectsManager, Accessy, MessageBus, Bridge), ich wzajemne powiązania,
-kolejkowanie. Aplikacja widzi tylko `module type COMPONENT`, `val component`
-oraz re-eksportowane typy (`Html.node`/`Html.vdom` przez alias `Vdom`, `Props.t`,
+Enkapsuluje rejestrację, mount lifecycle i rendering (handlery DOM → msg).
+Ukrywa przed aplikacją: wewnętrzne serwisy (LoopManager, EffectsManager,
+Accessy, MessageBus, Bridge), ich wzajemne powiązania, kolejkowanie.
+Aplikacja widzi tylko `module type COMPONENT`, `val component` oraz
+re-eksportowane typy (`Html.node`/`Html.vdom` przez alias `Vdom`, `Props.t`,
 `Cmd.t`, `emits`).
 
 ## Assumptions
@@ -35,8 +33,8 @@ oraz re-eksportowane typy (`Html.node`/`Html.vdom` przez alias `Vdom`, `Props.t`
   zgodnie ze specyfikacją `customElements.define`).
 - Lifecycle callbacki (`on_connect`/`on_disconnect`) są wywoływane przez
   Bridge za każdym razem, gdy element tego typu jest wstawiany/usuwany z DOM.
-- Sub-moduły (Inputs, Rendering, Channels) są tworzone raz (przy pierwszym
-  `component`) i współdzielone przez wszystkie typy komponentów.
+- Runtime globalny (`ensure_runtime` + `Rendering.init`) startuje raz przy
+  pierwszym `component` i jest współdzielony przez wszystkie typy komponentów.
 
 ## Scenarios
 
@@ -52,8 +50,9 @@ który spiná całą architekturę. Krytyczne:
 - Czy po `Well_web.component (module Counter) ~tag_name:"well-counter"`
   element `<well-counter>` w HTML faktycznie się renderuje (init → view → DOM).
 - Czy kliknięcie przycisku w komponencie przepływa przez całą pętlę
-  (DOM event → Inputs → MessageBus → LoopManager → ComponentAccess.update →
-  StateAccess.persist → MessageBus → Rendering → DOM).
+  (DOM event → Rendering handler → MessageBus `"msg"` → LoopManager →
+  ComponentAccess.update → StateAccess.persist → MessageBus `"vdom"` →
+  Rendering → DOM; opcjonalnie `"cmd"` → EffectsManager).
 - Czy `dispatch_event` (emit) z `update` dociera do parenta w HTML (event-w-górę).
 - Czy usunięcie elementu z DOM wywołuje cleanup (destroy_instance,
   unsubscribe, destroy_state).
@@ -64,8 +63,11 @@ Przy pierwszym `component` runtime:
 
 1. Subskrybuje topic `"msg"` → `LoopManager.handle_msg` (raz, globalnie).
 2. Subskrybuje topic `"cmd"` → `EffectsManager.handle_cmd` (raz, globalnie).
-3. Przy `connectedCallback`: `init ~dispatch` z żywym dispatchem (publish `"msg"`),
-   persist state, publish initial vdom, **flush init cmd** na `"cmd"` jeśli nie-none.
+3. Przy `connectedCallback` (sync construct, Bus flush async `setTimeout(0)`):
+   `init_state ~dispatch` (Access tylko woła `init`; publish `"msg"` tylko gdy
+   `init` sam wywoła `dispatch`; zwrócony cmd **nie** run), Client persist,
+   publish `"vdom"`, rejestracja Instance_table, publish init cmd na `"cmd"`
+   jeśli ≠ none (jeden envelope; batch nie jest rozbijany przez Loop/Client).
 
 `Cmd.perform` / `batch` / `focus` / `emit` są interpretowane wyłącznie w
 EffectsManager — nie w `update`.

@@ -173,15 +173,22 @@ module Props : sig
 end
 ```
 
-The string is the HTML attribute name; the runtime parses the attribute value into the declared type and dispatches the `~on` message. No manual `JSON.parse` or string parsing in component code.
+The string is the HTML attribute name; `~on` is the intended msg when that
+attribute is applied. **Runtime status (today): `Props` is declared on the
+COMPONENT contract but not wired in Client lifecycle** — `on_connect` does
+**not** read host attributes and does **not** dispatch prop msgs. Defaults
+must come from `init` (hardcoded / own logic). No automatic
+`<well-counter step="2">` → `Set_step 2` on connect until Props wiring lands.
 
 ```ocaml
 let props : msg Well_web.Props.t = [
   Well_web.Props.int "step" ~default:1 ~on:(fun v -> Set_step v);
 ]
+(* Declared for the contract / future wiring — not applied at mount today. *)
 ```
 
-In HTML: `<well-counter step="2"></well-counter>` → dispatches `Set_step 2` on connect.
+In HTML you may still write attributes for markup/CSS, but they do **not**
+drive component state until Props→dispatch is implemented.
 
 ## Cmd — effects going out
 
@@ -218,6 +225,18 @@ end
 `init`'s returned cmd is flushed after mount; `init ~dispatch` is a **live**
 dispatch (not a no-op). Do not stash `dispatch` in a `ref` as the primary async
 pattern — use `Cmd.perform`.
+
+### `Cmd.perform` discipline (non-negotiable)
+
+| Do | Don't |
+|---|---|
+| Async I/O only (XHR, `Proxy`, timeout, Promise) + `dispatch` completion msgs | DOM parent navigation / bubbling events inside `perform` |
+| Parent outputs → `Cmd.emit` / `Cmd.emit_dom` | `emit`/`emit_dom` simulated via raw DOM in `perform` |
+| Focus → `Cmd.focus "selector"` | Manual `querySelector` + `.focus()` in `perform` |
+| Keep `update`/`init` pure constructors of `Cmd.t` | Side effects directly in `update`/`init` body |
+| Use `Cmd.perform` for deferred work | **`dispatch_ref` / stashing `dispatch` in a `ref` as the primary async pattern** |
+
+EffectsManager runs commands; component code only builds them.
 
 ## Contract RPC from the browser (Proxy)
 
@@ -272,6 +291,7 @@ type emits = CountChanged of int
 let props : msg Well_web.Props.t = [
   Well_web.Props.int "step" ~default:1 ~on:(fun v -> Set_step v);
 ]
+(* props declared but not applied at connect — step default lives in init *)
 
 let init ~dispatch:_ = ({ count = 0; step = 1 }, Well_web.Cmd.none)
 
@@ -307,7 +327,8 @@ Use on a page (`lib/pages/<x>_page.mlx`):
 ```mlx
 Well.get "/counter" @@ fun _req ->
 <Layout title="Counter">
-  <well-counter step="2"></well-counter>
+  <!-- step="2" is markup only today; init still starts at step=1 until Props wired -->
+  <well-counter></well-counter>
   <script attrs=[("type", "module"); ("src", "/static/app.js")] />
 </Layout>
 ```

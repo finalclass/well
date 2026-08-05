@@ -24,14 +24,12 @@
 | MessageBus | Cross-cutting (Utility) | `lib/well_web/message_bus/` | `message_bus.mli` | `SERVICE.md` |
 | Bridge | Cross-cutting (Utility) | `lib/well_web/bridge/` | `bridge.mli` | `SERVICE.md` |
 
-**Well.Web** jest pojedynczym Clientem — fasadą dla aplikacji. Wewnętrznie organizuje 3 role jako osobne pliki (sub-moduły):
+**Well.Web** jest pojedynczym Clientem — fasadą dla aplikacji. Implementacja dziś:
 
-- `registration.ml` — `val component` (entry-point), `module type COMPONENT`, tworzy instancje serwisów, rejestruje custom element.
-- `inputs.ml` — DOM event, atrybuty (`Props.t`), lifecycle bridging, `subscriptions` → publish msg na MessageBus.
-- `rendering.ml` — subscribe MessageBus, renderuje vdom → DOM przez Bridge.
-- `channels.ml` — push z WS silnika (`well.js`, D14) → publish msg na MessageBus.
+- `well_web.ml` — `val component` (entry-point), lifecycle `on_connect` / `on_disconnect`, rejestracja custom elementu przez Bridge, mount path (create → init → persist → vdom → cmd).
+- `rendering.ml` — subscribe `"vdom"`, blit vdom → DOM przez Bridge; **attach_listener** na handlerach DOM → `dispatch` → publish `"msg"` (ścieżka interakcji użytkownika).
 
-Trzy wolatylności (V-inputs, V-rendering, V-channels) są enkapsulowane wewnątrz sub-modułów Clienta. Client jako całość jest fasadą dla aplikacji.
+Planowane / **niezaimplementowane** (brak plików): osobne `inputs.ml` / `registration.ml` / `channels.ml`. `Props.t` jest w kontrakcie ComponentAccess, ale **nie jest odczytywane przy connect** — brak wire atrybutów → msg.
 
 Brak Engine — V-side-effects okazał się Managerem (EffectsManager). Wszystkie efekty asynchroniczne wymagają koordynacji w czasie (Promise, rAF), co jest profilem Managera, nie stateless Engine.
 
@@ -61,7 +59,7 @@ Wolatylności enkapsulowane per warstwa:
 
 | Warstwa | Serwis | Wolatylność |
 |---|---|---|
-| Client | Well.Web | Rejestracja + źródła msg (DOM event, atrybuty, lifecycle, subscriptions, sandboxing, push z WS) + renderowanie (jak `view` trafia do HTML/DOM; vdom jest implementacją) — 3 role wewnętrzne jako sub-moduły |
+| Client | Well.Web | Rejestracja + lifecycle mount (`well_web.ml`) + renderowanie i handlery DOM (`rendering.ml` → `"msg"`). Atrybuty/`Props` i push z WS — kontrakt/plan, **nie wired** w Client lifecycle |
 | Manager | LoopManager | Mechanika pętli TEA (scheduling, batching, re-entrancja) |
 | Manager | EffectsManager | Słownik + interpretacja efektów wychodzących (Cmd, DOM-ops) |
 | Access | StateAccess | Lokalizacja stanu (pure-client, localStorage, baza, SSR) |
@@ -80,23 +78,90 @@ Główny use case Well.Web: **zmiana DOM z uwagi na interakcję użytkownika**.
 ```call-chain
 HandleInteraction
 
-[Inputs]
-  ~> [MessageBus]
+[Rendering]                     (* attach_listener → dispatch *)
+  ~> [MessageBus]               (* topic "msg" *)
        ~> [LoopManager]
             -> [StateAccess]
                  -> (ComponentState)
             -> [ComponentAccess]
                  -> (ComponentDefinition)
-            ~> [MessageBus]
+            ~> [MessageBus]     (* topic "vdom" — zawsze *)
+                 ~> [Rendering]
+                      -> [Bridge]
+            ~> [MessageBus]     (* topic "cmd" — 0|1 envelope, skip none *)
                  ~> [EffectsManager]
                       -> [Bridge]
-            ~> [MessageBus]
-       ~> [Rendering]
+                      ~> [MessageBus]  (* perform/msg → "msg" → LoopManager *)
 ```
 
-Komunikacja Client↔Manager i Manager↔Manager jest **wyłącznie asynchroniczna** przez MessageBus (decyzja architektoniczna — spójność od góry do dołu, ponieważ część komunikacji i tak musi być async). Sync `->` tylko Manager→Access, Access→Resource, Manager/Effects→Bridge.
+Komunikacja Client↔Manager i Manager↔Manager jest **wyłącznie asynchroniczna** przez MessageBus (decyzja architektoniczna — spójność od góry do dołu, ponieważ część komunikacji i tak musi być async). `MessageBus.publish` = enqueue + `setTimeout(flush, 0)` — po powrocie z `on_connect` / handlera ani vdom, ani EffectsManager jeszcze nie zbiegły. Sync `->` tylko Manager→Access, Access→Resource, Manager/Effects→Bridge; oraz **mount-only** Client→Access w `on_connect` (nie kopiować na inne UC).
 
-Po jednym cyklu update LoopManager może opublikować 0..N msg na Bus:
-- 0 — gdy update zwraca `Cmd.none` i stan się nie zmienia (lub gdy state się nie zmienia → brak publikacji do Rendering).
-- 1 — gdy są efekty ale brak zmiany widoku (lub odwrotnie).
-- 2+ — gdy Cmd jest batch (wiele efektów) + zmiana widoku.
+Po jednym cyklu `handle_msg` LoopManager publikuje (bez porównywania old/new state):
+- **zawsze** 1× `"vdom"` (render po każdym update — brak skip-vdom),
+- **0 lub 1** envelope na `"cmd"`: skip gdy `Cmd.none`; w przeciwnym razie **cały** `cmd` (w tym `batch`) jako **jeden** payload. Rozwijanie batch / `Cmd.iter` robi EffectsManager, nie LoopManager.
+
+## Globalne subskrypcje runtime (raz)
+
+Przy pierwszym `Well_web.component` Client woła `ensure_runtime` i rejestruje
+**globalnie, raz na proces** (nie per-instancja):
+
+| Topic MessageBus | Subskrybent | Rola |
+|---|---|---|
+| `"msg"` | LoopManager (`handle_msg`) | pętla TEA: update → persist → vdom/cmd |
+| `"cmd"` | EffectsManager (`handle_cmd`) | interpretacja Cmd (emit/focus/perform/batch/msg) |
+| `"vdom"` | Rendering (`init` → subscribe) | sync vdom → live DOM przez Bridge |
+
+Publikują na te topiki (żywe moduły):
+- `"msg"` — Rendering (handlery DOM), EffectsManager (`Cmd.msg` / `perform`→dispatch), Client mount gdy `init` woła żywy `dispatch`
+- `"vdom"` / `"cmd"` — LoopManager (po update) oraz Client mount (`on_connect`)
+
+Access **nie** subskrybuje Bus.
+
+## Call chain — MountInstance (init przy connect)
+
+Drugi główny use case: **pierwsze podpięcie custom elementu do DOM**
+(`connectedCallback` → `on_connect`). To nie idzie przez LoopManager —
+Client orkiestruje init synchronicznie, a efekty init flushuje na Bus.
+
+```call-chain
+MountInstance
+
+[Well.Web / on_connect]
+  -> [ComponentAccess]          (* create_instance *)
+       -> (ComponentDefinition)
+  -> [ComponentAccess]          (* init_state ~dispatch live; init may dispatch *)
+       -> (ComponentDefinition)
+  -> [StateAccess]              (* Client persist — nie LoopManager *)
+       -> (ComponentState)
+  -> [ComponentAccess]          (* render_view *)
+       -> (ComponentDefinition)
+  ~> [MessageBus]               (* topic "vdom"; flush async setTimeout(0) *)
+       ~> [Rendering]
+            -> [Bridge]
+  ~> [MessageBus]               (* topic "cmd" — 0|1 envelope jeśli ≠ none *)
+       ~> [EffectsManager]
+            -> [Bridge]
+            ~> [MessageBus]     (* perform/msg → "msg" *)
+                 ~> [LoopManager]
+```
+
+Kolejność w `on_connect` (wiążąca):
+
+1. `create_instance` — mapowanie instance_id ↔ host DOM ↔ definicja.
+2. `init_state ~dispatch` — Access tylko woła `M.init ~dispatch` i zwraca
+   `(state * cmd)`; **nie** publikuje na Bus. Client-supplied `dispatch` może
+   enqueue `"msg"` **tylko jeśli** `init` sam woła `dispatch`. Zwrócony `cmd`
+   **nie** jest tu uruchamiany.
+3. `StateAccess.persist` — Client zapisuje stan początkowy (LoopManager
+   **nie** woła `init_state`).
+4. `render_view` + publish `"vdom"` — enqueue pierwszego painta (flush Bus async).
+5. rejestracja w Client `Instance_table` (lokalna tabela host→instance).
+6. `publish_cmd` init cmd na `"cmd"` (skip gdy `Cmd.none`) — jeden envelope;
+   EffectsManager interpretuje po flushu Bus.
+
+Sync Client→Access w tym łańcuchu jest **wyłącznie mount lifecycle** — nie
+kopiować na HandleInteraction ani inne UC.
+
+`Cmd.perform` z init/update wykonuje wyłącznie EffectsManager; w `perform`
+wolno async I/O + `dispatch`, nie nawigacja parent/DOM (→ `emit` / `emit_dom`
+/ `focus`).
