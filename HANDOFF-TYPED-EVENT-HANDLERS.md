@@ -59,16 +59,17 @@ eventem.
 | `on_keypress=EXPR` | `("keypress", On_key EXPR)` | `string -> 'msg` |
 | `on_input=EXPR` | `("input", On_value EXPR)` | `string -> 'msg` |
 | `on_change=EXPR` | `("change", On_value EXPR)` | `string -> 'msg` |
-| `on_submit=EXPR` | `("submit", Msg EXPR)` | `'msg` (submit nie ma value/key) |
+| `on_submit=EXPR` | `("submit", On_form EXPR)` | `form_data -> 'msg` (**superseded 2026-08-05** — was bare Msg) |
 | `on_blur=EXPR` | `("blur", Msg EXPR)` | `'msg` |
 | `on_focus=EXPR` | `("focus", Msg EXPR)` | `'msg` |
 | `on_<inne>=EXPR` | `("<inne>", On_event EXPR)` | `Obj.t -> 'msg option` |
 
 **Klasyfikacja:**
-- **Msg-only** (ignore event): `on_click`, `on_submit`, `on_blur`, `on_focus`,
+- **Msg-only** (ignore event): `on_click`, `on_blur`, `on_focus`,
   i wszystkie inne "akcyjne" eventy bez value/key.
 - **On_key**: `on_keydown`, `on_keyup`, `on_keypress`.
 - **On_value**: `on_input`, `on_change`.
+- **On_form**: `on_submit` (`form_data -> 'msg`, FormData + preventDefault).
 - **On_event (fallback)**: wszystko inne (`on_wheel`, `on_scroll`,
   `on_custom_thing`, ...).
 

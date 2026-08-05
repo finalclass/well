@@ -20,8 +20,10 @@ type ctrl
 
     Listenery interpretują wariant [Html.handler]: [Msg] dispatchuje msg
     ignorując event; [On_key]/[On_value] wyciągają [event.key]/
-    [event.target.value] przez Bridge i dispatchują wynik; [On_event] dostaje
-    cały event jako [Obj.t]; [Ignore] nie wiesza nic.
+    [event.target.value] przez Bridge i dispatchują wynik; [On_form]
+    woła [preventDefault], zbiera [FormData] z targetu submit i
+    dispatchuje [f form_data]; [On_event] dostaje cały event jako [Obj.t];
+    [Ignore] nie wiesza nic.
 
     ```use-case
     (START)

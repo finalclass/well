@@ -6,17 +6,25 @@
     message type through [handlers]; on the server it is always [unit] since
     server-rendered nodes never carry handlers. *)
 
+(** Named form fields collected on submit: [(name, value), ...].
+    Built from [FormData(event.target)]; file values are omitted (v1).
+    Duplicate names appear as separate pairs in DOM order. *)
+type form_data = (string * string) list
+
 (** A DOM event handler. Specialized per known event shape so the common case
     ([on_click=Msg] — a bare message value) carries no [Some]/[None]
     boilerplate; only the generic fallback ([On_event]) and the explicit
     no-op ([Ignore]) deal in optionality.
 
-    - [Msg m]: dispatch [m], ignore the event — [on_click], [on_submit],
-      [on_blur], [on_focus], [on_dblclick].
+    - [Msg m]: dispatch [m], ignore the event — [on_click], [on_blur],
+      [on_focus], [on_dblclick].
     - [On_key f]: read [event.key], dispatch [f key] — [on_keydown],
       [on_keyup], [on_keypress]. Always dispatches.
     - [On_value f]: read [event.target.value], dispatch [f value] —
       [on_input], [on_change]. Always dispatches.
+    - [On_form f]: [preventDefault], read named fields from the submit
+      target via [FormData], dispatch [f form_data] — [on_submit].
+      Always dispatches (empty list when the target is not a form).
     - [On_event f]: the whole event as [Obj.t], optional — generic fallback
       for unknown events ([on_wheel], [on_scroll], ...).
     - [Ignore]: never dispatch.
@@ -27,6 +35,7 @@ type +'msg handler =
   | Msg of 'msg
   | On_key of (string -> 'msg)
   | On_value of (string -> 'msg)
+  | On_form of (form_data -> 'msg)
   | On_event of (Obj.t -> 'msg option)
   | Ignore
 
@@ -279,6 +288,8 @@ let field_error errors field_name : 'a node =
     ([on_click=Increment]) or programmatically
     ([~handlers:[("click", on_click Increment)]]). *)
 let on_click (msg : 'msg) : 'msg handler = Msg msg
+
+let on_form (f : form_data -> 'msg) : 'msg handler = On_form f
 
 (** Attach a named event handler to a node. *)
 let on_event (name : string) (handler : 'msg handler) (node : 'msg vdom) : 'msg vdom =

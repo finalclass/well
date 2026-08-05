@@ -120,7 +120,8 @@ let agents_md =
 - Components should be normal MLX components with `createElement` when they are used as JSX tags. Use `<Layout>...</Layout>` / `<Component ... />` instead of manually calling component internals or assembling their output strings.
 - Prefer native MLX attributes when available: `<div class'="panel" id="main">`, `<button data-lv-click="Save">`, `<input type="text" required />`. Use `attrs=[...]` only for dynamic attribute lists or when it is clearer.
 - Event handlers use `on_<event>` attributes. The attribute value's shape depends on the event (a `Well_web.Vdom.handler` variant, desugared by MLX):
-  - `on_click=Increment`, `on_submit=Save`, `on_blur=Blurred`, `on_focus=Focused`, `on_dblclick=Dbl` — a bare message value. No `Some`/`None` boilerplate.
+  - `on_click=Increment`, `on_blur=Blurred`, `on_focus=Focused`, `on_dblclick=Dbl` — a bare message value. No `Some`/`None` boilerplate.
+  - `on_submit=handle_submit` — `form_data -> msg` (named fields from FormData; preventDefault).
   - `on_keydown=handle_key`, `on_keyup=...`, `on_keypress=...` — a named function `string -> msg` receiving `event.key`.
   - `on_input=handle_value`, `on_change=...` — a named function `string -> msg` receiving `event.target.value`.
   - `on_wheel=...`, `on_scroll=...`, any other `on_*` — a named function `Obj.t -> msg option` receiving the whole event (generic fallback).
@@ -6341,10 +6342,13 @@ let () =
 Handlers come from the `Html` module (re-exported as `Well_web.Vdom`):
 
 ```ocaml
+type form_data = (string * string) list
+
 type +'msg handler =
   | Msg of 'msg                        (* dispatch msg, ignore event *)
   | On_key of (string -> 'msg)         (* read event.key *)
   | On_value of (string -> 'msg)       (* read event.target.value *)
+  | On_form of (form_data -> 'msg)     (* preventDefault + FormData fields *)
   | On_event of (Obj.t -> 'msg option) (* whole event, optional — generic fallback *)
 ```
 
@@ -6353,11 +6357,11 @@ type +'msg handler =
 | MLX attribute | Handler variant | Value type |
 |---|---|---|
 | `on_click=EXPR` | `Msg EXPR` | bare `msg` value |
-| `on_submit=EXPR` | `Msg EXPR` | `msg` |
 | `on_blur=EXPR`, `on_focus=EXPR` | `Msg EXPR` | `msg` |
 | `on_keydown=EXPR` | `On_key EXPR` | `string -> msg` (named function) |
 | `on_keyup=EXPR`, `on_keypress=EXPR` | `On_key EXPR` | `string -> msg` |
 | `on_input=EXPR`, `on_change=EXPR` | `On_value EXPR` | `string -> msg` |
+| `on_submit=EXPR` | `On_form EXPR` | `form_data -> msg` |
 | `on_<other>=EXPR` | `On_event EXPR` | `Obj.t -> msg option` |
 
 ```mlx
@@ -6369,6 +6373,13 @@ let handle_key k = if k = "Enter" then Save else NoOp
 let handle_value v = SetName v
 
 <input on_keydown=handle_key on_input=handle_value />
+
+(* Submit: uncontrolled name= fields; credentials from FormData *)
+let handle_submit fields = Submit fields
+<form on_submit=handle_submit>
+  <input name="email" type="email" />
+  <input name="password" type="password" />
+</form>
 
 (* Generic fallback for unknown events — returns msg option *)
 let on_wheel _ev = Some Scrolled

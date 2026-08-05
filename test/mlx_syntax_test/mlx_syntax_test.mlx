@@ -44,9 +44,9 @@ let () =
       expect html |> to_equal_string {|<button>go</button>|}
     );
 
-    it "desugars Msg handlers (on_click / on_submit / on_blur / on_focus / on_dblclick)" (fun () ->
+    it "desugars Msg handlers (on_click / on_blur / on_focus / on_dblclick)" (fun () ->
       let html =
-        <div on_click=() on_submit=() on_blur=() on_focus=() on_dblclick=()>
+        <div on_click=() on_blur=() on_focus=() on_dblclick=()>
           (Html.txt "x")
         </div>
         |> render
@@ -67,6 +67,17 @@ let () =
       let handle_value _ = () in
       let html = <input on_input=handle_value on_change=handle_value /> |> render in
       expect html |> to_equal_string {|<input></input>|}
+    );
+
+    it "desugars On_form handlers (on_submit)" (fun () ->
+      let handle_submit (_fields : Html.form_data) = () in
+      let html =
+        <form on_submit=handle_submit>
+          <input name="email" />
+        </form>
+        |> render
+      in
+      expect html |> to_equal_string {|<form><input name="email"></input></form>|}
     );
 
     it "accepts parenthesized inline fun in on_* attributes" (fun () ->

@@ -224,6 +224,49 @@ let event_key (ev : event) : string =
 let event_value (ev : event) : string =
   get_string ev "target.value"
 
+let event_prevent_default (ev : event) : unit =
+  let _ : Js.Unsafe.any =
+    Js.Unsafe.meth_call ev "preventDefault" [||]
+  in
+  ()
+
+let event_form_data (ev : event) : (string * string) list =
+  try
+    let raw : Js.Unsafe.any =
+      Js.Unsafe.fun_call
+        (Js.Unsafe.js_expr
+           {|function (ev) {
+              var t = ev && ev.target;
+              if (!t || typeof FormData === "undefined") return [];
+              var fd;
+              try { fd = new FormData(t); } catch (e) { return []; }
+              var out = [];
+              fd.forEach(function (v, k) {
+                if (typeof v === "string") out.push([k, v]);
+              });
+              return out;
+            }|})
+        [| Js.Unsafe.inject ev |]
+    in
+    let len =
+      int_of_float
+        (Js.to_float (Js.Unsafe.coerce (Js.Unsafe.get raw "length") : Js.number Js.t))
+    in
+    let rec go i acc =
+      if i < 0 then acc
+      else
+        let pair = Js.Unsafe.get raw i in
+        let k =
+          Js.to_string (Js.Unsafe.coerce (Js.Unsafe.get pair 0) : Js.js_string Js.t)
+        in
+        let v =
+          Js.to_string (Js.Unsafe.coerce (Js.Unsafe.get pair 1) : Js.js_string Js.t)
+        in
+        go (i - 1) ((k, v) :: acc)
+    in
+    go (len - 1) []
+  with _ -> []
+
 let query_selector_in (el : element) (selector : string) : element option =
   let result =
     Js.Unsafe.meth_call el "querySelector"

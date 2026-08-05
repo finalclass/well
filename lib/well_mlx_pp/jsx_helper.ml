@@ -56,9 +56,10 @@ let wrap_handler ~loc event_name expr =
            Some expr ))
   in
   match event_name with
-  | "click" | "dblclick" | "submit" | "blur" | "focus" -> ctor "Msg"
+  | "click" | "dblclick" | "blur" | "focus" -> ctor "Msg"
   | "keydown" | "keyup" | "keypress" -> ctor "On_key"
   | "input" | "change" -> ctor "On_value"
+  | "submit" -> ctor "On_form"
   | _ -> ctor "On_event"
 
 let append_exp ~loc left right =

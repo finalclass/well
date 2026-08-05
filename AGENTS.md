@@ -101,7 +101,9 @@ Dla usług backendu z kontraktem TOML, trzeci artefakt to `lib/contract/<Service
 - **Vdom jest zunifikowany** (`Html.node` == `Vdom.t`, generyczny nad `'msg`).
   Frontend: `msg vdom`. Backend: `unit vdom`. Definicja w `lib/well_html/html.ml`.
 - **Handlery zdarzeń są typowane** (wariant `Msg` | `On_key` | `On_value` |
-  `On_event` | `None`), zob. `DESIGN-COMPONENT.md` / HANDOFF-TYPED-EVENT-HANDLERS.
+  `On_form` | `On_event` | `Ignore`). `on_submit` → `On_form` (`form_data ->
+  msg`, FormData + preventDefault). Zob. `DESIGN-COMPONENT.md` /
+  `skills/well-front/SKILL.md`.
 
 ## Testowanie zmian w samym frameworku
 

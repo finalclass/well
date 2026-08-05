@@ -18,6 +18,9 @@ let attach_listener dispatch node (name, handler) =
       | Html.Msg msg -> Some msg
       | Html.On_key f -> Some (f (Bridge.event_key ev))
       | Html.On_value f -> Some (f (Bridge.event_value ev))
+      | Html.On_form f ->
+        Bridge.event_prevent_default ev;
+        Some (f (Bridge.event_form_data ev))
       | Html.On_event f -> f (Obj.repr ev)
       | Html.Ignore -> None
     in

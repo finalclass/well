@@ -804,3 +804,18 @@ subskrypcji topicu `"cmd"`, `init` odrzucało cmd i podawało no-op dispatch).
 EffectsManager jest zaimplementowany; LoopManager nadal tylko publikuje
 nie-none cmd na `"cmd"`.
 
+---
+
+## Addendum (2026-08-05): `on_submit` → `On_form` (form data)
+
+Typed handlers initially mapped `on_submit` to bare `Msg` (event discarded).
+Real forms need field values from the DOM (autofill, uncontrolled inputs).
+
+**Aktualny kontrakt:**
+
+- `Html.form_data = (string * string) list`
+- `Html.handler` includes `On_form of (form_data -> 'msg)`
+- MLX: `on_submit=handle` where `handle : form_data -> 'msg` (not bare msg)
+- Runtime: `preventDefault` + `FormData(event.target)`; file entries omitted
+- Prefer uncontrolled `name=` fields; TEA holds loading/error, not per-keystroke credentials
+

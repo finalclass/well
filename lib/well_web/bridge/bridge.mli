@@ -324,6 +324,25 @@ val event_key : event -> string
 *)
 val event_value : event -> string
 
+(** EventPreventDefault — [event.preventDefault()]. *)
+val event_prevent_default : event -> unit
+
+(** EventFormData — named string fields from the submit target via
+    [FormData(event.target)]. File values omitted. Empty list if target
+    is not a form or FormData construction fails.
+
+    ```use-case
+    (START)
+    [Odbierz zdarzenie DOM (submit)]
+    [preventDefault jest osobno — tu tylko odczyt]
+    [new FormData(event.target)]
+    [Zbierz pary (name, value) dla wpisów string]
+    [Zwróć listę (string * string)]
+    (STOP)
+    ```
+*)
+val event_form_data : event -> (string * string) list
+
 (** QuerySelectorIn — querySelector scoped to an element (host). *)
 val query_selector_in : element -> string -> element option
 

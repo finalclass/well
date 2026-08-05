@@ -98,10 +98,13 @@ let () =
 Handlers come from the `Html` module (re-exported as `Well_web.Vdom`):
 
 ```ocaml
+type form_data = (string * string) list   (* named fields from FormData *)
+
 type +'msg handler =
   | Msg of 'msg                        (* dispatch msg, ignore event *)
   | On_key of (string -> 'msg)         (* read event.key *)
   | On_value of (string -> 'msg)       (* read event.target.value *)
+  | On_form of (form_data -> 'msg)     (* preventDefault + FormData fields *)
   | On_event of (Obj.t -> 'msg option) (* whole event, optional — generic fallback *)
 ```
 
@@ -110,11 +113,11 @@ type +'msg handler =
 | MLX attribute | Handler variant | Value type |
 |---|---|---|
 | `on_click=EXPR` | `Msg EXPR` | bare `msg` value |
-| `on_submit=EXPR` | `Msg EXPR` | `msg` |
 | `on_blur=EXPR`, `on_focus=EXPR` | `Msg EXPR` | `msg` |
 | `on_keydown=EXPR` | `On_key EXPR` | `string -> msg` (named function) |
 | `on_keyup=EXPR`, `on_keypress=EXPR` | `On_key EXPR` | `string -> msg` |
 | `on_input=EXPR`, `on_change=EXPR` | `On_value EXPR` | `string -> msg` |
+| `on_submit=EXPR` | `On_form EXPR` | `form_data -> msg` |
 | `on_<other>=EXPR` | `On_event EXPR` | `Obj.t -> msg option` |
 
 ```mlx
@@ -127,10 +130,22 @@ let handle_value v = SetName v
 
 <input on_keydown=handle_key on_input=handle_value />
 
+(* Submit: uncontrolled inputs with name=; autofill works without on_input *)
+let handle_submit fields = Submit fields
+<form on_submit=handle_submit>
+  <input name="email" type="email" />
+  <input name="password" type="password" />
+  <button type="submit">(txt "Go")</button>
+</form>
+
 (* Generic fallback for unknown events — returns msg option *)
 let on_wheel _ev = Some Scrolled
 <div on_wheel=on_wheel>(txt "")</div>
 ```
+
+**Forms:** prefer uncontrolled fields (`name=`, no `value=` / no per-keystroke
+`on_input` unless you need live validation). TEA state holds loading/error;
+credentials come from `On_form` on submit. Runtime always `preventDefault`s.
 
 ### ⚠ MLX limitation (CRITICAL)
 

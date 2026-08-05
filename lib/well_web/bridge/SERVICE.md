@@ -65,6 +65,8 @@ verbs udowodnione w spajku S7 (`lib/well_web/spike_ffi.ml`).
 - [GetParent](bridge.mli) — zwróć rodzica elementu (None jeśli bez rodzica).
 - [GetInputValue](bridge.mli) — czytaj value elementu formularza.
 - [SetValue](bridge.mli) — ustaw value elementu formularza.
+- [EventPreventDefault](bridge.mli) — `event.preventDefault()`.
+- [EventFormData](bridge.mli) — pary `(name, value)` z `FormData(event.target)` (bez File).
 
 ## Verification strategy
 
