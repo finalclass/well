@@ -1588,3 +1588,382 @@ let generate_dart_module cm =
    | None -> ());
 
   Buffer.contents buf
+
+(* ══════════════════════════════════════════════════════════════════ *)
+(* OCaml browser (js_of_ocaml) Proxy codegen — mirror of TS Proxy   *)
+(* ══════════════════════════════════════════════════════════════════ *)
+
+let rec type_to_ocaml_browser ~local_module = function
+  | Prim String -> "string"
+  | Prim Int -> "int"
+  | Prim Float -> "float"
+  | Prim Bool -> "bool"
+  | Prim Void -> "unit"
+  | Prim Date -> "string"
+  | Prim Record -> "Yojson.Safe.t"
+  | Prim Ctx -> "Yojson.Safe.t"
+  | Custom { module_name; msg_name } ->
+    if module_name = local_module then
+      msg_name ^ ".t"
+    else
+      ocaml_module_name module_name ^ "." ^ msg_name ^ ".t"
+  | List inner ->
+    type_to_ocaml_browser ~local_module inner ^ " list"
+  | Optional inner ->
+    type_to_ocaml_browser ~local_module inner ^ " option"
+
+let rec to_wire_expr_browser ~local_module expr = function
+  | Prim String -> Printf.sprintf "`String %s" expr
+  | Prim Int -> Printf.sprintf "`Int %s" expr
+  | Prim Float -> Printf.sprintf "`Float %s" expr
+  | Prim Bool -> Printf.sprintf "`Bool %s" expr
+  | Prim Void -> "`Null"
+  | Prim Date -> Printf.sprintf "`String %s" expr
+  | Prim Record -> Printf.sprintf "(%s :> Yojson.Safe.t)" expr
+  | Prim Ctx -> expr
+  | Custom { module_name; msg_name } ->
+    if module_name = local_module then
+      Printf.sprintf "%s.to_wire %s" msg_name expr
+    else
+      Printf.sprintf "%s.%s.to_wire %s" (ocaml_module_name module_name) msg_name expr
+  | List inner ->
+    let item_expr = to_wire_expr_browser ~local_module "item" inner in
+    Printf.sprintf "`List (List.map (fun item -> %s) %s)" item_expr expr
+  | Optional inner ->
+    let some_expr = to_wire_expr_browser ~local_module "x" inner in
+    Printf.sprintf "(match %s with Some x -> %s | None -> `Null)" expr some_expr
+
+let rec of_wire_expr_browser ~local_module expr = function
+  | Prim String ->
+    Printf.sprintf "(match %s with `String s -> s | _ -> \"\")" expr
+  | Prim Int ->
+    Printf.sprintf "(match %s with `Int i -> i | _ -> 0)" expr
+  | Prim Float ->
+    Printf.sprintf "(match %s with `Float f -> f | `Int i -> float_of_int i | _ -> 0.0)" expr
+  | Prim Bool ->
+    Printf.sprintf "(match %s with `Bool b -> b | _ -> false)" expr
+  | Prim Void -> "()"
+  | Prim Date ->
+    Printf.sprintf "(match %s with `String s -> s | _ -> \"\")" expr
+  | Prim Record ->
+    Printf.sprintf "(%s :> Yojson.Safe.t)" expr
+  | Prim Ctx -> expr
+  | Custom { module_name; msg_name } ->
+    if module_name = local_module then
+      Printf.sprintf "%s.of_wire %s" msg_name expr
+    else
+      Printf.sprintf "%s.%s.of_wire %s" (ocaml_module_name module_name) msg_name expr
+  | List inner ->
+    let item_expr = of_wire_expr_browser ~local_module "item" inner in
+    Printf.sprintf "(match %s with `List items -> List.map (fun item -> %s) items | _ -> [])"
+      expr item_expr
+  | Optional inner ->
+    let some_expr = of_wire_expr_browser ~local_module "x" inner in
+    Printf.sprintf "(match %s with `Null -> None | x -> Some (%s))" expr some_expr
+
+let generate_browser_struct_module ~local_module msg_name props =
+  let buf = Buffer.create 512 in
+  let p fmt = Printf.bprintf buf fmt in
+  match props with
+  | [] ->
+    p "module %s = struct\n" msg_name;
+    p "  type t = unit\n\n";
+    p "  let make () = ()\n\n";
+    p "  let to_wire (() : t) : Yojson.Safe.t = `List []\n\n";
+    p "  let of_wire (_wire : Yojson.Safe.t) : t = ()\n";
+    p "end\n";
+    Buffer.contents buf
+  | _ ->
+    p "module %s = struct\n" msg_name;
+    p "  type t = {\n";
+    List.iter (fun (prop : property) ->
+      let ty = type_to_ocaml_browser ~local_module prop.type_info in
+      let ty = if prop.optional then ty ^ " option" else ty in
+      p "    %s : %s;\n" prop.name ty
+    ) props;
+    p "  }\n\n";
+    p "  let make";
+    List.iter (fun (prop : property) ->
+      if prop.optional then
+        p " ?%s" prop.name
+      else
+        p " ~%s" prop.name
+    ) props;
+    p " () =\n    {";
+    List.iteri (fun i (prop : property) ->
+      if i > 0 then p ";";
+      if prop.optional then
+        p " %s = (match %s with Some v -> Some v | None -> None)" prop.name prop.name
+      else
+        p " %s" prop.name
+    ) props;
+    p " }\n\n";
+    p "  let to_wire (v : t) : Yojson.Safe.t =\n";
+    p "    `List [\n";
+    List.iter (fun (prop : property) ->
+      let expr =
+        if prop.optional then
+          to_wire_expr_browser ~local_module "x" (Optional prop.type_info)
+          |> Printf.sprintf "(let x = v.%s in %s)" prop.name
+        else
+          to_wire_expr_browser ~local_module (Printf.sprintf "v.%s" prop.name) prop.type_info
+      in
+      p "      %s;\n" expr
+    ) props;
+    p "    ]\n\n";
+    p "  let of_wire (wire : Yojson.Safe.t) : t =\n";
+    p "    match wire with\n";
+    p "    | `List arr ->\n";
+    p "      let a = Array.of_list arr in\n";
+    p "      let _g i = if i < Array.length a then a.(i) else `Null in\n";
+    List.iteri (fun i (prop : property) ->
+      let access = Printf.sprintf "(_g %d)" i in
+      let expr =
+        if prop.optional then
+          of_wire_expr_browser ~local_module access (Optional prop.type_info)
+        else
+          of_wire_expr_browser ~local_module access prop.type_info
+      in
+      p "      let %s = %s in\n" prop.name expr
+    ) props;
+    p "      {";
+    List.iteri (fun i (prop : property) ->
+      if i > 0 then p ";";
+      p " %s" prop.name
+    ) props;
+    p " }\n";
+    p "    | _ -> failwith \"%s.of_wire: expected JSON array\"\n" msg_name;
+    p "end\n";
+    Buffer.contents buf
+
+let generate_browser_variant_module ~local_module msg_name ctors =
+  let buf = Buffer.create 512 in
+  let p fmt = Printf.bprintf buf fmt in
+  p "module %s = struct\n" msg_name;
+  p "  type t =\n";
+  List.iter (fun (ctor : constructor) ->
+    match ctor.payload with
+    | Prim Void -> p "    | %s\n" ctor.name
+    | ti -> p "    | %s of %s\n" ctor.name (type_to_ocaml_browser ~local_module ti)
+  ) ctors;
+  p "\n";
+  p "  let to_wire (v : t) : Yojson.Safe.t =\n";
+  p "    match v with\n";
+  List.iter (fun (ctor : constructor) ->
+    match ctor.payload with
+    | Prim Void ->
+      p "    | %s -> `List [`String \"%s\"; `Null]\n" ctor.name ctor.name
+    | ti ->
+      let expr = to_wire_expr_browser ~local_module "payload" ti in
+      p "    | %s payload -> `List [`String \"%s\"; %s]\n" ctor.name ctor.name expr
+  ) ctors;
+  p "\n";
+  p "  let of_wire (wire : Yojson.Safe.t) : t =\n";
+  p "    match wire with\n";
+  List.iter (fun (ctor : constructor) ->
+    match ctor.payload with
+    | Prim Void ->
+      p "    | `List [`String \"%s\"; `Null] | `List [`String \"%s\"] -> %s\n"
+        ctor.name ctor.name ctor.name
+    | ti ->
+      let expr = of_wire_expr_browser ~local_module "payload" ti in
+      p "    | `List [`String \"%s\"; payload] -> %s (%s)\n"
+        ctor.name ctor.name expr
+  ) ctors;
+  p "    | _ -> failwith \"%s.of_wire: unexpected wire format\"\n" msg_name;
+  p "end\n";
+  Buffer.contents buf
+
+let generate_browser_msg ~local_module (msg : msg) =
+  match msg.kind with
+  | Struct props -> generate_browser_struct_module ~local_module msg.name props
+  | Variant ctors -> generate_browser_variant_module ~local_module msg.name ctors
+
+let resolve_browser_msg_type ~local_module msgs msg_ref =
+  if List.exists (fun (m : msg) -> m.name = msg_ref) msgs then
+    msg_ref ^ ".t"
+  else
+    match String.index_opt msg_ref '.' with
+    | Some i ->
+      let mod_name = String.sub msg_ref 0 i in
+      let msg_name = String.sub msg_ref (i + 1) (String.length msg_ref - i - 1) in
+      if mod_name = local_module then msg_name ^ ".t"
+      else ocaml_module_name mod_name ^ "." ^ msg_name ^ ".t"
+    | None -> msg_ref ^ ".t"
+
+let resolve_browser_msg_path ~local_module msgs msg_ref =
+  if List.exists (fun (m : msg) -> m.name = msg_ref) msgs then
+    msg_ref
+  else
+    match String.index_opt msg_ref '.' with
+    | Some i ->
+      let mod_name = String.sub msg_ref 0 i in
+      let msg_name = String.sub msg_ref (i + 1) (String.length msg_ref - i - 1) in
+      if mod_name = local_module then msg_name
+      else ocaml_module_name mod_name ^ "." ^ msg_name
+    | None -> msg_ref
+
+let generate_ocaml_browser_proxy ~local_module cm service msgs =
+  let buf = Buffer.create 512 in
+  let p fmt = Printf.bprintf buf fmt in
+  p "module Proxy = struct\n";
+  List.iter (fun (rpc : rpc) ->
+    let fn = snake_case rpc.name in
+    let req_ty = resolve_browser_msg_type ~local_module msgs rpc.request_msg in
+    let resp_ty = resolve_browser_msg_type ~local_module msgs rpc.response_msg in
+    let req_path = resolve_browser_msg_path ~local_module msgs rpc.request_msg in
+    let resp_path = resolve_browser_msg_path ~local_module msgs rpc.response_msg in
+    p "  let %s (req : %s) ~(on_done : (%s, string) result -> unit) : unit =\n"
+      fn req_ty resp_ty;
+    p "    Rpc.post\n";
+    p "      ~service:\"%s\"\n" cm.name;
+    p "      ~method_:\"%s\"\n" rpc.name;
+    p "      ~wire:(%s.to_wire req)\n" req_path;
+    p "      ~on_done:(function\n";
+    p "        | Error e -> on_done (Error e)\n";
+    p "        | Ok wire ->\n";
+    p "            (try on_done (Ok (%s.of_wire wire))\n" resp_path;
+    p "             with exn ->\n";
+    p "               on_done (Error (\"RPC decode: \" ^ Printexc.to_string exn))))\n\n"
+  ) service.rpcs;
+  p "end\n";
+  Buffer.contents buf
+
+let generate_ocaml_browser_module cm =
+  let buf = Buffer.create 2048 in
+  let p fmt = Printf.bprintf buf fmt in
+  let local_module = cm.name in
+  p "[@@@warning \"-32\"]\n\n";
+  let sorted_msgs = topo_sort_msgs ~local_module cm.msgs in
+  List.iter (fun msg ->
+    p "%s\n" (generate_browser_msg ~local_module msg)
+  ) sorted_msgs;
+  (match cm.service with
+   | Some service ->
+     p "%s" (generate_ocaml_browser_proxy ~local_module cm service cm.msgs)
+   | None -> ());
+  Buffer.contents buf
+
+let generate_ocaml_browser_rpc () =
+  {|open Js_of_ocaml
+
+(* CSRF: Well skips CSRF checks when X-Requested-With: XMLHttpRequest is set
+   (see Well middleware). Token is still sent when present for stricter setups.
+   Sources (in order): <meta name="csrf-token">, then window.__WELL_CSRF.
+   Note: __DG_CSRF is not read here — set meta/__WELL_CSRF or extend if migrating DG. *)
+let csrf_token () : string =
+  let doc = Dom_html.document in
+  match
+    Js.Opt.to_option
+      (doc##querySelector (Js.string "meta[name='csrf-token']"))
+  with
+  | Some el ->
+    (try Js.to_string (Js.Unsafe.get el (Js.string "content")) with _ -> "")
+  | None ->
+    (try Js.to_string (Js.Unsafe.get Js.Unsafe.global (Js.string "__WELL_CSRF"))
+     with _ -> "")
+
+let wire_error_message (json : Yojson.Safe.t) : string option =
+  match json with
+  | `Assoc fields ->
+    (match List.assoc_opt "error" fields with
+     | Some (`String s) -> Some s
+     | _ -> None)
+  | _ -> None
+
+let post
+    ~(service : string)
+    ~(method_ : string)
+    ~(wire : Yojson.Safe.t)
+    ~(on_done : (Yojson.Safe.t, string) result -> unit)
+    : unit =
+  let url = Printf.sprintf "/rpc/%s/%s" service method_ in
+  let xhr = XmlHttpRequest.create () in
+  xhr##_open (Js.string "POST") (Js.string url) Js._true;
+  xhr##setRequestHeader
+    (Js.string "Content-Type")
+    (Js.string "application/json");
+  (* Marks same-origin XHR so Well CSRF middleware may skip token check. *)
+  xhr##setRequestHeader
+    (Js.string "X-Requested-With")
+    (Js.string "XMLHttpRequest");
+  let token = csrf_token () in
+  if token <> "" then
+    xhr##setRequestHeader (Js.string "X-CSRF-Token") (Js.string token);
+  let body = Yojson.Safe.to_string wire in
+  xhr##.onreadystatechange :=
+    Js.wrap_callback (fun _ ->
+      if xhr##.readyState = XmlHttpRequest.DONE then
+        let text =
+          Js.Opt.case xhr##.responseText (fun () -> "") Js.to_string
+        in
+        let status = xhr##.status in
+        if status >= 200 && status < 300 then
+          (* 2xx may still be a Well service error body: {"error":"..."}. *)
+          (try
+             let json = Yojson.Safe.from_string text in
+             match wire_error_message json with
+             | Some msg -> on_done (Error msg)
+             | None -> on_done (Ok json)
+           with exn ->
+             on_done (Error ("RPC JSON decode: " ^ Printexc.to_string exn)))
+        else
+          let err =
+            try
+              match wire_error_message (Yojson.Safe.from_string text) with
+              | Some s -> s
+              | None -> ""
+            with _ -> ""
+          in
+          on_done
+            (Error
+               (if err <> "" then err
+                else if status = 0 then "Network error"
+                else
+                  Printf.sprintf "RPC %s.%s: %d" service method_ status)));
+  xhr##send (Js.Opt.return (Js.string body))
+|}
+
+let ocaml_lib_ident name =
+  let buf = Buffer.create (String.length name) in
+  String.iter
+    (fun c ->
+      if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+         || (c >= '0' && c <= '9') || c = '_'
+      then Buffer.add_char buf (Char.lowercase_ascii c)
+      else Buffer.add_char buf '_')
+    name;
+  let s = Buffer.contents buf in
+  if s = "" then "contract" else s
+
+let generate_ocaml_browser_dune modules ~output_dir =
+  let lib_name =
+    let base = Filename.basename output_dir in
+    let parent_dir = Filename.dirname output_dir in
+    let parent = Filename.basename parent_dir in
+    let raw =
+      if base = "ocaml_browser" then
+        let root_dir =
+          if parent = "build" then Filename.dirname parent_dir else parent_dir
+        in
+        let root = Filename.basename root_dir |> String.lowercase_ascii in
+        (if root = "." || root = "/" || root = "" then "contract" else root)
+        ^ "_browser"
+      else
+        String.lowercase_ascii base ^ "_browser"
+    in
+    ocaml_lib_ident raw
+  in
+  let module_names =
+    "rpc" :: List.map (fun (cm : contract_module) -> snake_case cm.name) modules
+  in
+  let buf = Buffer.create 256 in
+  let p fmt = Printf.bprintf buf fmt in
+  p "(library\n";
+  p " (name %s)\n" lib_name;
+  p " (wrapped false)\n";
+  p " (libraries yojson js_of_ocaml js_of_ocaml-ppx)\n";
+  p " (preprocess (pps js_of_ocaml-ppx))\n";
+  p " (modules %s))\n" (String.concat " " module_names);
+  Buffer.contents buf
+

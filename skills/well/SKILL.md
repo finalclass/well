@@ -1657,7 +1657,8 @@ well build                    # Production build (dune + patchelf + bundle .so â
 well release                  # Build + create .tar.gz archive for deployment
 well test [-w] [-f pat] [--jobs n] [-u]  # Run tests (watch, filter, concurrency, snapshots)
 well docs [--open] [-o dir]   # Generate HTML documentation from (** *) comments
-well contract build [dir]     # Generate code from TOML contracts
+well contract build [dir]     # Generate OCaml/TS/Go/Dart + OCaml browser Proxy
+                              # Browser: build/ocaml_browser (use Proxy, not Http)
 well db diff                  # Show pending schema migrations
 well db rollback [path]       # Restore from .bak backup
 well repl [-s socket] [-e expr]  # Interactive service query shell

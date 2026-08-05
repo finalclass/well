@@ -219,6 +219,35 @@ end
 dispatch (not a no-op). Do not stash `dispatch` in a `ref` as the primary async
 pattern — use `Cmd.perform`.
 
+## Contract RPC from the browser (Proxy)
+
+For service contracts, **use the generated OCaml browser Proxy** — do not hand-roll
+`Http.get/post` or JSON wire under a contract.
+
+- Generate: `well contract build` → `lib/contract/build/ocaml_browser/`
+  (`rpc.ml` + per-service modules with `module Proxy`).
+- Mirror of TS `Proxy` / `rpc.ts`: same `POST /rpc/<Service>/<method>`, same
+  positional `to_wire`/`of_wire` arrays.
+- Headers: `Content-Type: application/json`, `X-Requested-With: XMLHttpRequest`
+  (Well CSRF middleware may skip token check for this header). Optional
+  `X-CSRF-Token` from `<meta name="csrf-token">` or `window.__WELL_CSRF`
+  (not `__DG_CSRF` — set meta/`__WELL_CSRF` if migrating DG).
+- Callback is `(response, string) result`. **Always handle `Error`**: HTTP
+  non-2xx, network failure, non-JSON body, Well service body
+  `{"error":"..."}` on 2xx, and `of_wire` decode failures — all surface as
+  `Error msg` (no uncaught exception into `Cmd.perform` / EffectsManager).
+- Call site (inside `Cmd.perform`):
+
+```ocaml
+Cmd.perform (fun ~dispatch ->
+  Security.Proxy.initiate_otp_login req ~on_done:(function
+    | Ok resp -> dispatch (Got_ok resp)
+    | Error msg -> dispatch (Got_err msg)))
+```
+
+Link the app jsoo executable against the generated `contract_browser` library
+(and `yojson` / jsoo). Server in-process clients stay on `build/ocaml/`.
+
 ## emits — declared outputs
 
 A typed variant listing what the component may emit up. This is the component's contract with its parent:

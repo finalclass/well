@@ -16,12 +16,20 @@ let dir_is_empty_enough path =
   List.for_all (fun e -> List.mem e ignorable_entries) entries
 
 let mkdir_p path =
-  let parts = String.split_on_char '/' path in
+  let is_abs = String.length path > 0 && path.[0] = '/' in
+  let parts =
+    String.split_on_char '/' path
+    |> List.filter (fun p -> p <> "")
+  in
   let _ =
     List.fold_left
       (fun acc part ->
-        let dir = if acc = "" then part else acc ^ "/" ^ part in
-        if dir <> "" && not (Sys.file_exists dir) then Sys.mkdir dir 0o755;
+        let dir =
+          if acc = "" then
+            if is_abs then "/" ^ part else part
+          else acc ^ "/" ^ part
+        in
+        if not (Sys.file_exists dir) then Sys.mkdir dir 0o755;
         dir)
       "" parts
   in

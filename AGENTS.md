@@ -8,7 +8,7 @@ ich tutaj — jeśli coś tu brzmi lakonicznie, szczegóły są w linkowanym pli
 
 Full-stackowy framework webowy w OCaml 5 (EIO, fiber-per-connection). Jeden
 binarny plik, brak JavaScriptu dla logiki biznesowej. MLX = JSX dla OCaml.
-SQLite (bundled). Kontrakty usług w TOML → codegen (OCaml + TS + Go + Dart).
+SQLite (bundled). Kontrakty usług w TOML → codegen (OCaml server, OCaml browser Proxy/jsoo, TS, Go, Dart). Klient przeglądarki: `build/ocaml_browser` `Proxy`, nie ręczny Http pod kontrakt.
 Pełna wizja i stan w `ROADMAP.md`.
 
 Dwie warstwy frontendu:

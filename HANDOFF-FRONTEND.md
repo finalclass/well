@@ -36,7 +36,7 @@ wolatylności (dekompozycja IDesign).
    client-side**, nie round-tripować patchy stringów przez WebSocket.
 6. `~/Documents/well/lib/well_html/html.ml` (266 linii) — rendering HTML do reużycia.
 7. `~/Documents/well/lib/well_cli/contract_codegen.ml` (1590 linii) — codegen kontraktów.
-   Emituje już TS browser-facing Proxy (`generate_ts_proxy` ~`:713`). Tu dodasz target melange.
+   Emituje już TS browser-facing Proxy (`generate_ts_proxy`) oraz OCaml/jsoo browser Proxy (`generate_ocaml_browser_*` → `build/ocaml_browser/`).
 8. Skill `/well` — obecny guidance frontendowy. Uczy LiveView. Będzie wymagał sekcji
    równoległej o nowym systemie.
 9. Skill `/axe` — spec-anchored workflow. **UŻYJ GO** dla fazy projektowej tego frameworka.
@@ -125,9 +125,12 @@ Portuj rdzeń `stm`: `init`/`update`/`view`/`dispatch`/`Cmd`/`attributeChangeFac
 Jeden realny komponent testowy (np. counter z atrybutem, albo edytor listy).
 → Dostarcz: działający komponent z atrybutami w dół i eventami w górę.
 
-**Faza 3 — CONTRACT CODEGEN TARGET:**
-Dodaj `generate_melange_module` do `contract_codegen.ml` (mirror TS). Frontend woła
-RPC type-safely. Udowodnij na komponencie, który woła istniejący kontrakt.
+**Faza 3 — CONTRACT CODEGEN TARGET:** ✅ (jsoo browser Proxy)
+OCaml browser Proxy = mirror TS Proxy (`generate_ocaml_browser_*` w
+`contract_codegen.ml`). Output: `lib/contract/build/ocaml_browser/` (+ `rpc.ml`).
+Wire bez zmian: `Msg.to_wire`/`of_wire`, `POST /rpc/<Service>/<method>`.
+**Używaj `Service.Proxy.*`, nie hand-rolled `Http.*` pod kontrakt.** Runtime: jsoo
+(nie Melange). In-process OCaml (`build/ocaml/`) bez zmian.
 
 **Faza 4 (PÓŹNIEJ, nie teraz) — OPIS FRONTU DLA AI:**
 Użytkownik chce wymyślić sposób deklaratywnego opisu komponentów, tak aby AI pisało

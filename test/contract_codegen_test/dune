@@ -1,0 +1,6 @@
+(test
+ (name contract_codegen_test)
+ (libraries unix str yojson)
+ (deps
+  (source_tree fixtures)
+  %{project_root}/_build/default/bin/main.exe))

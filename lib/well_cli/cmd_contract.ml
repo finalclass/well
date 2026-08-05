@@ -42,8 +42,9 @@ let run args =
     exit 0
   end;
   let ocaml_dir = Filename.concat output_dir "ocaml" in
+  let ocaml_browser_dir = Filename.concat output_dir "ocaml_browser" in
   let ts_dir = Filename.concat output_dir "ts" in
-  (* Generate OCaml .ml files *)
+  (* Generate OCaml .ml files (server / in-process) *)
   List.iter (fun (cm : Contract_types.contract_module) ->
     let filename = Contract_codegen.snake_case cm.name ^ ".ml" in
     let path = Filename.concat ocaml_dir filename in
@@ -62,6 +63,31 @@ let run args =
   let dune_content = Contract_codegen.generate_dune modules ~output_dir:ocaml_dir in
   write_file dune_path dune_content;
   Printf.printf "  %s\n" dune_path;
+  (* Generate OCaml browser (js_of_ocaml) Proxy — mirror of TS Proxy.
+     Failures here are fatal: browser Proxy is a primary contract target. *)
+  (try
+     List.iter (fun (cm : Contract_types.contract_module) ->
+       let filename = Contract_codegen.snake_case cm.name ^ ".ml" in
+       let path = Filename.concat ocaml_browser_dir filename in
+       let content = Contract_codegen.generate_ocaml_browser_module cm in
+       write_file path content;
+       Printf.printf "  %s\n" path
+     ) modules;
+     let rpc_path = Filename.concat ocaml_browser_dir "rpc.ml" in
+     let rpc_content = Contract_codegen.generate_ocaml_browser_rpc () in
+     write_file rpc_path rpc_content;
+     Printf.printf "  %s\n" rpc_path;
+     let browser_dune_path = Filename.concat ocaml_browser_dir "dune" in
+     let browser_dune =
+       Contract_codegen.generate_ocaml_browser_dune modules
+         ~output_dir:ocaml_browser_dir
+     in
+     write_file browser_dune_path browser_dune;
+     Printf.printf "  %s\n" browser_dune_path
+   with exn ->
+     Printf.eprintf "Error: ocaml_browser codegen failed: %s\n"
+       (Printexc.to_string exn);
+     exit 1);
   (* Generate TypeScript files — silently skip if dir creation fails *)
   (try
      List.iter (fun (cm : Contract_types.contract_module) ->
@@ -106,14 +132,17 @@ let run args =
 
 let cmd : Command.t =
   { name = "contract"
-  ; summary = "Generate OCaml, TypeScript, Go, and Dart from TOML contracts"
+  ; summary = "Generate OCaml, TS, Go, Dart, and OCaml browser Proxy from TOML contracts"
   ; usage = "contract build [contract_dir] [output_dir]"
   ; description =
-      "Parses TOML contract files and generates code in four languages:\n\
-       OCaml, TypeScript, Go, and Dart.\n\n\
+      "Parses TOML contract files and generates code in five targets:\n\
+       OCaml (server/in-process), OCaml browser Proxy (js_of_ocaml),\n\
+       TypeScript, Go, and Dart.\n\n\
        Default contract directory: ./lib/contract/\n\
        Default output directory: lib/contract/build/\n\
-       Output: build/ocaml/*.ml, build/ts/*.ts, build/go/*/*.go, build/dart/*.dart\n\
-       Dune file is generated only if it doesn't already exist."
+       Output: build/ocaml/*.ml, build/ocaml_browser/*.ml (+ rpc.ml),\n\
+       build/ts/*.ts, build/go/*/*.go, build/dart/*.dart\n\
+       Browser Proxy mirrors TS Proxy: POST /rpc/<Service>/<method>\n\
+       with Msg.to_wire / Msg.of_wire — use Proxy, not hand-rolled Http."
   ; run
   }

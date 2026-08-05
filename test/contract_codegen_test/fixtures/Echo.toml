@@ -1,0 +1,14 @@
+[service.rpc]
+ping = "PingRequest -> PingResponse"
+echo = "EchoRequest -> EchoResponse"
+
+[msg.PingRequest.struct]
+
+[msg.PingResponse.struct]
+ok = "bool"
+
+[msg.EchoRequest.struct]
+text = "string"
+
+[msg.EchoResponse.struct]
+text = "string"
