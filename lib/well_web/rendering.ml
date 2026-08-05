@@ -120,28 +120,43 @@ let rec sync (ctrl : ctrl) (v : 'msg Html.vdom) =
     sync_children ctrl v.children
   end
 
+and same_kind (old_ctrl : ctrl) (v : 'msg Html.vdom) =
+  let old_v : 'msg Html.vdom = Obj.obj old_ctrl.vdom in
+  old_ctrl.is_text = is_text_node v && old_v.tag = v.tag
+
+and replace_child_ctrl parent (old_ctrl : ctrl) (v : 'msg Html.vdom) =
+  List.iter (fun unsubscribe -> unsubscribe ()) old_ctrl.unsubs;
+  let fresh = blit_dispatch old_ctrl.dispatch v in
+  Bridge.replace_child ~parent ~old:old_ctrl.node ~new_:fresh.node;
+  fresh
+
 and sync_children ctrl (new_children : 'msg Html.node list) =
   let old_children = ctrl.children in
   let new_arr = Array.of_list new_children in
   let old_count = Array.length old_children in
   let new_count = Array.length new_arr in
   let common = min old_count new_count in
-  for i = common to old_count - 1 do
+  for i = old_count - 1 downto common do
+    List.iter (fun unsubscribe -> unsubscribe ()) old_children.(i).unsubs;
     detach_node old_children.(i)
   done;
   let result : ctrl array = Array.make new_count (Obj.magic ()) in
   for i = 0 to common - 1 do
-    (match new_arr.(i) with `Html c -> sync old_children.(i) c);
-    result.(i) <- old_children.(i)
+    match new_arr.(i) with
+    | `Html c ->
+      let old_c = old_children.(i) in
+      if same_kind old_c c then begin
+        sync old_c c;
+        result.(i) <- old_c
+      end else
+        result.(i) <- replace_child_ctrl ctrl.node old_c c
   done;
   for i = common to new_count - 1 do
-    (match new_arr.(i) with `Html c -> result.(i) <- blit_dispatch ctrl.dispatch c)
-  done;
-  for i = new_count - 1 downto 0 do
-    let ref_ =
-      if i + 1 < new_count then Some result.(i + 1).node else None
-    in
-    Bridge.insert_before ~parent:ctrl.node ~child:result.(i).node ~ref_
+    match new_arr.(i) with
+    | `Html c ->
+      let child = blit_dispatch ctrl.dispatch c in
+      result.(i) <- child;
+      Bridge.append_child ~parent:ctrl.node ~child:child.node
   done;
   ctrl.children <- result
 

@@ -52,8 +52,9 @@ val blit : 'msg Html.node -> ctrl
     <Zmiana handlers>
       [Odpiecz stare, przepiecz nowe listenery]
     <Dzieci>
-      [Pozycyjny diff: sync wspólnych, usuń nadmiarowe, blit nowe,
-       dołącz w odpowiedniej kolejności]
+      [Pozycyjny diff: sync wspólnych w miejscu gdy ten sam tag
+       (bez re-insert — zachowuje focus/selection), replace przy
+       zmianie tagu, usuń nadmiarowe, blit+append nowe]
     (STOP)
     ```
 *)
