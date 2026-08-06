@@ -1,0 +1,8 @@
+; Browser-focused test: Props.t host attrs/properties + bool_attrs renderer.
+
+(executable
+ (name props_wire_test)
+ (modes js)
+ (modules props_wire_test)
+ (libraries well_web)
+ (preprocess (pps js_of_ocaml-ppx)))

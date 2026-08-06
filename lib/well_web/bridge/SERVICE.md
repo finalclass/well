@@ -22,7 +22,11 @@ verbs udowodnione w spajku S7 (`lib/well_web/spike_ffi.ml`).
 ## Assumptions
 
 - `register_element` jest wołane przed jakimkolwiek elementem tego typu
-  pojawi się w DOM (reguła z ComponentAccess).
+  pojawi się w DOM (reguła z ComponentAccess). Opcjonalne
+  `observed_attributes` / `on_attribute_change` mapują na
+  `observedAttributes` + `attributeChangedCallback`; `property_names` /
+  `on_property_set` instalują `Object.defineProperty` na prototypie CE
+  (get/set + notify).
 - `find_element` zwraca `None` jeśli selector nie matchuje (nie rzuca).
 - `dispatch_event` tworzy CustomEvent z payloadem jako JS-value (konwersja
   przez FFI; payload musi być konwertowalny).
@@ -39,8 +43,14 @@ verbs udowodnione w spajku S7 (`lib/well_web/spike_ffi.ml`).
   elementów formularza (input/select/textarea) jest to string, dla innych
   elementów zachowanie zależy od JS-runtime.
 - Operacje DOM (`create_element`, `append_child`, `insert_before`,
-  `remove_child`, `replace_child`, `set_attribute`, `remove_attribute`) są
-  thin-FFI — nie walidują argumentów, delegują do JS-runtime.
+  `remove_child`, `replace_child`, `set_attribute`, `remove_attribute`,
+  `get_attribute`, `set_bool_attribute`, `get_js_property`,
+  `set_js_property`) są thin-FFI — nie walidują argumentów, delegują do
+  JS-runtime. `set_bool_attribute` ustawia/usuwa atrybut HTML i synchronizuje
+  typowe IDL boolean properties po nazwie camelCase (`readOnly`, `isMap`,
+  `noValidate`, `formNoValidate`, `allowFullscreen`, …) gdy atrybut jest na
+  allowliście. `take_own_js_property` / `set_well_prop_storage` służą Inputs
+  do unshadow own data props przy connect.
 
 ## Scenarios
 

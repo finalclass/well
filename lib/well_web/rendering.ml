@@ -30,6 +30,36 @@ let attach_listener dispatch node (name, handler) =
   in
   Bridge.add_event_listener node ~event_name:name (Bridge.fn1 cb)
 
+let apply_bool_attrs node (bools : string list) =
+  List.iter
+    (fun name -> Bridge.set_bool_attribute node ~name ~enabled:true)
+    bools
+
+let sync_bool_attrs node (old_bools : string list) (new_bools : string list) =
+  let old_s = List.sort String.compare old_bools in
+  let new_s = List.sort String.compare new_bools in
+  let rec merge a b =
+    match a, b with
+    | [], rest ->
+      List.iter
+        (fun name -> Bridge.set_bool_attribute node ~name ~enabled:true)
+        rest
+    | rest, [] ->
+      List.iter
+        (fun name -> Bridge.set_bool_attribute node ~name ~enabled:false)
+        rest
+    | na :: ta, nb :: tb ->
+      if na = nb then merge ta tb
+      else if na < nb then begin
+        Bridge.set_bool_attribute node ~name:na ~enabled:false;
+        merge ta b
+      end else begin
+        Bridge.set_bool_attribute node ~name:nb ~enabled:true;
+        merge a tb
+      end
+  in
+  merge old_s new_s
+
 let rec blit_dispatch dispatch (v : 'msg Html.vdom) : ctrl =
   if is_text_node v then
     let text = match v.text with Some s -> s | None -> "" in
@@ -41,6 +71,7 @@ let rec blit_dispatch dispatch (v : 'msg Html.vdom) : ctrl =
     List.iter
       (fun (name, value) -> Bridge.set_attribute node ~name ~value)
       v.attrs;
+    apply_bool_attrs node v.bool_attrs;
     (match v.text, v.children with
      | Some text, [] -> Bridge.set_text node text
      | _ -> ());
@@ -121,6 +152,7 @@ let rec sync (ctrl : ctrl) (v : 'msg Html.vdom) =
      | None -> ())
   else begin
     sync_attrs ctrl.node old.attrs v.attrs;
+    sync_bool_attrs ctrl.node old.bool_attrs v.bool_attrs;
     sync_handlers ctrl v.handlers;
     sync_text ctrl old v;
     sync_children ctrl v.children
@@ -169,6 +201,20 @@ and sync_children ctrl (new_children : 'msg Html.node list) =
 let initialized = ref false
 
 let table : (string, ctrl) Hashtbl.t = Hashtbl.create 64
+
+let rec destroy_ctrl (c : ctrl) =
+  List.iter (fun unsubscribe -> unsubscribe ()) c.unsubs;
+  c.unsubs <- [];
+  Array.iter destroy_ctrl c.children;
+  c.children <- [||];
+  detach_node c
+
+let destroy_instance ~instance_id =
+  match Hashtbl.find_opt table instance_id with
+  | None -> ()
+  | Some ctrl ->
+    destroy_ctrl ctrl;
+    Hashtbl.remove table instance_id
 
 let on_vdom env =
   let instance_id = Message_bus.instance_id env in

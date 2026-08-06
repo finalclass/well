@@ -69,7 +69,19 @@ val register_element :
   tag_name:string ->
   on_connect:(element -> unit) ->
   on_disconnect:(element -> unit) ->
+  ?observed_attributes:string list ->
+  ?on_attribute_change:
+    (element ->
+     name:string ->
+     old_value:string option ->
+     new_value:string option ->
+     unit) ->
+  ?property_names:string list ->
+  ?on_property_set:(element -> name:string -> value:value -> unit) ->
   unit -> unit
+(** Register a custom element. Optional [observed_attributes] wire
+    [attributeChangedCallback]; [property_names] install prototype
+    getters/setters that notify [on_property_set]. *)
 
 (** FindElement — znajdź element w dokumencie.
 
@@ -235,6 +247,40 @@ val replace_child : parent:element -> old:element -> new_:element -> unit
     ```
 *)
 val set_attribute : element -> name:string -> value:string -> unit
+
+(** GetAttribute — read an HTML attribute; [None] if missing. *)
+val get_attribute : element -> name:string -> string option
+
+(** HasAttribute — whether the named attribute is present. *)
+val has_attribute : element -> name:string -> bool
+
+(** SetBoolAttribute — reflect a boolean HTML attribute and common
+    IDL boolean properties ([disabled], [selected], [checked], …).
+    When [enabled] is false the attribute is removed and the property
+    cleared when present. *)
+val set_bool_attribute : element -> name:string -> enabled:bool -> unit
+
+(** GetJsProperty — read a JS data property from an element (own or proto).
+    [None] when the value is [undefined]. *)
+val get_js_property : element -> name:string -> value option
+
+(** SetJsProperty — write a JS data property on an element. *)
+val set_js_property : element -> name:string -> value:value -> unit
+
+(** AssignJsProperty — [el[name] = value] through the prototype setter
+    when present (unlike [set_js_property], which may create an own data
+    property and shadow accessors). *)
+val assign_js_property : element -> name:string -> value:value -> unit
+
+(** TakeOwnJsProperty — if [el] has an own data property [name], return its
+    value and delete the own property so prototype accessors are visible.
+    [None] when missing or accessor-only. Used on connect to unshadow CE
+    property accessors after pre-upgrade assignment. *)
+val take_own_js_property : element -> name:string -> value option
+
+(** SetWellPropStorage — write the internal [__well_prop_<name>] slot used
+    by CE prototype getters/setters (without invoking the setter notify). *)
+val set_well_prop_storage : element -> name:string -> value:value -> unit
 
 (** RemoveAttribute — usuń atrybut HTML z elementu.
 

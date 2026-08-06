@@ -22,6 +22,7 @@ module Vdom = Html
 
 (** Deklaratywne, typowane wejścia komponentu (D18). *)
 module Props : sig
+  type kind = Int | Float | Bool | String | List | Complex
   type 'msg decl
   type 'msg t = 'msg decl list
   val int    : string -> on:(int    -> 'msg) -> ?default:int    -> unit -> 'msg decl
@@ -30,6 +31,9 @@ module Props : sig
   val string : string -> on:(string -> 'msg) -> ?default:string -> unit -> 'msg decl
   val list   : string -> eq:('a -> 'a -> bool) -> on:('a list -> 'msg) -> 'msg decl
   val of_eq  : string -> eq:('a -> 'a -> bool) -> on:('a      -> 'msg) -> 'msg decl
+  val name : 'msg decl -> string
+  val kind : 'msg decl -> kind
+  val is_observable : 'msg decl -> bool
 end
 
 (** Komenda — efekt wychodzący z komponentu (D18 + perform/batch).
@@ -222,3 +226,22 @@ val update_state :
     ```
 *)
 val render_view : instance_id:string -> state envelope -> 'msg Html.node envelope
+
+(** Runtime view of one [Props.decl] for Inputs (host attrs / properties). *)
+type prop_spec = {
+  name : string;
+  kind : Props.kind;
+  parse_string : string -> Obj.t option;
+  equal : Obj.t -> Obj.t -> bool;
+  to_msg : Obj.t -> msg;
+  default_value : Obj.t option;
+}
+
+val props_of_instance : instance_id:string -> prop_spec list
+(** Props declared by the component module bound to [instance_id]. *)
+
+val props_of_tag : tag_name:string -> prop_spec list
+(** Props declared by the component type registered as [tag_name]. *)
+
+val instance_id_of_element : Bridge.element -> string option
+(** Reverse lookup host element → instance_id (for attr/property callbacks). *)

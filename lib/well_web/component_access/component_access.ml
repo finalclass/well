@@ -1,11 +1,15 @@
 [@@@warning "-69"]
 
 module Props = struct
+  type kind = Int | Float | Bool | String | List | Complex
+
   type 'msg decl = Decl : {
     name : string;
+    kind : kind;
     parse_string : string -> Obj.t option;
     equal : Obj.t -> Obj.t -> bool;
     on : Obj.t -> 'msg;
+    default_value : Obj.t option;
   } -> 'msg decl
 
   type 'msg t = 'msg decl list
@@ -24,8 +28,8 @@ module Props = struct
 
   let parse_string s = Some (Obj.repr s)
 
-  let make ~name ~parse ~equal ~on =
-    Decl { name; parse_string = parse; equal; on }
+  let make ~name ~kind ~parse ~equal ~on ~default_value =
+    Decl { name; kind; parse_string = parse; equal; on; default_value }
 
   let int name ~on ?(default = 0) () =
     let on' v =
@@ -33,9 +37,10 @@ module Props = struct
       | Some i -> on (Obj.obj i : int)
       | None -> on default
     in
-    make ~name ~parse:parse_int
+    make ~name ~kind:Int ~parse:parse_int
       ~equal:(fun a b -> (Obj.obj a : int) = (Obj.obj b : int))
       ~on:(fun v -> on' (Some v))
+      ~default_value:(Some (Obj.repr default))
 
   let float name ~on ?(default = 0.0) () =
     let on' v =
@@ -43,9 +48,10 @@ module Props = struct
       | Some f -> on (Obj.obj f : float)
       | None -> on default
     in
-    make ~name ~parse:parse_float
+    make ~name ~kind:Float ~parse:parse_float
       ~equal:(fun a b -> (Obj.obj a : float) = (Obj.obj b : float))
       ~on:(fun v -> on' (Some v))
+      ~default_value:(Some (Obj.repr default))
 
   let bool name ~on ?(default = false) () =
     let on' v =
@@ -53,9 +59,10 @@ module Props = struct
       | Some b -> on (Obj.obj b : bool)
       | None -> on default
     in
-    make ~name ~parse:parse_bool
+    make ~name ~kind:Bool ~parse:parse_bool
       ~equal:(fun a b -> (Obj.obj a : bool) = (Obj.obj b : bool))
       ~on:(fun v -> on' (Some v))
+      ~default_value:(Some (Obj.repr default))
 
   let string name ~on ?(default = "") () =
     let on' v =
@@ -63,9 +70,10 @@ module Props = struct
       | Some s -> on (Obj.obj s : string)
       | None -> on default
     in
-    make ~name ~parse:parse_string
+    make ~name ~kind:String ~parse:parse_string
       ~equal:(fun a b -> (Obj.obj a : string) = (Obj.obj b : string))
       ~on:(fun v -> on' (Some v))
+      ~default_value:(Some (Obj.repr default))
 
   let list name ~eq ~(on : 'a list -> 'msg) =
     let on' v = on (Obj.obj v : 'a list) in
@@ -75,12 +83,21 @@ module Props = struct
       List.length la = List.length lb
       && List.for_all2 eq la lb
     in
-    make ~name ~parse:(fun _ -> None) ~equal ~on:on'
+    make ~name ~kind:List ~parse:(fun _ -> None) ~equal ~on:on'
+      ~default_value:None
 
   let of_eq name ~eq ~(on : 'a -> 'msg) =
     let on' v = on (Obj.obj v : 'a) in
     let equal a b = eq (Obj.obj a : 'a) (Obj.obj b : 'a) in
-    make ~name ~parse:(fun _ -> None) ~equal ~on:on'
+    make ~name ~kind:Complex ~parse:(fun _ -> None) ~equal ~on:on'
+      ~default_value:None
+
+  let name (Decl d) = d.name
+  let kind (Decl d) = d.kind
+  let is_observable (Decl d) =
+    match d.kind with
+    | Int | Float | Bool | String -> true
+    | List | Complex -> false
 end
 
 module Vdom = Html
@@ -225,3 +242,63 @@ let render_view ~instance_id state_env =
     let children = Obj.obj (Obj.repr ()) in
     let vdom = M.view st (fun (_ : M.msg) -> ()) children in
     { instance_id; payload = Obj.obj (Obj.repr vdom) }
+
+type prop_spec = {
+  name : string;
+  kind : Props.kind;
+  parse_string : string -> Obj.t option;
+  equal : Obj.t -> Obj.t -> bool;
+  to_msg : Obj.t -> msg;
+  default_value : Obj.t option;
+}
+
+let props_of_instance ~instance_id : prop_spec list =
+  match Hashtbl.find_opt instances instance_id with
+  | None ->
+    failwith ("ComponentAccess.props_of_instance: unknown instance " ^ instance_id)
+  | Some (Instance r) ->
+    let (module M) = r.module_ in
+    List.map
+      (fun (Props.Decl d) ->
+        {
+          name = d.name;
+          kind = d.kind;
+          parse_string = d.parse_string;
+          equal = d.equal;
+          to_msg =
+            (fun v ->
+              let m : M.msg = d.on v in
+              (Obj.obj (Obj.repr m) : msg));
+          default_value = d.default_value;
+        })
+      M.props
+
+let props_of_tag ~tag_name : prop_spec list =
+  match Hashtbl.find_opt types tag_name with
+  | None ->
+    failwith ("ComponentAccess.props_of_tag: unregistered tag " ^ tag_name)
+  | Some (module_, _) ->
+    let (module M) = module_ in
+    List.map
+      (fun (Props.Decl d) ->
+        {
+          name = d.name;
+          kind = d.kind;
+          parse_string = d.parse_string;
+          equal = d.equal;
+          to_msg =
+            (fun v ->
+              let m : M.msg = d.on v in
+              (Obj.obj (Obj.repr m) : msg));
+          default_value = d.default_value;
+        })
+      M.props
+
+let instance_id_of_element (el : Bridge.element) : string option =
+  let exception Found of string in
+  try
+    Hashtbl.iter
+      (fun id (Instance r) -> if r.element == el then raise (Found id))
+      instances;
+    None
+  with Found id -> Some id

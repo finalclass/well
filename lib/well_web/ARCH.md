@@ -26,10 +26,11 @@
 
 **Well.Web** jest pojedynczym Clientem — fasadą dla aplikacji. Implementacja dziś:
 
-- `well_web.ml` — `val component` (entry-point), lifecycle `on_connect` / `on_disconnect`, rejestracja custom elementu przez Bridge, mount path (create → init → persist → vdom → cmd).
-- `rendering.ml` — subscribe `"vdom"`, blit vdom → DOM przez Bridge; **attach_listener** na handlerach DOM → `dispatch` → publish `"msg"` (ścieżka interakcji użytkownika).
+- `well_web.ml` — `val component` (entry-point), lifecycle `on_connect` / `on_disconnect`, rejestracja custom elementu przez Bridge, mount path (create → init → persist → **Inputs.hydrate** → vdom → cmd).
+- `rendering.ml` — subscribe `"vdom"`, blit/sync vdom → DOM przez Bridge (attrs **i bool_attrs**); **attach_listener** na handlerach DOM → `dispatch` → publish `"msg"` (ścieżka interakcji użytkownika).
+- `inputs.ml` — Inputs: hydrate host attrs/properties przy connect; `attributeChangedCallback` + JS property setters → publish `"msg"` (ta sama ścieżka co eventy DOM).
 
-Planowane / **niezaimplementowane** (brak plików): osobne `inputs.ml` / `registration.ml` / `channels.ml`. `Props.t` jest w kontrakcie ComponentAccess, ale **nie jest odczytywane przy connect** — brak wire atrybutów → msg.
+Planowane / **niezaimplementowane** (brak plików): osobne `registration.ml` / `channels.ml`.
 
 Brak Engine — V-side-effects okazał się Managerem (EffectsManager). Wszystkie efekty asynchroniczne wymagają koordynacji w czasie (Promise, rAF), co jest profilem Managera, nie stateless Engine.
 
@@ -59,7 +60,7 @@ Wolatylności enkapsulowane per warstwa:
 
 | Warstwa | Serwis | Wolatylność |
 |---|---|---|
-| Client | Well.Web | Rejestracja + lifecycle mount (`well_web.ml`) + renderowanie i handlery DOM (`rendering.ml` → `"msg"`). Atrybuty/`Props` i push z WS — kontrakt/plan, **nie wired** w Client lifecycle |
+| Client | Well.Web | Rejestracja + lifecycle mount (`well_web.ml`) + renderowanie i handlery DOM (`rendering.ml` → `"msg"`) + Inputs (`inputs.ml`: host attrs/`Props.t`/JS properties → `"msg"`). Push z WS (`channels.ml`) — plan |
 | Manager | LoopManager | Mechanika pętli TEA (scheduling, batching, re-entrancja) |
 | Manager | EffectsManager | Słownik + interpretacja efektów wychodzących (Cmd, DOM-ops) |
 | Access | StateAccess | Lokalizacja stanu (pure-client, localStorage, baza, SSR) |
@@ -112,7 +113,7 @@ Przy pierwszym `Well_web.component` Client woła `ensure_runtime` i rejestruje
 | `"vdom"` | Rendering (`init` → subscribe) | sync vdom → live DOM przez Bridge |
 
 Publikują na te topiki (żywe moduły):
-- `"msg"` — Rendering (handlery DOM), EffectsManager (`Cmd.msg` / `perform`→dispatch), Client mount gdy `init` woła żywy `dispatch`
+- `"msg"` — Rendering (handlery DOM), Inputs (attr/property change), EffectsManager (`Cmd.msg` / `perform`→dispatch), Client mount gdy `init` woła żywy `dispatch`
 - `"vdom"` / `"cmd"` — LoopManager (po update) oraz Client mount (`on_connect`)
 
 Access **nie** subskrybuje Bus.
@@ -133,7 +134,11 @@ MountInstance
        -> (ComponentDefinition)
   -> [StateAccess]              (* Client persist — nie LoopManager *)
        -> (ComponentState)
-  -> [ComponentAccess]          (* render_view *)
+  -> [Inputs]                   (* hydrate host attrs + JS properties → update sync *)
+       -> [ComponentAccess]     (* update_state per prop msg *)
+       -> [StateAccess]         (* persist po każdym prop *)
+       -> [Bridge]              (* getAttribute / get property *)
+  -> [ComponentAccess]          (* render_view na stanie po hydrate *)
        -> (ComponentDefinition)
   ~> [MessageBus]               (* topic "vdom"; flush async setTimeout(0) *)
        ~> [Rendering]
@@ -154,10 +159,38 @@ Kolejność w `on_connect` (wiążąca):
    **nie** jest tu uruchamiany.
 3. `StateAccess.persist` — Client zapisuje stan początkowy (LoopManager
    **nie** woła `init_state`).
-4. `render_view` + publish `"vdom"` — enqueue pierwszego painta (flush Bus async).
-5. rejestracja w Client `Instance_table` (lokalna tabela host→instance).
-6. `publish_cmd` init cmd na `"cmd"` (skip gdy `Cmd.none`) — jeden envelope;
+4. `Inputs.hydrate_instance` — odczyt atrybutów hosta (props z `parse_string`)
+   oraz już ustawionych JS properties; każdy prop → `update` **synchronicznie**
+   + persist (bez Bus `"msg"`, żeby pierwszy paint widział host inputs).
+   Skip no-op gdy `equal` mówi „bez zmian”.
+5. `render_view` + publish `"vdom"` — enqueue pierwszego painta (flush Bus async)
+   ze stanu **po** hydrate.
+6. rejestracja w Client `Instance_table` (lokalna tabela host→instance).
+7. `publish_cmd` init cmd na `"cmd"` (skip gdy `Cmd.none`) — jeden envelope;
    EffectsManager interpretuje po flushu Bus.
+
+## Call chain — PropChange (attr / JS property po mount)
+
+```call-chain
+HandlePropChange
+
+[Bridge]                        (* attributeChangedCallback | property setter *)
+  -> [Inputs]
+       ~> [MessageBus]          (* topic "msg" — ten sam tor co DOM events *)
+            ~> [LoopManager]
+                 -> [StateAccess]
+                 -> [ComponentAccess]
+                 ~> [MessageBus]  (* "vdom" / opcjonalnie "cmd" *)
+```
+
+- Observed attributes: nazwy props skalarnych (`int`/`float`/`bool`/`string`).
+- JS properties na prototypie CE: **wszystkie** props (w tym `list`/`of_eq`);
+  listy **tylko** property (brak codecu JSON w atrybucie).
+- Skip gdy `equal` last-seen == nowa wartość.
+- Attr removal → default skalarny; `Props.list` ← JS Array lub OCaml list.
+- Connect: transfer own data props → `__well_prop_*` (unshadow CE accessors).
+- Disconnect: `Rendering.destroy_instance` (unsub + detach root) + Inputs
+  cache + Access/State.
 
 Sync Client→Access w tym łańcuchu jest **wyłącznie mount lifecycle** — nie
 kopiować na HandleInteraction ani inne UC.

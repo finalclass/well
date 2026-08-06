@@ -1,0 +1,3 @@
+(test
+ (name props_parse_test)
+ (libraries well.web.component_access well.test))

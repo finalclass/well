@@ -56,6 +56,8 @@ let publish_cmd ~instance_id (cmd : Component_access.cmd) =
 let component ~module_ ~tag_name ?(shadow_dom = false) () =
   Component_access.register_type ~module_ ~tag_name ~shadow_dom ();
   ensure_runtime ();
+  let observed = Inputs.observed_attribute_names ~tag_name in
+  let prop_names = Inputs.property_names ~tag_name in
   let on_connect dom_element =
     let instance_id =
       Component_access.create_instance ~tag_name ~dom_element
@@ -72,8 +74,12 @@ let component ~module_ ~tag_name ?(shadow_dom = false) () =
     in
     let state_key = Component_access.state_key ~instance_id in
     State_access.persist state_key initial_state;
+    let hydrated =
+      Inputs.hydrate_instance ~instance_id ~host:dom_element
+        ~initial_state
+    in
     let state_env' : Component_access.state Component_access.envelope =
-      Obj.magic { instance_id; payload = initial_state }
+      Obj.magic { instance_id; payload = hydrated }
     in
     let initial_vdom_env =
       Component_access.render_view ~instance_id state_env'
@@ -87,8 +93,21 @@ let component ~module_ ~tag_name ?(shadow_dom = false) () =
     match Instance_table.find_opt instances dom_element with
     | None -> ()
     | Some record ->
+      Rendering.destroy_instance ~instance_id:record.instance_id;
+      Inputs.forget_instance ~instance_id:record.instance_id;
       Component_access.destroy_instance ~instance_id:record.instance_id;
       State_access.destroy record.state_key;
       Instance_table.remove instances dom_element
   in
-  Bridge.register_element ~tag_name ~on_connect ~on_disconnect ()
+  let on_attribute_change host ~name ~old_value ~new_value =
+    Inputs.handle_attribute_change ~host ~name ~old_value ~new_value
+  in
+  let on_property_set host ~name ~value =
+    Inputs.handle_property_set ~host ~name ~value
+  in
+  Bridge.register_element ~tag_name ~on_connect ~on_disconnect
+    ~observed_attributes:observed
+    ~on_attribute_change
+    ~property_names:prop_names
+    ~on_property_set
+    ()

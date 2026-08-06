@@ -33,6 +33,7 @@ type ctrl
     <Węzeł elementu>
       [Utwórz element przez Bridge]
       [Ustaw attrs]
+      [Ustaw bool_attrs (set_bool_attribute / IDL)]
       [Dodaj listenery (interpretacja wariantu handlera)]
       [Blit dzieci rekursywnie]
     [Zwróć ctrl]
@@ -42,7 +43,7 @@ type ctrl
 val blit : 'msg Html.node -> ctrl
 
 (** Sync — załatcz istniejący ctrl nowym vdom (pozycyjny diff attrs,
-    handlers, text, children). Reaguje na kolejny vdom z MessageBus.
+    bool_attrs, handlers, text, children). Reaguje na kolejny vdom z MessageBus.
 
     ```use-case
     (START)
@@ -52,6 +53,8 @@ val blit : 'msg Html.node -> ctrl
        nigdy nie czyść textContent przy elementach z dziećmi]
     <Zmiana attrs>
       [Posortowane-merge: dodaj/zmień/usuń attrs]
+    <Zmiana bool_attrs>
+      [Posortowane-merge: włącz/wyłącz bool attrs + IDL properties]
     <Zmiana handlers>
       [Odpiecz stare, przepiecz nowe listenery]
     <Dzieci>
@@ -67,3 +70,7 @@ val sync : ctrl -> 'msg Html.vdom -> unit
     koperty: znajdz root ctrl w wewnętrznej tabeli (lub blit nowy pod host
     z ComponentAccess) i wywołaj [sync]. Idempotentna. *)
 val init : unit -> unit
+
+(** DestroyInstance — odpin listenery, usuń root z DOM hosta, drop ctrl
+    z tabeli (disconnect lifecycle). *)
+val destroy_instance : instance_id:string -> unit
