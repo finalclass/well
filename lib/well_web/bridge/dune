@@ -2,5 +2,5 @@
  (name bridge)
  (public_name well.web.bridge)
  (wrapped false)
- (libraries js_of_ocaml js_of_ocaml-ppx)
+ (libraries js_of_ocaml)
  (preprocess (pps js_of_ocaml-ppx)))

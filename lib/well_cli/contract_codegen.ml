@@ -1962,7 +1962,7 @@ let generate_ocaml_browser_dune modules ~output_dir =
   p "(library\n";
   p " (name %s)\n" lib_name;
   p " (wrapped false)\n";
-  p " (libraries yojson js_of_ocaml js_of_ocaml-ppx)\n";
+  p " (libraries yojson js_of_ocaml)\n";
   p " (preprocess (pps js_of_ocaml-ppx))\n";
   p " (modules %s))\n" (String.concat " " module_names);
   Buffer.contents buf

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.1 — 2026-08-10
+
+### Fixes
+- **jsoo bundle size:** do not link `js_of_ocaml-ppx` as a runtime library in
+  `well.web` / `bridge` / `effects_manager`, scaffold `web/dune`, or generated
+  `ocaml_browser` dune. Keep it only in `(preprocess (pps js_of_ocaml-ppx))`.
+  Linking the PPX pulled Ppxlib/Astlib/compiler-libs into browser `app.js`
+  (multi‑MB). Syntax (`##`, etc.) still works via preprocess.
+
 ## v1.3.0 — 2026-02-27
 
 ### Breaking changes

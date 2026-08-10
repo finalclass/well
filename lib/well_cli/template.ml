@@ -197,7 +197,7 @@ let lib_web_dune _name =
  (name register)
  (modes js)
  (modules register counter)
- (libraries well.web well.html js_of_ocaml js_of_ocaml-ppx)
+ (libraries well.web well.html js_of_ocaml)
  (preprocess (pps js_of_ocaml-ppx)))
 |}
 
