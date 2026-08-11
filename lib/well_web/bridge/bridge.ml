@@ -170,8 +170,13 @@ let dispatch_event
     ~(name : string)
     ~(payload : value)
     : unit =
+  (* bubbles + composed: host CustomEvents reach document listeners and
+     cross shadow roots (default CustomEvent is non-bubbling). *)
   let opts =
-    Js.Unsafe.obj [| "detail", payload |]
+    Js.Unsafe.obj
+      [| ("detail", payload)
+       ; ("bubbles", Js.Unsafe.inject Js._true)
+       ; ("composed", Js.Unsafe.inject Js._true) |]
   in
   let ctor = Js.Unsafe.(get window (Js.string "CustomEvent")) in
   let ev =
