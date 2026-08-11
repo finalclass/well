@@ -215,12 +215,42 @@ val init_state :
 val update_state :
   instance_id:string -> state envelope -> msg envelope -> (state * cmd) envelope
 
-(** RenderView — wykonaj view na module komponentu, zwróć vdom.
+(** CaptureProjection — zrzut light-DOM hosta do projected children instancji.
+
+    Odłącza aktualne [childNodes] hosta (po hydrate props, przed pierwszym
+    paint TEA), pomija puste węzły tekstowe i komentarze, zapisuje listę
+    na instancji. Idempotentne: drugie wołanie nie nadpisuje już zrobionego
+    capture.
 
     ```use-case
     (START)
     [Odszukaj instancję po instance_id]
-    [Zleć view(state) na module komponentu]
+    <już zcapture'owane>
+      [No-op]
+    <pierwszy raz>
+      [Odczytaj childNodes hosta przez Bridge]
+      [Odłącz każdy znaczący węzeł z hosta]
+      [Zapisz listę jako projected children instancji]
+    (STOP)
+    ```
+*)
+val capture_projection : instance_id:string -> unit
+
+(** ProjectedNodes — węzły light-DOM zrzutu (dla Rendering przy [tag="#slot"]). *)
+val projected_nodes : instance_id:string -> Bridge.element list
+
+(** RenderView — wykonaj view na module komponentu, zwróć vdom.
+
+    Trzeci argument [view] = projected children: stabilny token vdom
+    [tag="#slot"] z [data-well-instance], wskazujący projected nodes
+    instancji (pusta lista → slot bez dzieci). [dispatch] w view jest
+    żywy (ten sam co w [init_state], publikacja na ["msg"]).
+
+    ```use-case
+    (START)
+    [Odszukaj instancję po instance_id]
+    [Zbuduj token #slot z projected children]
+    [Zleć view(state, dispatch, children) na module komponentu]
     [Zwróć instance_id z vdom]
     (STOP)
     ```

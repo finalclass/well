@@ -167,6 +167,9 @@ type instance = Instance : {
   module_ : (module COMPONENT);
   element : Bridge.element;
   state_key : unit ref;
+  mutable projected : Bridge.element list;
+  mutable projected_captured : bool;
+  mutable dispatch : msg -> unit;
 } -> instance
 
 let types : (string, (module COMPONENT) * bool) Hashtbl.t =
@@ -191,7 +194,15 @@ let create_instance ~tag_name ~dom_element =
   | Some (module_, _shadow_dom) ->
     let instance_id = next_instance_id () in
     Hashtbl.replace instances instance_id
-      (Instance { module_; element = dom_element; state_key = ref () });
+      (Instance
+         {
+           module_;
+           element = dom_element;
+           state_key = ref ();
+           projected = [];
+           projected_captured = false;
+           dispatch = (fun _ -> ());
+         });
     instance_id
 
 let destroy_instance ~instance_id =
@@ -209,14 +220,65 @@ let state_key ~instance_id =
     failwith ("ComponentAccess.state_key: unknown instance " ^ instance_id)
   | Some (Instance r) -> r.state_key
 
+let significant_light_dom_node (n : Bridge.element) : bool =
+  match Bridge.node_type n with
+  | 1 -> true
+  | 3 ->
+    (match Bridge.node_value n with
+     | None -> false
+     | Some s ->
+       let trim =
+         String.trim s
+       in
+       trim <> "")
+  | _ -> false
+
+let capture_projection ~instance_id =
+  match Hashtbl.find_opt instances instance_id with
+  | None ->
+    failwith
+      ("ComponentAccess.capture_projection: unknown instance " ^ instance_id)
+  | Some (Instance r) ->
+    if not r.projected_captured then begin
+      let host = r.element in
+      let nodes =
+        List.filter significant_light_dom_node (Bridge.child_nodes host)
+      in
+      List.iter
+        (fun child -> Bridge.remove_child ~parent:host ~child)
+        nodes;
+      r.projected <- nodes;
+      r.projected_captured <- true
+    end
+
+let projected_nodes ~instance_id =
+  match Hashtbl.find_opt instances instance_id with
+  | None ->
+    failwith
+      ("ComponentAccess.projected_nodes: unknown instance " ^ instance_id)
+  | Some (Instance r) -> r.projected
+
+let slot_token ~instance_id : 'a Html.node =
+  `Html
+    {
+      tag = "#slot";
+      attrs = [ ("data-well-instance", instance_id) ];
+      bool_attrs = [];
+      handlers = [];
+      children = [];
+      text = None;
+      void = false;
+    }
+
 let init_state ~instance_id ~dispatch =
   match Hashtbl.find_opt instances instance_id with
   | None ->
     failwith ("ComponentAccess.init_state: unknown instance " ^ instance_id)
   | Some (Instance r) ->
+    r.dispatch <- dispatch;
     let (module M) = r.module_ in
     let dispatch_m (m : M.msg) =
-      dispatch (Obj.obj (Obj.repr m) : msg)
+      r.dispatch (Obj.obj (Obj.repr m) : msg)
     in
     let (st, cmd) = M.init ~dispatch:dispatch_m in
     { instance_id; payload = Obj.obj (Obj.repr (st, cmd)) }
@@ -239,8 +301,11 @@ let render_view ~instance_id state_env =
   | Some (Instance r) ->
     let (module M) = r.module_ in
     let st : M.state = Obj.obj (Obj.repr state_env.payload) in
-    let children = Obj.obj (Obj.repr ()) in
-    let vdom = M.view st (fun (_ : M.msg) -> ()) children in
+    let dispatch_m (m : M.msg) =
+      r.dispatch (Obj.obj (Obj.repr m) : msg)
+    in
+    let children = slot_token ~instance_id in
+    let vdom = M.view st dispatch_m children in
     { instance_id; payload = Obj.obj (Obj.repr vdom) }
 
 type prop_spec = {

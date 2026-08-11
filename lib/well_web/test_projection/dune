@@ -1,0 +1,6 @@
+(executable
+ (name projection_test)
+ (modes js)
+ (modules projection_test)
+ (libraries well_web)
+ (preprocess (pps js_of_ocaml-ppx)))

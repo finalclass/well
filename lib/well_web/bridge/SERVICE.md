@@ -42,7 +42,8 @@ verbs udowodnione w spajku S7 (`lib/well_web/spike_ffi.ml`).
 - `get_input_value`/`set_value` operują na właściwości `.value` elementu; dla
   elementów formularza (input/select/textarea) jest to string, dla innych
   elementów zachowanie zależy od JS-runtime.
-- Operacje DOM (`create_element`, `append_child`, `insert_before`,
+- Operacje DOM (`create_element`, `child_nodes`, `node_type`, `node_value`,
+  `append_child`, `insert_before`,
   `remove_child`, `replace_child`, `set_attribute`, `remove_attribute`,
   `get_attribute`, `set_bool_attribute`, `get_js_property`,
   `set_js_property`) są thin-FFI — nie walidują argumentów, delegują do
@@ -50,7 +51,9 @@ verbs udowodnione w spajku S7 (`lib/well_web/spike_ffi.ml`).
   typowe IDL boolean properties po nazwie camelCase (`readOnly`, `isMap`,
   `noValidate`, `formNoValidate`, `allowFullscreen`, …) gdy atrybut jest na
   allowliście. `take_own_js_property` / `set_well_prop_storage` służą Inputs
-  do unshadow own data props przy connect.
+  do unshadow own data props przy connect. `child_nodes` / `node_type` /
+  `node_value` służą ComponentAccess do capture projected light-DOM (bez
+  semantyki TEA w Bridge).
 
 ## Scenarios
 

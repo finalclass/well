@@ -68,6 +68,17 @@ kopertę `(state * cmd)`.
 - `update` jest czystą funkcją (nie mutuje stanu poza return value).
 - `init`/`update` zwracają tylko skonstruowane `Cmd.t`; wykonanie efektów
   należy do EffectsManager po publikacji na `"cmd"`.
+- Projected children (light DOM hosta przy connect) to **lifecycle instancji**,
+  nie TEA `state`: Access trzyma listę węzłów DOM i podaje je do `view` jako
+  stabilny token vdom `tag="#slot"` (Rendering reparentuje prawdziwe węzły).
+- `capture_projection` jest wołane raz na instancję **po** hydrate props i
+  **przed** pierwszym `render_view` (Client MountInstance). Capture odłącza
+  znaczące `childNodes` hosta (elementy + niepusty tekst; puste tekstowe i
+  komentarze pomijane).
+- Gdy `view` nie wstawi tokenu `#slot` w drzewie, projected nodes pozostają
+  poza dokumentem (niewidoczne) do destroy instancji.
+- `render_view` woła `view` z żywym `dispatch` (ten sam, co w `init_state`)
+  oraz tokenem projected — nie stubem `unit`.
 
 ## Scenarios
 
@@ -78,7 +89,11 @@ kopertę `(state * cmd)`.
   `(state * cmd)` bez uruchamiania cmd.
 - [UpdateState](component_access.mli) — wykonaj update, zwróć komendę
   (konstrukcja; bez efektów).
-- [RenderView](component_access.mli) — wykonaj view, zwróć vdom.
+- [CaptureProjection](component_access.mli) — zrzut light-DOM hosta
+  (projected children) na instancję; przed pierwszym `render_view`.
+- [ProjectedNodes](component_access.mli) — odczyt zrzutu (dla Rendering `#slot`).
+- [RenderView](component_access.mli) — wykonaj view z tokenem projected
+  children (`#slot`) i żywym `dispatch`, zwróć vdom.
 - `props_of_instance` / `props_of_tag` — runtime view deklaracji `Props.t`
   dla Inputs (nazwa, kind, parse_string, equal, to_msg, default_value).
   `kind` rozróżnia `List` (JS Array / OCaml list) od `Complex` (`of_eq`).

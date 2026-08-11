@@ -27,7 +27,7 @@
 **Well.Web** jest pojedynczym Clientem — fasadą dla aplikacji. Implementacja dziś:
 
 - `well_web.ml` — `val component` (entry-point), lifecycle `on_connect` / `on_disconnect`, rejestracja custom elementu przez Bridge, mount path (create → init → persist → **Inputs.hydrate** → vdom → cmd).
-- `rendering.ml` — subscribe `"vdom"`, blit/sync vdom → DOM przez Bridge (attrs **i bool_attrs**); **attach_listener** na handlerach DOM → `dispatch` → publish `"msg"` (ścieżka interakcji użytkownika).
+- `rendering.ml` — subscribe `"vdom"`, blit/sync vdom → DOM przez Bridge (attrs **i bool_attrs**); **attach_listener** na handlerach DOM → `dispatch` → publish `"msg"` (ścieżka interakcji użytkownika). Węzeł `tag="#slot"`: reparent projected light-DOM z ComponentAccess (tożsamość węzłów, bez rebuild).
 - `inputs.ml` — Inputs: hydrate host attrs/properties przy connect; `attributeChangedCallback` + JS property setters → publish `"msg"` (ta sama ścieżka co eventy DOM).
 
 Planowane / **niezaimplementowane** (brak plików): osobne `registration.ml` / `channels.ml`.
@@ -138,11 +138,14 @@ MountInstance
        -> [ComponentAccess]     (* update_state per prop msg *)
        -> [StateAccess]         (* persist po każdym prop *)
        -> [Bridge]              (* getAttribute / get property *)
-  -> [ComponentAccess]          (* render_view na stanie po hydrate *)
+  -> [ComponentAccess]          (* capture_projection: light DOM → projected *)
+       -> [Bridge]              (* child_nodes / remove_child *)
+  -> [ComponentAccess]          (* render_view: view + token #slot + live dispatch *)
        -> (ComponentDefinition)
   ~> [MessageBus]               (* topic "vdom"; flush async setTimeout(0) *)
-       ~> [Rendering]
+       ~> [Rendering]           (* blit/sync; #slot = reparent projected nodes *)
             -> [Bridge]
+            -> [ComponentAccess]  (* projected_nodes przy #slot *)
   ~> [MessageBus]               (* topic "cmd" — 0|1 envelope jeśli ≠ none *)
        ~> [EffectsManager]
             -> [Bridge]
@@ -162,11 +165,14 @@ Kolejność w `on_connect` (wiążąca):
 4. `Inputs.hydrate_instance` — odczyt atrybutów hosta (props z `parse_string`)
    oraz już ustawionych JS properties; każdy prop → `update` **synchronicznie**
    + persist (bez Bus `"msg"`, żeby pierwszy paint widział host inputs).
-   Skip no-op gdy `equal` mówi „bez zmian”.
-5. `render_view` + publish `"vdom"` — enqueue pierwszego painta (flush Bus async)
-   ze stanu **po** hydrate.
-6. rejestracja w Client `Instance_table` (lokalna tabela host→instance).
-7. `publish_cmd` init cmd na `"cmd"` (skip gdy `Cmd.none`) — jeden envelope;
+   Skip no-op gdy `equal` mówi „bez zmian".
+5. `capture_projection` — zrzut light-DOM hosta (dzieci spoza TEA) na instancję
+   w ComponentAccess; host pusty pod root TEA. **Przed** pierwszym paintem.
+6. `render_view` + publish `"vdom"` — enqueue pierwszego painta (flush Bus async)
+   ze stanu **po** hydrate; `view` dostaje token projected (`#slot`) i żywy
+   `dispatch`. Rendering przy `#slot` reparentuje projected nodes (nie klonuje).
+7. rejestracja w Client `Instance_table` (lokalna tabela host→instance).
+8. `publish_cmd` init cmd na `"cmd"` (skip gdy `Cmd.none`) — jeden envelope;
    EffectsManager interpretuje po flushu Bus.
 
 ## Call chain — PropChange (attr / JS property po mount)

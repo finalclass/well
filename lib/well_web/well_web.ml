@@ -81,6 +81,7 @@ let component ~module_ ~tag_name ?(shadow_dom = false) () =
     let state_env' : Component_access.state Component_access.envelope =
       Obj.magic { instance_id; payload = hydrated }
     in
+    Component_access.capture_projection ~instance_id;
     let initial_vdom_env =
       Component_access.render_view ~instance_id state_env'
     in

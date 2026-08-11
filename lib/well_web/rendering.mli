@@ -18,6 +18,11 @@ type ctrl
 (** Blit — początkowe przełożenie vdom → DOM przez Bridge. Tworzy węzeł,
     ustawia attrs, wiesza listenery, blit'uje dzieci rekursywnie.
 
+    Specjalny [tag="#slot"]: nie [createElement] drzewa projected — tworzy
+    kontener ([span] + [display:contents]), reparentuje [projected_nodes]
+    z ComponentAccess (tożsamość DOM zachowana). Sync [#slot] to no-op na
+    projected (bez rebuild dzieci).
+
     Listenery interpretują wariant [Html.handler]: [Msg] dispatchuje msg
     ignorując event; [On_key]/[On_value] wyciągają [event.key]/
     [event.target.value] przez Bridge i dispatchują wynik; [On_form]

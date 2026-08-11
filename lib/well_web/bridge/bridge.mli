@@ -192,6 +192,24 @@ val create_element : string -> element
 *)
 val create_text_node : string -> element
 
+(** ChildNodes — lista bezpośrednich dzieci węzła (kolejność DOM, w tym tekst).
+
+    ```use-case
+    (START)
+    [Odbierz element]
+    [Odczytaj childNodes przez FFI]
+    [Zwróć listę węzłów w kolejności]
+    (STOP)
+    ```
+*)
+val child_nodes : element -> element list
+
+(** NodeType — [Node.nodeType] (1=element, 3=text, 8=comment, …). *)
+val node_type : element -> int
+
+(** NodeValue — [Node.nodeValue] dla węzłów tekstowych/komentarzy; [None] gdy null. *)
+val node_value : element -> string option
+
 (** AppendChild — dołącz dziecko do rodzica.
 
     ```use-case

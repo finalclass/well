@@ -11,6 +11,11 @@ type ctrl = {
 
 let is_text_node (v : 'msg Html.vdom) = v.tag = ""
 
+let is_slot_node (v : 'msg Html.vdom) = v.tag = "#slot"
+
+let slot_instance_id (v : 'msg Html.vdom) : string option =
+  List.assoc_opt "data-well-instance" v.attrs
+
 let attach_listener dispatch node (name, handler) =
   let cb ev =
     let msg_opt =
@@ -60,12 +65,32 @@ let sync_bool_attrs node (old_bools : string list) (new_bools : string list) =
   in
   merge old_s new_s
 
+let blit_slot dispatch (v : 'msg Html.vdom) : ctrl =
+  let node = Bridge.create_element "span" in
+  Bridge.set_attribute node ~name:"data-well-slot" ~value:"";
+  Bridge.set_attribute node ~name:"style" ~value:"display:contents";
+  (match slot_instance_id v with
+   | None -> ()
+   | Some instance_id ->
+     List.iter
+       (fun child -> Bridge.append_child ~parent:node ~child)
+       (Component_access.projected_nodes ~instance_id));
+  {
+    vdom = Obj.repr v;
+    node;
+    children = [||];
+    unsubs = [];
+    dispatch;
+    is_text = false;
+  }
+
 let rec blit_dispatch dispatch (v : 'msg Html.vdom) : ctrl =
   if is_text_node v then
     let text = match v.text with Some s -> s | None -> "" in
     let node = Bridge.create_text_node text in
     { vdom = Obj.repr v; node; children = [||]; unsubs = []; dispatch;
       is_text = true }
+  else if is_slot_node v then blit_slot dispatch v
   else begin
     let node = Bridge.create_element v.tag in
     List.iter
@@ -150,6 +175,7 @@ let rec sync (ctrl : ctrl) (v : 'msg Html.vdom) =
           Bridge.set_text ctrl.node text
         | _ -> ())
      | None -> ())
+  else if is_slot_node v then ()
   else begin
     sync_attrs ctrl.node old.attrs v.attrs;
     sync_bool_attrs ctrl.node old.bool_attrs v.bool_attrs;

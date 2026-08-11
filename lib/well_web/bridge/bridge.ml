@@ -227,6 +227,37 @@ let create_text_node (text : string) : element =
   Js.Unsafe.meth_call document "createTextNode"
     [| Js.Unsafe.inject (Js.string text) |]
 
+let child_nodes (el : element) : element list =
+  let arr : Js.Unsafe.any Js.js_array Js.t =
+    Js.Unsafe.fun_call
+      (Js.Unsafe.js_expr
+         "function (el) { return Array.prototype.slice.call(el.childNodes); }")
+      [| Js.Unsafe.inject el |]
+  in
+  let len = arr##.length in
+  let rec loop i acc =
+    if i < 0 then acc
+    else loop (i - 1) (Js.Unsafe.get arr i :: acc)
+  in
+  loop (len - 1) []
+
+let node_type (el : element) : int =
+  int_of_float
+    (Js.to_float
+       (Js.Unsafe.coerce (Js.Unsafe.get el (Js.string "nodeType"))
+          : Js.number Js.t))
+
+let node_value (el : element) : string option =
+  let raw : Js.Unsafe.any =
+    Js.Unsafe.fun_call
+      (Js.Unsafe.js_expr
+         "function (el) { return el.nodeValue == null ? null : String(el.nodeValue); }")
+      [| Js.Unsafe.inject el |]
+  in
+  match Js.Opt.to_option (Obj.magic raw : Js.js_string Js.t Js.opt) with
+  | None -> None
+  | Some s -> Some (Js.to_string s)
+
 let append_child ~(parent : element) ~(child : element) : unit =
   let _ : Js.Unsafe.any =
     Js.Unsafe.meth_call parent "appendChild" [| Js.Unsafe.inject child |]
