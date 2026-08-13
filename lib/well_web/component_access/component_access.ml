@@ -1,12 +1,13 @@
 [@@@warning "-69"]
 
 module Props = struct
-  type kind = Int | Float | Bool | String | List | Complex
+  type kind = Int | Float | Bool | String | List | Complex | Attr_or_prop
 
   type 'msg decl = Decl : {
     name : string;
     kind : kind;
     parse_string : string -> Obj.t option;
+    parse_js : (Bridge.value -> Obj.t option) option;
     equal : Obj.t -> Obj.t -> bool;
     on : Obj.t -> 'msg;
     default_value : Obj.t option;
@@ -28,8 +29,17 @@ module Props = struct
 
   let parse_string s = Some (Obj.repr s)
 
-  let make ~name ~kind ~parse ~equal ~on ~default_value =
-    Decl { name; kind; parse_string = parse; equal; on; default_value }
+  let make ~name ~kind ~parse ~equal ~on ~default_value ?(parse_js = None) () =
+    Decl
+      {
+        name;
+        kind;
+        parse_string = parse;
+        parse_js;
+        equal;
+        on;
+        default_value;
+      }
 
   let int name ~on ?(default = 0) () =
     let on' v =
@@ -41,6 +51,7 @@ module Props = struct
       ~equal:(fun a b -> (Obj.obj a : int) = (Obj.obj b : int))
       ~on:(fun v -> on' (Some v))
       ~default_value:(Some (Obj.repr default))
+      ()
 
   let float name ~on ?(default = 0.0) () =
     let on' v =
@@ -52,6 +63,7 @@ module Props = struct
       ~equal:(fun a b -> (Obj.obj a : float) = (Obj.obj b : float))
       ~on:(fun v -> on' (Some v))
       ~default_value:(Some (Obj.repr default))
+      ()
 
   let bool name ~on ?(default = false) () =
     let on' v =
@@ -63,6 +75,7 @@ module Props = struct
       ~equal:(fun a b -> (Obj.obj a : bool) = (Obj.obj b : bool))
       ~on:(fun v -> on' (Some v))
       ~default_value:(Some (Obj.repr default))
+      ()
 
   let string name ~on ?(default = "") () =
     let on' v =
@@ -74,6 +87,7 @@ module Props = struct
       ~equal:(fun a b -> (Obj.obj a : string) = (Obj.obj b : string))
       ~on:(fun v -> on' (Some v))
       ~default_value:(Some (Obj.repr default))
+      ()
 
   let list name ~eq ~(on : 'a list -> 'msg) =
     let on' v = on (Obj.obj v : 'a list) in
@@ -84,19 +98,46 @@ module Props = struct
       && List.for_all2 eq la lb
     in
     make ~name ~kind:List ~parse:(fun _ -> None) ~equal ~on:on'
-      ~default_value:None
+      ~default_value:None ()
 
   let of_eq name ~eq ~(on : 'a -> 'msg) =
     let on' v = on (Obj.obj v : 'a) in
     let equal a b = eq (Obj.obj a : 'a) (Obj.obj b : 'a) in
     make ~name ~kind:Complex ~parse:(fun _ -> None) ~equal ~on:on'
-      ~default_value:None
+      ~default_value:None ()
+
+  let attr_or_prop name
+      ~(of_string : string -> 'a option)
+      ~(of_js : Bridge.value -> 'a option)
+      ~eq
+      ~(on : 'a -> 'msg)
+      ?default
+      () =
+    let parse s =
+      if String.trim s = "" then None
+      else
+        match of_string s with
+        | None -> None
+        | Some v -> Some (Obj.repr v)
+    in
+    let parse_js raw =
+      match of_js raw with
+      | None -> None
+      | Some v -> Some (Obj.repr v)
+    in
+    let on' v = on (Obj.obj v : 'a) in
+    let equal a b = eq (Obj.obj a : 'a) (Obj.obj b : 'a) in
+    let default_value =
+      match default with None -> None | Some v -> Some (Obj.repr v)
+    in
+    make ~name ~kind:Attr_or_prop ~parse ~equal ~on:on' ~default_value
+      ~parse_js:(Some parse_js) ()
 
   let name (Decl d) = d.name
   let kind (Decl d) = d.kind
   let is_observable (Decl d) =
     match d.kind with
-    | Int | Float | Bool | String -> true
+    | Int | Float | Bool | String | Attr_or_prop -> true
     | List | Complex -> false
 end
 
@@ -312,6 +353,7 @@ type prop_spec = {
   name : string;
   kind : Props.kind;
   parse_string : string -> Obj.t option;
+  parse_js : (Bridge.value -> Obj.t option) option;
   equal : Obj.t -> Obj.t -> bool;
   to_msg : Obj.t -> msg;
   default_value : Obj.t option;
@@ -329,6 +371,7 @@ let props_of_instance ~instance_id : prop_spec list =
           name = d.name;
           kind = d.kind;
           parse_string = d.parse_string;
+          parse_js = d.parse_js;
           equal = d.equal;
           to_msg =
             (fun v ->
@@ -350,6 +393,7 @@ let props_of_tag ~tag_name : prop_spec list =
           name = d.name;
           kind = d.kind;
           parse_string = d.parse_string;
+          parse_js = d.parse_js;
           equal = d.equal;
           to_msg =
             (fun v ->

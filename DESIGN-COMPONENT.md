@@ -459,6 +459,17 @@ module Props : sig
   (* złożone — property-only (tylko z vdom-source; nie z plain HTML) *)
   val list   : string -> eq:('a -> 'a -> bool) -> on:('a list -> 'msg) -> 'msg decl
   val of_eq  : string -> eq:('a -> 'a -> bool) -> on:('a      -> 'msg) -> 'msg decl
+
+  (* polimorficzne — atrybut HTML (string → of_string) ALBO JS property
+     (obiekt/tablica → of_js, bez stringify). Nazwa w observedAttributes. *)
+  val attr_or_prop :
+    string ->
+    of_string:(string -> 'a option) ->
+    of_js:(Bridge.value -> 'a option) ->
+    eq:('a -> 'a -> bool) ->
+    on:('a -> 'msg) ->
+    ?default:'a ->
+    unit -> 'msg decl
 end
 ```
 
@@ -471,6 +482,29 @@ Runtime zachowanie:
 Non-primitives (`list`, `of_eq`) są property-only: atrybut HTML jest zawsze
 string, nie da się przekazać `todo list` przez plain HTML. `int`/`string`/`bool`/
 `float` mogą przyjść z obu źródeł. Model Lit (attributes vs properties).
+
+`attr_or_prop` jest wyjątkiem celowym: jeden prop przyjmuje **albo** string
+atrybutu (np. JSON z HTML serwera, `of_string`), **albo** żywą wartość JS
+z rodzica (`el.payload = {…}`, `of_js`, bez `JSON.stringify`). Pusty string
+i błąd parse są no-op — `connectedCallback` nie wolno rzucać. JS property
+wygrywa nad atrybutem, gdy oba są ustawione (ta sama reguła co hydrate
+Inputs). Framework nie wozi Yojson: decode zostaje w aplikacji.
+
+Użycie (payload tabeli / TEA CE):
+
+```ocaml
+type payload = { columns : string list; data : string list list }
+
+let props : msg Props.t =
+  [
+    Props.attr_or_prop "payload"
+      ~of_string:payload_of_json_string
+      ~of_js:payload_of_js
+      ~eq:equal_payload
+      ~on:(fun v -> Set_payload v)
+      ();
+  ]
+```
 
 ### `Cmd` — dwuparametrowy (type-safe emit)
 
@@ -737,8 +771,9 @@ round-tripuje.
 - (d) SSR/hydratacja — Counter jest client-only, ale API nie blokuje SSR
   (`view` da się wołać po stronie serwera przez to samo Html/Vdom).
 - (e) Expressiveness properties — D18 rezerwuje `Props.list`/`of_eq` dla
-  złożonych typów (eq-based). Pełna moc OCaml (rekordy, funkcje jako props)
-  — do oceny gdy realny komponent zgłosi potrzebę.
+  złożonych typów (eq-based). `Props.attr_or_prop` pokrywa rekord/JSON
+  z HTML **i** obiekt JS (dg-table `payload`). Funkcje jako props — nadal
+  do oceny gdy realny komponent zgłosi potrzebę.
 
 ## D15 — js_of_ocaml (NIE Melange)
 

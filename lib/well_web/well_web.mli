@@ -22,7 +22,12 @@ module Vdom = Html
     ujednolicony typ vdom dla backendu i frontendu. *)
 
 module Props = Component_access.Props
-(** Deklaratywne, typowane wejścia komponentu. *)
+(** Deklaratywne, typowane wejścia komponentu.
+
+    Skalary ([int]/[float]/[bool]/[string]) idą z atrybutu HTML albo JS
+    property. [list]/[of_eq] — tylko property. [attr_or_prop] — atrybut
+    string ([of_string]) albo JS value ([of_js], bez stringify); puste /
+    błąd parse = no-op. *)
 
 module Cmd = Component_access.Cmd
 (** Komenda (efekt wychodzący z komponentu: emit, Promise, focus, DOM-ops). *)

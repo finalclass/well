@@ -61,6 +61,78 @@ module LabelBox = struct
       "div" ()
 end
 
+module PayloadBox = struct
+  type payload = { x : int }
+
+  type state = {
+    payload : payload option;
+    updates : int;
+  }
+
+  type msg = Set_payload of payload
+  type emits = unit
+
+  let parse_x_json s =
+    try
+      let s = String.trim s in
+      if s = "" || s.[0] <> '{' then None
+      else
+        let colon = String.index s ':' in
+        let rest =
+          String.trim
+            (String.sub s (colon + 1) (String.length s - colon - 1))
+        in
+        let digits =
+          if rest <> "" && rest.[String.length rest - 1] = '}' then
+            String.trim (String.sub rest 0 (String.length rest - 1))
+          else rest
+        in
+        Some { x = int_of_string digits }
+    with _ -> None
+
+  let of_js v =
+    try Some { x = Bridge.get_int v "x" } with _ -> None
+
+  let props : msg Props.t =
+    [
+      Props.attr_or_prop "payload" ~of_string:parse_x_json ~of_js
+        ~eq:(fun a b -> a.x = b.x)
+        ~on:(fun v -> Set_payload v)
+        ();
+    ]
+
+  let init ~dispatch:_ = ({ payload = None; updates = 0 }, Cmd.none)
+
+  let update state = function
+    | Set_payload payload ->
+      ({ payload = Some payload; updates = state.updates + 1 }, Cmd.none)
+
+  let view state _dispatch _children : msg Html.node =
+    let open Html in
+    let payload_txt =
+      match state.payload with
+      | None -> "none"
+      | Some p -> string_of_int p.x
+    in
+    element
+      ~attrs:[ ("class", "payload-root") ]
+      ~children:
+        [
+          element
+            ~attrs:[ ("class", "payload") ]
+            ~text:payload_txt
+            "span"
+            ();
+          element
+            ~attrs:[ ("class", "payload-updates") ]
+            ~text:(string_of_int state.updates)
+            "span"
+            ();
+        ]
+      "div"
+      ()
+end
+
 module EmptyBox = struct
   type state = unit
   type msg = unit
@@ -77,7 +149,11 @@ end
 
 let () =
   Well_web.component ~module_:(module LabelBox) ~tag_name:"test-label-box" ();
-  Well_web.component ~module_:(module EmptyBox) ~tag_name:"test-empty-box" ()
+  Well_web.component ~module_:(module EmptyBox) ~tag_name:"test-empty-box" ();
+  Well_web.component
+    ~module_:(module PayloadBox)
+    ~tag_name:"test-payload-box"
+    ()
 
 let document = Dom_html.window##.document
 
@@ -104,6 +180,11 @@ let schedule delay_ms f =
          Js.Unsafe.inject (Js.wrap_callback f);
          Js.Unsafe.inject delay_ms;
        |])
+
+let js_payload_x (n : int) : Js.Unsafe.any =
+  Js.Unsafe.fun_call
+    (Js.Unsafe.js_expr {|function (n) { return { x: n }; }|})
+    [| Js.Unsafe.inject (float_of_int n) |]
 
 let js_string_array (xs : string list) : Js.Unsafe.any =
   let arr = new%js Js.array_empty in
@@ -161,10 +242,44 @@ let run_tests () =
   host##setAttribute (Js.string "label") (Js.string "hello");
   host##setAttribute (Js.string "flagged") (Js.string "true");
   Dom.appendChild body host;
+  let payload_attr : Dom_html.element Js.t =
+    Js.Unsafe.coerce
+      (document##createElement (Js.string "test-payload-box"))
+  in
+  payload_attr##setAttribute (Js.string "payload") (Js.string "{\"x\":1}");
+  Dom.appendChild body payload_attr;
+  let payload_bad : Dom_html.element Js.t =
+    Js.Unsafe.coerce
+      (document##createElement (Js.string "test-payload-box"))
+  in
+  payload_bad##setAttribute (Js.string "payload") (Js.string "not-json");
+  Dom.appendChild body payload_bad;
+  let payload_prop : Dom_html.element Js.t =
+    Js.Unsafe.coerce
+      (document##createElement (Js.string "test-payload-box"))
+  in
+  Dom.appendChild body payload_prop;
+  let payload_pre : Dom_html.element Js.t =
+    Js.Unsafe.coerce
+      (document##createElement (Js.string "test-payload-box"))
+  in
+  define_own_data_prop payload_pre "payload" (js_payload_x 4);
+  Dom.appendChild body payload_pre;
   schedule 40 (fun () ->
       (match query empty ".empty-root" with
        | None -> failwith "FAIL: props=[] empty box did not connect"
        | Some e -> assert_eq "empty box text" (text_of e) "ok");
+      assert_eq "attr_or_prop JSON attr hydrate"
+        (text_of (require_q payload_attr ".payload" ".payload"))
+        "1";
+      assert_eq "attr_or_prop invalid JSON mounts"
+        (text_of (require_q payload_bad ".payload" ".payload"))
+        "none";
+      assert_eq "attr_or_prop JS object pre-upgrade hydrate"
+        (text_of (require_q payload_pre ".payload" ".payload"))
+        "4";
+      set_js_prop payload_prop "payload" (js_payload_x 3);
+      set_js_prop payload_attr "payload" (js_payload_x 9);
       assert_eq "pre-upgrade JS array hydrate"
         (text_of (require_q pre_host ".items" ".items"))
         "pre,upgrade";
@@ -173,6 +288,12 @@ let run_tests () =
           assert_eq "live property after pre-upgrade transfer"
             (text_of (require_q pre_host ".items" ".items"))
             "live,after";
+          assert_eq "attr_or_prop JS object property hydrate"
+            (text_of (require_q payload_prop ".payload" ".payload"))
+            "3";
+          assert_eq "attr_or_prop property overwrites attr"
+            (text_of (require_q payload_attr ".payload" ".payload"))
+            "9";
           assert_eq "attr hydrate label"
             (text_of (require_q host ".label" ".label"))
             "hello";

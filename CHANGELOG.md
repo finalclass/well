@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### New features
+- **Well.Web `Props.attr_or_prop`:** one prop kind that hydrates from an HTML
+  attribute string (`of_string`) or a JS property value (`of_js`, objects
+  used as-is — no `JSON.stringify`). The name is in `observedAttributes` and
+  still gets a prototype setter. Empty string / parse failure is a no-op and
+  must not throw in `connectedCallback`. Property wins over attribute when
+  both exist. `Props.json` is not shipped — decode in the app.
+
 ## v1.3.1 — 2026-08-10
 
 ### Fixes

@@ -48,7 +48,7 @@ val handle_property_set :
   value:Bridge.value ->
   unit
 
-(** Observed attribute names for a tag (props with working [parse_string]). *)
+(** Observed attribute names for a tag (scalars and [Props.attr_or_prop]). *)
 val observed_attribute_names : tag_name:string -> string list
 
 (** All prop names that get JS property accessors on the custom element. *)

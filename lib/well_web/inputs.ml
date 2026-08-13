@@ -110,6 +110,17 @@ let coerce_js_scalar (spec : Component_access.prop_spec) (raw : Bridge.value)
       Some (Obj.repr b)
     | Component_access.Props.List -> coerce_list raw
     | Component_access.Props.Complex -> Some (Obj.magic raw)
+    | Component_access.Props.Attr_or_prop ->
+      let t = Js.to_string (Js.typeof raw_any) in
+      if t = "string" then
+        let s =
+          Js.to_string (Js.Unsafe.coerce raw_any : Js.js_string Js.t)
+        in
+        spec.parse_string s
+      else
+        (match spec.parse_js with
+         | None -> None
+         | Some f -> f raw)
   with _ -> None
 
 let apply_msg_sync ~instance_id (state : Component_access.state)
@@ -221,7 +232,8 @@ let observed_attribute_names ~tag_name =
   |> List.filter_map (fun (s : Component_access.prop_spec) ->
       match s.kind with
       | Component_access.Props.Int | Component_access.Props.Float
-      | Component_access.Props.Bool | Component_access.Props.String ->
+      | Component_access.Props.Bool | Component_access.Props.String
+      | Component_access.Props.Attr_or_prop ->
         Some s.name
       | Component_access.Props.List | Component_access.Props.Complex -> None)
 

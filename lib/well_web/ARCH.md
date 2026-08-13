@@ -189,9 +189,12 @@ HandlePropChange
                  ~> [MessageBus]  (* "vdom" / opcjonalnie "cmd" *)
 ```
 
-- Observed attributes: nazwy props skalarnych (`int`/`float`/`bool`/`string`).
-- JS properties na prototypie CE: **wszystkie** props (w tym `list`/`of_eq`);
-  listy **tylko** property (brak codecu JSON w atrybucie).
+- Observed attributes: nazwy props skalarnych (`int`/`float`/`bool`/`string`)
+  oraz `attr_or_prop` (string z HTML → `of_string`).
+- JS properties na prototypie CE: **wszystkie** props (w tym `list`/`of_eq`
+  oraz `attr_or_prop`); listy **tylko** property (brak codecu JSON w
+  atrybucie). `attr_or_prop`: JS string → `of_string`; inna wartość JS →
+  `of_js` (obiekt bez stringify).
 - Skip gdy `equal` last-seen == nowa wartość.
 - Attr removal → default skalarny; `Props.list` ← JS Array lub OCaml list.
 - Connect: transfer own data props → `__well_prop_*` (unshadow CE accessors).

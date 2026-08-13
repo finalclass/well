@@ -22,7 +22,7 @@ module Vdom = Html
 
 (** Deklaratywne, typowane wejścia komponentu (D18). *)
 module Props : sig
-  type kind = Int | Float | Bool | String | List | Complex
+  type kind = Int | Float | Bool | String | List | Complex | Attr_or_prop
   type 'msg decl
   type 'msg t = 'msg decl list
   val int    : string -> on:(int    -> 'msg) -> ?default:int    -> unit -> 'msg decl
@@ -31,6 +31,33 @@ module Props : sig
   val string : string -> on:(string -> 'msg) -> ?default:string -> unit -> 'msg decl
   val list   : string -> eq:('a -> 'a -> bool) -> on:('a list -> 'msg) -> 'msg decl
   val of_eq  : string -> eq:('a -> 'a -> bool) -> on:('a      -> 'msg) -> 'msg decl
+
+  (** Attr_or_prop — polymorphic host input: HTML attribute string or JS property.
+
+      ```use-case
+      (START)
+      [Odbierz nazwę oraz of_string / of_js / eq / on]
+      [Zarejestruj kind Attr_or_prop (observedAttributes + setter)]
+      <hydrate / attributeChanged / property set>
+        <własna JS property i of_js się uda>
+          [Użyj wartości JS (bez stringify)]
+        <atrybut albo JS string>
+          [of_string; pusta / błąd parse → no-op]
+        <usuń atrybut i jest default>
+          [Zastosuj default]
+      (STOP)
+      ```
+  *)
+  val attr_or_prop :
+    string ->
+    of_string:(string -> 'a option) ->
+    of_js:(Bridge.value -> 'a option) ->
+    eq:('a -> 'a -> bool) ->
+    on:('a -> 'msg) ->
+    ?default:'a ->
+    unit ->
+    'msg decl
+
   val name : 'msg decl -> string
   val kind : 'msg decl -> kind
   val is_observable : 'msg decl -> bool
@@ -262,6 +289,7 @@ type prop_spec = {
   name : string;
   kind : Props.kind;
   parse_string : string -> Obj.t option;
+  parse_js : (Bridge.value -> Obj.t option) option;
   equal : Obj.t -> Obj.t -> bool;
   to_msg : Obj.t -> msg;
   default_value : Obj.t option;

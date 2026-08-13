@@ -95,8 +95,9 @@ kopertę `(state * cmd)`.
 - [RenderView](component_access.mli) — wykonaj view z tokenem projected
   children (`#slot`) i żywym `dispatch`, zwróć vdom.
 - `props_of_instance` / `props_of_tag` — runtime view deklaracji `Props.t`
-  dla Inputs (nazwa, kind, parse_string, equal, to_msg, default_value).
-  `kind` rozróżnia `List` (JS Array / OCaml list) od `Complex` (`of_eq`).
+  dla Inputs (nazwa, kind, parse_string, parse_js, equal, to_msg,
+  default_value). `kind` rozróżnia `List` (JS Array / OCaml list),
+  `Complex` (`of_eq`) i `Attr_or_prop` (atrybut string + JS value).
 - `instance_id_of_element` — reverse lookup host → instance_id.
 
 ## Verification strategy

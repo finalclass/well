@@ -81,8 +81,11 @@ EffectsManager — nie w `update`.
 ## Props / host inputs
 
 - Skalary (`string`/`bool`/`int`/`float`): HTML attribute **oraz** JS property.
+- `attr_or_prop`: HTML attribute (`of_string`) **oraz** JS property (`of_js`
+  gdy wartość nie jest stringiem; JS string też idzie przez `of_string`).
+  Pusty string i błąd parse → no-op (komponent się mountuje).
 - `list` / `of_eq`: **tylko** JS property (`parse_string = None`).
-- Observed attributes = nazwy props skalarnych zadeklarowanych w `props`.
+- Observed attributes = nazwy props skalarnych i `attr_or_prop`.
 - Property accessors na prototypie CE dla wszystkich props.
 - Komponenty z `props = []` bez zmian zachowania.
 - **Hydrate priority:** JS property (jeśli ustawione) wygrywa nad atrybutem HTML.
