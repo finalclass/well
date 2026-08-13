@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixes
+- **Well.Web SVG blit:** `Bridge.create_element` uses `document.createElementNS`
+  for SVG tags (`svg`, `path`, `g`, …). HTML `createElement("svg")` produced
+  non-SVG nodes that did not paint. `div` and other HTML tags are unchanged.
+
 ### New features
 - **Well.Web `Props.attr_or_prop`:** one prop kind that hydrates from an HTML
   attribute string (`of_string`) or a JS property value (`of_js`, objects

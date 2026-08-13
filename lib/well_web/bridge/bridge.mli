@@ -170,12 +170,20 @@ val unsubscribe_channel : subscription_id:string -> unit
 
 (** CreateElement — stwórz element DOM o danym tagu.
 
+    Tagi SVG (m.in. [svg], [path], [g], [circle]) powstają w przestrzeni
+    nazw [http://www.w3.org/2000/svg] przez [document.createElementNS].
+    Pozostałe tagi — [document.createElement] (HTML). Porównanie tagów
+    jest case-sensitive; MLX emituje lowercase.
+
     ```use-case
-    (START)
+    CreateElement
     [Odbierz tag_name]
-    [Wywołaj document.createElement przez FFI]
-    [Zwróć nowy element]
-    (STOP)
+    <tag SVG>
+      [Wywołaj document.createElementNS(svgNs, tag) przez FFI]
+      (END element w SVG ns)
+    <_>
+      [Wywołaj document.createElement przez FFI]
+      (END element w HTML ns)
     ```
 *)
 val create_element : string -> element

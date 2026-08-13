@@ -1,0 +1,9 @@
+; Browser test: SVG tags from Bridge.create_element / TEA blit
+; land in the SVG namespace (createElementNS).
+
+(executable
+ (name svg_ns_test)
+ (modes js)
+ (modules svg_ns_test)
+ (libraries well_web)
+ (preprocess (pps js_of_ocaml-ppx)))

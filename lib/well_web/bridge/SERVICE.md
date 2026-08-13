@@ -47,7 +47,14 @@ verbs udowodnione w spajku S7 (`lib/well_web/spike_ffi.ml`).
   `remove_child`, `replace_child`, `set_attribute`, `remove_attribute`,
   `get_attribute`, `set_bool_attribute`, `get_js_property`,
   `set_js_property`) są thin-FFI — nie walidują argumentów, delegują do
-  JS-runtime. `set_bool_attribute` ustawia/usuwa atrybut HTML i synchronizuje
+  JS-runtime.
+- `create_element` dla znanych tagów SVG (m.in. `svg`, `path`, `g`,
+  `circle`, `line`, `rect`, `text`, `defs`, `clipPath`, `mask`, `use`,
+  `title`, `desc`, filtry `fe*`) woła `document.createElementNS` z
+  `http://www.w3.org/2000/svg`. Pozostałe tagi — `document.createElement`
+  (HTML). Tagi są case-sensitive (MLX emituje lowercase).
+- `set_attribute` na elemencie SVG wystarcza dla atrybutów prezentacyjnych
+  (`viewBox`, `d`, `stroke`); Bridge nie używa `setAttributeNS`. `set_bool_attribute` ustawia/usuwa atrybut HTML i synchronizuje
   typowe IDL boolean properties po nazwie camelCase (`readOnly`, `isMap`,
   `noValidate`, `formNoValidate`, `allowFullscreen`, …) gdy atrybut jest na
   allowliście. `take_own_js_property` / `set_well_prop_storage` służą Inputs
@@ -100,6 +107,11 @@ Nowe imperatywne operacje DOM (diff/patch vdom Rendering Client) — te nie są
 pokryte spajkiem S7, wymagają osobnej weryfikacji w przeglądarce:
 
 - Czy `create_element`/`create_text_node` tworzą poprawne węzły widoczne w DOM.
+- Czy `create_element "svg"` i `create_element "path"` mają
+  `namespaceURI === "http://www.w3.org/2000/svg"` (oraz `path` jest
+  `SVGPathElement`); `create_element "div"` zostaje w HTML ns.
+- Czy blit vdom `<svg><path d="…"/></svg>` daje prawdziwe węzły SVG
+  (malują stroke przy `fill:none; stroke:currentColor`).
 - Czy `insert_before` z `ref_ = None` faktycznie wstawia na końcu (append
   semantyka), a z `ref_ = Some` przed referencją.
 - Czy `replace_child`/`remove_child` mutują rodzica poprawnie (kolejność

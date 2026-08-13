@@ -224,9 +224,27 @@ let unsubscribe_channel ~(subscription_id : string) : unit =
   in
   ()
 
+let svg_ns = "http://www.w3.org/2000/svg"
+
+let is_svg_tag = function
+  | "svg" | "path" | "g" | "circle" | "ellipse" | "line"
+  | "polyline" | "polygon" | "rect" | "text" | "tspan"
+  | "defs" | "clipPath" | "mask" | "use" | "symbol"
+  | "linearGradient" | "radialGradient" | "stop"
+  | "marker" | "pattern" | "foreignObject" | "title" | "desc"
+  | "filter" | "feGaussianBlur" | "feOffset" | "feMerge"
+  | "feMergeNode" | "feColorMatrix" | "feBlend"
+  | "animate" | "animateTransform" | "set" -> true
+  | _ -> false
+
 let create_element (tag_name : string) : element =
-  Js.Unsafe.meth_call document "createElement"
-    [| Js.Unsafe.inject (Js.string tag_name) |]
+  if is_svg_tag tag_name then
+    Js.Unsafe.meth_call document "createElementNS"
+      [| Js.Unsafe.inject (Js.string svg_ns)
+       ; Js.Unsafe.inject (Js.string tag_name) |]
+  else
+    Js.Unsafe.meth_call document "createElement"
+      [| Js.Unsafe.inject (Js.string tag_name) |]
 
 let create_text_node (text : string) : element =
   Js.Unsafe.meth_call document "createTextNode"
