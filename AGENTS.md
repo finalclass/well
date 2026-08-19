@@ -110,7 +110,7 @@ Dla usług backendu z kontraktem TOML, trzeci artefakt to `lib/contract/<Service
 `well init` scaffolduje projekt pinujący `well` z GitHub. Aby przetestować
 lokalne zmiany frameworka na scaffoldzie:
 
-1. W scaffoldzie zmień pin w `dune-project` na `file:///home/sel/Documents/well`.
+1. W scaffoldzie zmień pin w `dune-project` na `file:///home/sel/well`.
 2. Przed `dune pkg lock` tymczasowo przenieś `.agents` (skrypt `dune pkg scan`
    crashuje na katalogu-źródle `.agents/skills/axe`). Przywróć po lock.
 3. `rm -rf dune.lock _build && dune pkg lock && dune build`.
