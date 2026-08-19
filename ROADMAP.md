@@ -1216,3 +1216,5 @@ powinien to wymuszać przez API (aktor dostaje `db` w `init`, nie z zewnątrz).
 ## well.web effects (2026-08-04)
 
 `Cmd.perform` / `batch` / live EffectsManager + `"cmd"` bus subscription + init cmd flush — shipped.
+
+`addr` + `Cmd.send` (parent → child na `dispatch` pętli) — shipped.

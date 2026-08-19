@@ -1,10 +1,11 @@
 (** ComponentAccess — dostęp do zasobu ComponentDefinition.
 
     Ukrywa definicje zarejestrowanych typów komponentów oraz mapowania
-    instancji (instance_id ↔ DOM element ↔ definicja). Pozwala LoopManagerowi
-    zlecać wykonanie [init]/[update]/[view] na module komponentu bez
-    znajomości jego typów. [instance] jest typem wewnętrznym — publiczne API
-    operuje wyłącznie na stringowym identyfikatorze instancji (instance_id).
+    instancji (instance_id ↔ DOM element ↔ definicja) i tożsamości pętli
+    ([addr] → [dispatch], D19). Pozwala LoopManagerowi zlecać wykonanie
+    [init]/[update]/[view] na module komponentu bez znajomości jego typów.
+    [instance] jest typem wewnętrznym — publiczne API operuje wyłącznie na
+    stringowym identyfikatorze instancji (instance_id).
 
     Stan instancji żyje w StateAccess (ComponentAccess nie przechowuje stanu).
 
@@ -63,7 +64,7 @@ module Props : sig
   val is_observable : 'msg decl -> bool
 end
 
-(** Komenda — efekt wychodzący z komponentu (D18 + perform/batch).
+(** Komenda — efekt wychodzący z komponentu (D18 + perform/batch + D19 send).
 
     [update]/[init] only *construct* commands; EffectsManager runs them.
 
@@ -77,6 +78,10 @@ end
     - [perform] — call [run ~dispatch] with a live dispatch that publishes
       on topic ["msg"] for this instance. [run] must schedule async work
       (XHR, timeout, Promise) and not block the TEA loop.
+    - [send] — put [child_msg] on the loop bound to [addr] (parent → child).
+      The registry is existential ([Obj.t]); the value must be the target
+      loop's [msg]. Prefer a child-module helper
+      [let send ~addr (m : msg) = Cmd.send ~addr m].
 *)
 module Cmd : sig
   type ('msg, 'emits) t
@@ -87,6 +92,17 @@ module Cmd : sig
   val focus   : string -> ('msg, 'emits) t
   val batch   : ('msg, 'emits) t list -> ('msg, 'emits) t
   val perform : (dispatch:('msg -> unit) -> unit) -> ('msg, 'emits) t
+
+  (** SendToLoop — put [child_msg] on the loop named by [addr].
+
+      ```use-case
+      (START)
+      [Odbierz addr i child_msg]
+      [Zbuduj Cmd.send (payload spakowany)]
+      (STOP — interpretuje EffectsManager)
+      ```
+  *)
+  val send : addr:string -> 'a -> ('msg, 'emits) t
   val is_none : ('msg, 'emits) t -> bool
 
   (** Fold over the command tree for EffectsManager (order-preserving for batch). *)
@@ -97,6 +113,7 @@ module Cmd : sig
     emit_dom:(name:string -> detail:Obj.t option -> unit) ->
     focus:(string -> unit) ->
     perform:((dispatch:('msg -> unit) -> unit) -> unit) ->
+    send:(addr:string -> Obj.t -> unit) ->
     ('msg, 'emits) t -> unit
 end
 
@@ -303,3 +320,45 @@ val props_of_tag : tag_name:string -> prop_spec list
 
 val instance_id_of_element : Bridge.element -> string option
 (** Reverse lookup host element → instance_id (for attr/property callbacks). *)
+
+(** BindAddr — bind [addr] to this loop's [dispatch]. Last writer wins.
+
+    ```use-case
+    (START)
+    [Odszukaj instancję po instance_id]
+    [Odwiąż poprzedni addr tej instancji jeśli inny]
+    <addr już zajęty przez inną instancję>
+      [Nadpisz (last writer wins); poprzednia pętla traci addr]
+    [Zapisz addr → dispatch]
+    (STOP)
+    ```
+*)
+val bind_addr : instance_id:string -> addr:string -> unit
+
+(** UnbindAddr — drop this loop's addr if it still owns the binding.
+
+    ```use-case
+    (START)
+    [Odszukaj instancję]
+    <brak instancji lub brak addr>
+      [No-op]
+    <tabela addr wskazuje tę instancję>
+      [Usuń wpis]
+    (STOP)
+    ```
+*)
+val unbind_addr : instance_id:string -> unit
+
+(** DispatchOfAddr — packed [dispatch] of the loop bound to [addr].
+
+    ```use-case
+    (START)
+    [Odszukaj addr]
+    <brak / pętla zniszczona>
+      [None]
+    <jest>
+      [Some dispatch]
+    (STOP)
+    ```
+*)
+val dispatch_of_addr : addr:string -> (msg -> unit) option

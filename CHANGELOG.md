@@ -8,6 +8,11 @@
   non-SVG nodes that did not paint. `div` and other HTML tags are unchanged.
 
 ### New features
+- **Well.Web `addr` + `Cmd.send`:** a parent names a child loop with
+  `Html.element ~addr` (MLX `addr=`, HTML `data-well-addr`) and puts that
+  child's `msg` on the loop's `dispatch` via `Cmd.send ~addr msg`. Missing
+  addr is a no-op; last writer wins if two hosts share an addr. Not `key`,
+  not a ref, not `querySelector`.
 - **Well.Web `Props.attr_or_prop`:** one prop kind that hydrates from an HTML
   attribute string (`of_string`) or a JS property value (`of_js`, objects
   used as-is — no `JSON.stringify`). The name is in `observedAttributes` and

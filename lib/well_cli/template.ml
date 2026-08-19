@@ -6446,12 +6446,14 @@ module Cmd : sig
   val msg    : 'msg -> ('msg, 'emits) t           (* self-message (async loop) *)
   val emit   : 'emits -> ('msg, 'emits) t          (* event-w-górę to parent *)
   val focus  : string -> ('msg, 'emits) t          (* focus a DOM element by selector *)
+  val send   : addr:string -> 'a -> ('msg, 'emits) t (* parent → child loop *)
   val is_none : ('msg, 'emits) t -> bool
 end
 ```
 
 - `Cmd.none` — no effect (the common case).
 - `Cmd.emit (CountChanged n)` — declare an output to the **parent** (Manager state). The component does NOT mutate the parent's state; it only emits.
+- `Cmd.send ~addr child_msg` — parent → child: put `child_msg` on the loop named by `addr` (`Html.element ~addr` / MLX `addr=`). Missing addr is a no-op. Not `key` or a ref.
 - `Cmd.msg m` — schedule a self-message (async).
 - `Cmd.focus "selector"` — focus an input after render.
 

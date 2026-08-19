@@ -8,7 +8,9 @@
 
     Algorytm diff jest pozycyjny (children matchowane po indeksie, bez
     keying) — zapożyczony, uproszczony wariant LexiFi/ocaml-vdom.
-    Keyed-diff pojawi się, gdy [Html.vdom] dostanie pole [key]. *)
+    Keyed-diff pojawi się, gdy [Html.vdom] dostanie pole [key].
+    [addr] / [data-well-addr] to tożsamość pętli TEA (D19), nie [key]
+    rekonsyliacji: Rendering traktuje atrybut jak każdy inny. *)
 
 (** Mirror-tree: korekspodobny węzeł DOM + jego źródłowy vdom + dzieci
     ctrl + funkcje odpięcia listenerów. Wewnętrzny; Rendering trzyma

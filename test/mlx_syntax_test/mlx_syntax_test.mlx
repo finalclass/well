@@ -15,6 +15,18 @@ let () =
       |> to_equal_string {|<custom-tag with-custom-arg="abc"></custom-tag>|}
     );
 
+    it "routes addr to data-well-addr" (fun () ->
+      let loop = "project-docs" in
+      let html = <dg-docs-table addr="project-docs" /> |> render in
+      expect html
+      |> to_equal_string
+           {|<dg-docs-table data-well-addr="project-docs"></dg-docs-table>|};
+      let html = <dg-docs-table addr=(loop) /> |> render in
+      expect html
+      |> to_equal_string
+           {|<dg-docs-table data-well-addr="project-docs"></dg-docs-table>|}
+    );
+
     it "renders hyphenated HTML attributes directly" (fun () ->
       let edit_href = "/positions/1/edit" in
       let name = "Manager" in

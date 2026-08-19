@@ -19,7 +19,10 @@ module type COMPONENT = Component_access.COMPONENT
 
 module Vdom = Html
 (** Typ węzła virtual DOM (generyczny nad msg). Aliased to [Html]:
-    ujednolicony typ vdom dla backendu i frontendu. *)
+    ujednolicony typ vdom dla backendu i frontendu.
+
+    [Html.element ~addr] / MLX [addr=] nazywa pętlę dziecka (wire
+    [data-well-addr]). To nie jest [key] vdom. *)
 
 module Props = Component_access.Props
 (** Deklaratywne, typowane wejścia komponentu.
@@ -30,7 +33,10 @@ module Props = Component_access.Props
     błąd parse = no-op. *)
 
 module Cmd = Component_access.Cmd
-(** Komenda (efekt wychodzący z komponentu: emit, Promise, focus, DOM-ops). *)
+(** Komenda (efekt wychodzący z komponentu: emit, send, Promise, focus, DOM-ops).
+
+    [Cmd.send ~addr child_msg] — parent → child: wartość [msg] dziecka na
+    [dispatch] pętli związanej z [addr]. Brak pętli = no-op. *)
 
 type emits = Component_access.emits
 (** Deklarowane wyjścia komponentu (wariant). *)

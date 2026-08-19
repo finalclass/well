@@ -104,6 +104,10 @@ Dla usług backendu z kontraktem TOML, trzeci artefakt to `lib/contract/<Service
   `On_form` | `On_event` | `Ignore`). `on_submit` → `On_form` (`form_data ->
   msg`, FormData + preventDefault). Zob. `DESIGN-COMPONENT.md` /
   `skills/well-front/SKILL.md`.
+- **Parent → child:** `Html.element ~addr` (MLX `addr=`) nazywa pętlę dziecka;
+  `Cmd.send ~addr child_msg` kładzie `msg` na jej `dispatch`. To nie jest
+  `key`, `ref`, `querySelector` ani bus. Child → parent zostaje `Cmd.emit`.
+  Brak `addr` = no-op. Skill: `/well-front`.
 
 ## Testowanie zmian w samym frameworku
 

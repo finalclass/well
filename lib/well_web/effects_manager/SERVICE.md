@@ -9,7 +9,9 @@ publikuje wynikowe wiadomości na topic `"msg"` gdy komenda tego wymaga.
 ## Abstraction boundary
 
 Enkapsuluje V-side-effects — słownik + interpretacja Cmd. LoopManager wie
-tylko „opublikuj cmd”; EffectsManager wie **jak** ją wykonać.
+tylko „opublikuj cmd”; EffectsManager wie **jak** ją wykonać, w tym
+`Cmd.send` (lookup `addr` w ComponentAccess, nie `instance_id` koperty —
+koperta to pętla rodzica).
 
 ## Wspierane Cmd
 
@@ -22,11 +24,14 @@ tylko „opublikuj cmd”; EffectsManager wie **jak** ją wykonać.
 | `focus sel` | `requestAnimationFrame` → `querySelector` na hoście → `.focus()` |
 | `batch cs` | sekwencyjnie, zachowana kolejność, zagnieżdżenia OK |
 | `perform f` | `f ~dispatch` z żywym `dispatch` publikującym na `"msg"`; wyjątki z setupu są połykane |
+| `send ~addr m` | lookup `addr` → `dispatch` pętli dziecka; brak wpisu = **no-op** |
 
 ## Assumptions
 
 - Envelope `cmd` ma poprawne `instance_id` i payload typu `Cmd.t` komponentu.
+  Dla `send` `instance_id` to pętla **nadawcy**; cel to `addr`.
 - Host DOM istnieje dla `emit` / `focus` (brak hosta = no-op).
+- `send` na brakujący `addr` = no-op (jak `focus` przy braku węzła).
 - `perform` nie blokuje pętli TEA — app planuje async (XHR, timeout, Promise)
   i woła `dispatch` z callbacków.
 - Subskrypcja topicu `"cmd"` jest rejestrowana raz przy starcie runtime
@@ -38,5 +43,7 @@ tylko „opublikuj cmd”; EffectsManager wie **jak** ją wykonać.
 
 ## Verification strategy
 
-- Unit: `test/cmd_effects_test` — `is_none`, `iter`/`batch` order, `perform` ctor.
-- Integracja e2e: `test_e2e_counter` (emit path); perform/init — ręcznie / app.
+- Unit: `test/cmd_effects_test` — `is_none`, `iter`/`batch` order, `perform` /
+  `send` ctor.
+- Integracja e2e: `test_e2e_counter` (emit path); `test_addr_send` (parent
+  `Cmd.send` → child `dispatch`); perform/init — ręcznie / app.

@@ -4,7 +4,7 @@
  (name well_web)
  (public_name well.web)
  (wrapped false)
- (libraries well.web.component_access well.web.bridge well.web.state_access well.web.loop_manager well.web.effects_manager well.web.message_bus js_of_ocaml)
+ (libraries well.html well.web.component_access well.web.bridge well.web.state_access well.web.loop_manager well.web.effects_manager well.web.message_bus js_of_ocaml)
  (preprocess (pps js_of_ocaml-ppx))
  (modules :standard \ hello spike_mlx spike_stack spike_ffi))
 

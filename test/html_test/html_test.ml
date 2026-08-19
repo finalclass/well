@@ -72,6 +72,29 @@ let () =
       );
     );
 
+    describe "addr" (fun () ->
+      it "serializes element ~addr as data-well-addr" (fun () ->
+        expect
+          (to_str
+             (Html.element "dg-docs-table" ~addr:"project-docs" ()))
+        |> to_equal_string
+             {|<dg-docs-table data-well-addr="project-docs"></dg-docs-table>|}
+      );
+      it "omits data-well-addr when addr is empty" (fun () ->
+        expect (to_str (Html.element "dg-docs-table" ~addr:"" ()))
+        |> to_equal_string {|<dg-docs-table></dg-docs-table>|}
+      );
+      it "lets ~addr win over a data-well-addr in attrs" (fun () ->
+        expect
+          (to_str
+             (Html.element "x-el"
+                ~addr:"b"
+                ~attrs:[ (Html.addr_attr, "a") ]
+                ()))
+        |> to_equal_string {|<x-el data-well-addr="b"></x-el>|}
+      );
+    );
+
     describe "tag attributes" (fun () ->
       it "renders href on anchor" (fun () ->
         expect (to_str (Html.a ~attrs:[("href", "/home")] ~children:[Html.txt "Home"] ())) |> to_contain {|href="/home"|}

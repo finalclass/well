@@ -175,23 +175,25 @@ let make_jsx_element ~raise ~loc:_ ~tag ~end_tag ~props ~children () =
       props
   in
   let html_props tag_name tag_loc =
-    let attrs, bool_attrs, handlers, attrs_base, bool_attrs_base =
+    let attrs, bool_attrs, handlers, attrs_base, bool_attrs_base, addr =
       List.fold_left
-        (fun (attrs, bool_attrs, handlers, attrs_base, bool_attrs_base) -> function
+        (fun (attrs, bool_attrs, handlers, attrs_base, bool_attrs_base, addr) -> function
           | loc, `Prop_punned name ->
-              (attrs, string_exp ~loc (attr_name name) :: bool_attrs, handlers, attrs_base, bool_attrs_base)
+              (attrs, string_exp ~loc (attr_name name) :: bool_attrs, handlers, attrs_base, bool_attrs_base, addr)
           | _loc, `Prop ("attrs", expr) ->
-              (attrs, bool_attrs, handlers, Some expr, bool_attrs_base)
+              (attrs, bool_attrs, handlers, Some expr, bool_attrs_base, addr)
           | _loc, `Prop ("bool_attrs", expr) ->
-              (attrs, bool_attrs, handlers, attrs_base, Some expr)
+              (attrs, bool_attrs, handlers, attrs_base, Some expr, addr)
+          | _loc, `Prop ("addr", expr) ->
+              (attrs, bool_attrs, handlers, attrs_base, bool_attrs_base, Some expr)
           | loc, `Prop (name, expr) when String.length name > 3 && String.sub name 0 3 = "on_" ->
               let event_name = String.sub name 3 (String.length name - 3) in
               let event_label = string_exp ~loc event_name in
               let handler_expr = wrap_handler ~loc event_name expr in
-              (attrs, bool_attrs, tuple2 ~loc event_label handler_expr :: handlers, attrs_base, bool_attrs_base)
+              (attrs, bool_attrs, tuple2 ~loc event_label handler_expr :: handlers, attrs_base, bool_attrs_base, addr)
           | loc, `Prop (name, expr) ->
               let name = string_exp ~loc (attr_name name) in
-              (tuple2 ~loc name expr :: attrs, bool_attrs, handlers, attrs_base, bool_attrs_base)
+              (tuple2 ~loc name expr :: attrs, bool_attrs, handlers, attrs_base, bool_attrs_base, addr)
           | _loc, `Prop_opt_punned name ->
               ignore name;
               Stdlib.raise
@@ -202,7 +204,7 @@ let make_jsx_element ~raise ~loc:_ ~tag ~end_tag ~props ~children () =
               Stdlib.raise
                 Syntaxerr.(
                   Error (Other (make_loc _loc))))
-        ([], [], [], None, None) props
+        ([], [], [], None, None, None) props
     in
     let attrs = List.rev attrs in
     let bool_attrs = List.rev bool_attrs in
@@ -222,13 +224,18 @@ let make_jsx_element ~raise ~loc:_ ~tag ~end_tag ~props ~children () =
       | Some base, _ -> append_exp ~loc:tag_loc base bool_attrs_expr
       | None, _ -> bool_attrs_expr
     in
-    [
-      (Nolabel, string_exp ~loc:tag_loc tag_name);
-      (Labelled "attrs", attrs_expr);
-      (Labelled "bool_attrs", bool_attrs_expr);
-      (Labelled "handlers", handlers_expr);
-      (Labelled "children", children);
-    ]
+    let args =
+      [
+        (Nolabel, string_exp ~loc:tag_loc tag_name);
+        (Labelled "attrs", attrs_expr);
+        (Labelled "bool_attrs", bool_attrs_expr);
+        (Labelled "handlers", handlers_expr);
+        (Labelled "children", children);
+      ]
+    in
+    match addr with
+    | None -> args
+    | Some expr -> args @ [ (Labelled "addr", expr) ]
   in
   let unit =
     Exp.mk ~loc:Location.none

@@ -169,9 +169,13 @@ element
   ~handlers:[ ("click", on_click Increment) ]
   ~text:"+"
   "button" ()
+
+(* Name a child loop (parent view) — not a vdom key, not a ref *)
+Html.element "dg-docs-table" ~addr:"project-docs" ()
 ```
 
 `Html.on_click : 'msg -> 'msg handler` is the `Msg` constructor.
+`~addr` writes `data-well-addr`; the child's loop is then a `Cmd.send` target.
 
 ## Props — typed inputs (attributes)
 
@@ -217,12 +221,14 @@ module Cmd : sig
   val focus    : string -> ('msg, 'emits) t
   val batch    : ('msg, 'emits) t list -> ('msg, 'emits) t
   val perform  : (dispatch:('msg -> unit) -> unit) -> ('msg, 'emits) t
+  val send     : addr:string -> 'a -> ('msg, 'emits) t
   val is_none  : ('msg, 'emits) t -> bool
 end
 ```
 
 - `Cmd.none` — no effect (the common case).
 - `Cmd.emit (CountChanged n)` — typed emit → host `CustomEvent` **`well-emit`** with `detail = emits`. Parent may also use `Cmd.emit_dom ~name:"…"` for a specific event name.
+- `Cmd.send ~addr child_msg` — parent → child: put `child_msg` on that loop's `dispatch`. See **addr** below.
 - `Cmd.msg m` — schedule a self-message (async bus hop through EffectsManager → LoopManager).
 - `Cmd.focus "selector"` — rAF + `querySelector` on host + `.focus()`.
 - `Cmd.batch [c1; c2]` — run commands in order (nested OK).
@@ -282,6 +288,59 @@ Cmd.perform (fun ~dispatch ->
 Link the app jsoo executable against the generated `contract_browser` library
 (and `yojson` / jsoo). Server in-process clients stay on `build/ocaml/`.
 
+## addr — name a child loop (parent → child)
+
+`addr` is the identity of a **running TEA loop**, set when the parent
+renders the child host. It is not `key` (vdom list reconciliation) and not
+a `ref` / instance handle. Do not use `querySelector`, host methods, a
+window CustomEvent bus, or a fake pulse attribute (`refresh=n`).
+
+```ocaml
+Html.element "dg-docs-table"
+  ~addr:"project-docs"
+  ~attrs:[("scopes", scopes_json)]
+  ()
+```
+
+MLX: `addr="project-docs"` on the host tag (same `~addr`; the HTML wire is
+`data-well-addr`). Addr is optional — hosts without it stay unaddressable.
+
+Multiple instances of the same tag are distinguished by different addrs.
+Two hosts with the same addr: last writer wins (application bug).
+
+### send vs emit
+
+| Direction | API | What it does |
+|---|---|---|
+| child → parent | `Cmd.emit` / `Cmd.emit_dom` | CustomEvent on the **child** host (bubbles up) |
+| parent → child data | `Props` / host attributes | declared inputs (hydrate / live setters) |
+| parent → child command | `Cmd.send ~addr msg` | child's `msg` on that loop's `dispatch` |
+
+`Cmd.send` is an effect (EffectsManager). Do not call `dispatch` from
+`view`. Missing addr is a **no-op** (the loop may be unmounted).
+
+Typing: the registry is an existential mailbox. `Cmd.send ~addr m` is
+only convention-safe — `m` must be the **target** loop's `msg`. Prefer a
+helper in the child module so only that module names its msgs:
+
+```ocaml
+(* child module, e.g. dg_docs_table.mlx *)
+type msg = Reload | ...
+let send ~addr (m : msg) = Well_web.Cmd.send ~addr m
+
+let load state = (* existing load path *)
+let update state = function
+  | Reload -> load state
+  | ...
+
+(* parent update — no host object *)
+| Mass_files_closed ->
+    (state, Dg_docs_table.send ~addr:"project-docs" Reload)
+```
+
+Worked example (parent owns two tables; close → reload one):
+`lib/well_web/test_addr_send/addr_send_test.ml`.
+
 ## emits — declared outputs
 
 A typed variant listing what the component may emit up. This is the component's contract with its parent:
@@ -290,7 +349,9 @@ A typed variant listing what the component may emit up. This is the component's 
 type emits = CountChanged of int | Reset
 ```
 
-The parent listens (in shell HTML or a parent component) and reacts. Direction is **always up**; the component never reaches into the parent's state.
+The parent listens (in shell HTML or a parent component) and reacts. Outputs
+travel **up** (`emit`); parent commands travel **down** by `addr` +
+`Cmd.send` — the child never reaches into the parent's state.
 
 ## Reference example: `web/counter.mlx`
 
@@ -355,6 +416,7 @@ Well.get "/counter" @@ fun _req ->
 - **`(txt "")` for empty output** — there is no `empty` node. Use it in conditional else-branches.
 - **`{...}` is record syntax ONLY** — not interpolation. Use `(expr)` for function calls.
 - **No inline `fun` in attribute values** — name handlers first (see typed handlers above).
+- **`addr=` names a TEA loop**, not a vdom `key` and not an app prop. Desugars to `Html.element ~addr`; HTML wire is `data-well-addr`. Parent commands: `Cmd.send ~addr`.
 
 ## Verification
 

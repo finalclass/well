@@ -1,0 +1,8 @@
+; Browser test + example: parent Cmd.send → child loop by addr.
+
+(executable
+ (name addr_send_test)
+ (modes js)
+ (modules addr_send_test)
+ (libraries well_web well.web.component_access)
+ (preprocess (pps js_of_ocaml-ppx)))

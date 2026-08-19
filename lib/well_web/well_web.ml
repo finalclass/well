@@ -53,10 +53,24 @@ let publish_cmd ~instance_id (cmd : Component_access.cmd) =
     in
     Message_bus.publish ~topic:"cmd" cmd_bus
 
+let host_addr (host : Bridge.element) : string option =
+  match Bridge.get_attribute host ~name:Html.addr_attr with
+  | None -> None
+  | Some a ->
+    let a = String.trim a in
+    if a = "" then None else Some a
+
+let bind_host_addr ~instance_id host =
+  match host_addr host with
+  | None -> Component_access.unbind_addr ~instance_id
+  | Some addr -> Component_access.bind_addr ~instance_id ~addr
+
 let component ~module_ ~tag_name ?(shadow_dom = false) () =
   Component_access.register_type ~module_ ~tag_name ~shadow_dom ();
   ensure_runtime ();
-  let observed = Inputs.observed_attribute_names ~tag_name in
+  let observed =
+    Html.addr_attr :: Inputs.observed_attribute_names ~tag_name
+  in
   let prop_names = Inputs.property_names ~tag_name in
   let on_connect dom_element =
     let instance_id =
@@ -72,6 +86,7 @@ let component ~module_ ~tag_name ?(shadow_dom = false) () =
           Component_access.state * Component_access.cmd =
       (Obj.magic init_env : _ envelope).payload
     in
+    bind_host_addr ~instance_id dom_element;
     let state_key = Component_access.state_key ~instance_id in
     State_access.persist state_key initial_state;
     let hydrated =
@@ -101,7 +116,12 @@ let component ~module_ ~tag_name ?(shadow_dom = false) () =
       Instance_table.remove instances dom_element
   in
   let on_attribute_change host ~name ~old_value ~new_value =
-    Inputs.handle_attribute_change ~host ~name ~old_value ~new_value
+    if name = Html.addr_attr then
+      match Component_access.instance_id_of_element host with
+      | None -> ()
+      | Some instance_id -> bind_host_addr ~instance_id host
+    else
+      Inputs.handle_attribute_change ~host ~name ~old_value ~new_value
   in
   let on_property_set host ~name ~value =
     Inputs.handle_property_set ~host ~name ~value

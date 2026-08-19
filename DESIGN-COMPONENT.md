@@ -187,10 +187,12 @@ Trzy arg-pary, które przegapiliśmy w początkowym szkicu:
 | **`init` arg** | `(dispatch, func)` gdzie `func` rejestruje `onRefChange` | `(dispatch)` | `onRefChange` służy do mierzenia wymiarów po mount. Pomijamy na start, dodamy jako `?on_ref_change` w lifecycle, jeśli spike pokaże potrzebę. |
 | **`view` arg** | `(state, children)` | `(state, dispatch, children)` | **Trzymane**, ale rozszerzone o `dispatch` (TEA wymaga). Light-DOM children projektują się do komponentu jak slot — bez tego komponenty nie komponują się (Elm/TEA standard). |
 
-## FINALNA SYGNATURA (stan po D18)
+## FINALNA SYGNATURA (D18 + addenda)
 
 > Sekcje D7–D11 oraz D17 są **historyczne** (reprezentują postęp myślenia);
 > zostały unieważnione przez D18. Patrz notki „unieważnione przez D18".
+> Living `Cmd`: D18 dało typowany `emit`; `emit_dom` / `perform` (2026-08-04)
+> i `addr` / `Cmd.send` (D19, 2026-08-19) są częścią kontraktu, nie opcją.
 
 ```ocaml
 module type COMPONENT = sig
@@ -506,21 +508,29 @@ let props : msg Props.t =
   ]
 ```
 
-### `Cmd` — dwuparametrowy (type-safe emit)
+### `Cmd` — dwuparametrowy (type-safe emit + send)
 
 ```ocaml
 module Cmd : sig
   type ('msg, 'emits) t
-  val none  : ('msg, 'emits) t
-  val msg   : 'msg -> ('msg, 'emits) t
-  val emit  : 'emits -> ('msg, 'emits) t     (* type-safe: wymaga konstruktora z `emits` *)
-  val batch : ('msg, 'emits) t list -> ('msg, 'emits) t
-  val focus : string -> ('msg, 'emits) t
+  val none     : ('msg, 'emits) t
+  val msg      : 'msg -> ('msg, 'emits) t
+  val emit     : 'emits -> ('msg, 'emits) t
+  val emit_dom : name:string -> ?detail:'a -> unit -> ('msg, 'emits) t
+  val focus    : string -> ('msg, 'emits) t
+  val batch    : ('msg, 'emits) t list -> ('msg, 'emits) t
+  val perform  : (dispatch:('msg -> unit) -> unit) -> ('msg, 'emits) t
+  val send     : addr:string -> 'a -> ('msg, 'emits) t
 end
 ```
 
 `Cmd.emit (Renamed "Hello")` czyta się jak zdanie. Nie da się wyemitować
 nazwy, której nie ma w `emits` — kompilator pilnuje.
+
+`Cmd.send ~addr child_msg` — parent → child: wartość `msg` **docelowej**
+pętli na jej `dispatch`. `'a` jest niezależne od `msg` rodzica (skrzynka
+egzystencjalna). Tożsamość pętli: `Html.element ~addr` / MLX `addr=`
+(wire `data-well-addr`). Semantyka: D19.
 
 ### Zaktualizowana sygnatura `COMPONENT` (TRZY typy abstrakcyjne)
 
@@ -764,6 +774,8 @@ round-tripuje.
 - (c) vdom vs html-string → **vdom Elm-style (D16)**.
 - Props/attribute_change → **deklaratywne `Props.t` (D18)** — unieważnia D7, D9, D10, D11.
 - Event-w-górę → **`Cmd.emit : emits -> cmd` type-safe (D18)** — unieważnia D9.
+- Parent → child komenda → **`addr` + `Cmd.send` (D19)** — nie `key`, nie ref,
+  nie `querySelector`.
 
 **W toku (czeka na Fazę 0):**
 - (b) First-class module vs functor — **D1 przyjmuje first-class**, odwrócić
@@ -827,9 +839,11 @@ subskrypcji topicu `"cmd"`, `init` odrzucało cmd i podawało no-op dispatch).
 
 **Aktualny kontrakt publiczny** (`Well_web.Cmd` / `Component_access.Cmd`):
 
-- `none`, `msg`, `emit`, `emit_dom`, `focus`, `batch`, `perform`
+- `none`, `msg`, `emit`, `emit_dom`, `focus`, `batch`, `perform`, `send`
 - `perform : (dispatch:('msg -> unit) -> unit) -> …` — ogólny efekt;
   aplikacja woła XHR/timeout w closure i `dispatch` z callbacków.
+- `send : addr:string -> 'a -> …` — parent → child na `dispatch` pętli
+  `addr` (D19).
 - `then_` (Promise sugar) — **opcjonalne później**; nie blokuje, gdy `perform`
   wystarcza.
 - `emit e` → DOM `CustomEvent` nazwa **`well-emit`**, `detail = e`.
@@ -838,6 +852,78 @@ subskrypcji topicu `"cmd"`, `init` odrzucało cmd i podawało no-op dispatch).
 
 EffectsManager jest zaimplementowany; LoopManager nadal tylko publikuje
 nie-none cmd na `"cmd"`.
+
+---
+
+## D19 — `addr` + `Cmd.send` (parent → child)
+
+**Rozstrzygnięte (2026-08-19).** Living contract.
+
+Parent i child to osobne pętle TEA. Child → parent zostaje `Cmd.emit` /
+`Cmd.emit_dom`. Parent → child *komenda* (np. `Reload`) idzie przez
+**addr** (tożsamość pętli) + **`Cmd.send`** (efekt w EffectsManager).
+
+To **nie** jest: `key` (rekonsyliacja listy vdom), `ref` / uchwyt instancji,
+`querySelector` + metoda hosta, `window` CustomEvent / globalny bus,
+fałszywy atrybut-impuls (`refresh=n`), remount jako API.
+
+### Tożsamość pętli
+
+`addr` (string) ustawia rodzic **w tym samym miejscu, w którym tworzy host
+dziecka**:
+
+```ocaml
+Html.element "dg-docs-table"
+  ~addr:"project-docs"
+  ~attrs:[("scopes", scopes_json)]
+  ()
+```
+
+MLX: `addr="project-docs"` na tagu hosta (to samo `~addr`, nie atrybut
+aplikacji). Wire HTML: `data-well-addr` (konwencja `data-well-*`). `addr`
+jest opcjonalny — host bez niego nie jest adresowalny.
+
+Wiele instancji tego samego tagu rozróżnia się różnymi `addr`. Dwa hosty
+z tym samym `addr`: last writer wins (błąd aplikacji; udokumentowane).
+
+### Komenda
+
+```ocaml
+Well_web.Cmd.send ~addr:"project-docs" Dg_docs_table.Reload
+```
+
+Albo helper w module dziecka (preferowane — tylko ten moduł nazywa swoje
+`msg`):
+
+```ocaml
+let send ~addr (m : msg) = Well_web.Cmd.send ~addr m
+(* parent: *)
+Dg_docs_table.send ~addr:"project-docs" Reload
+```
+
+Runtime:
+
+- connect: odczyt `data-well-addr` z hosta → rejestracja `addr → dispatch`
+- disconnect / destroy: wyrejestrowanie (tylko gdy ta pętla nadal posiada wpis)
+- `Cmd.send`: lookup; jest → `dispatch child_msg`; brak → **no-op**
+  (jak `Cmd.focus` przy braku węzła). Brak błędu — pętla może nie być
+  zamontowana albo już odłączona.
+- zmiana `data-well-addr` na żywym hoście: rebind
+- `update` zostaje `(state -> msg -> state * Cmd.t)`; send jest efektem,
+  nie wywołaniem `dispatch` z `view`
+
+Typowanie: rejestr to skrzynka egzystencjalna (`Obj.t → unit`).
+`Cmd.send` jest bezpieczne tylko konwencją (wartość musi być `msg`
+docelowej pętli). Parent nie zna `state` dziecka.
+
+### `Cmd` po D19
+
+```ocaml
+val send : addr:string -> 'a -> ('msg, 'emits) t
+```
+
+`'a` jest `msg` dziecka, niezależne od `msg` rodzica. Interpretuje
+wyłącznie EffectsManager.
 
 ---
 

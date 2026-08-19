@@ -84,23 +84,40 @@ let bool_attrs_to_string bools =
 
 (* ── Shared element constructor ───────────────────────────────────── *)
 
+(** HTML attribute naming a TEA loop ([Html.element ~addr], MLX [addr=]). *)
+let addr_attr = "data-well-addr"
+
+let merge_addr addr attrs =
+  let attrs = List.filter (fun (k, _) -> k <> addr_attr) attrs in
+  match addr with
+  | None -> attrs
+  | Some a ->
+    let a = String.trim a in
+    if a = "" then attrs else (addr_attr, a) :: attrs
+
+(** [?addr] — TEA loop identity for [Cmd.send] (HTML [data-well-addr]). *)
 let element (tag : string) ?(attrs : (string * string) list = [])
     ?(bool_attrs : string list = []) ?(handlers : (string * _ handler) list = [])
-    ?(children : _ node list = []) ?(text : string = "") () : 'msg node =
+    ?(children : _ node list = []) ?(text : string = "") ?addr () : 'msg node =
+  let attrs = merge_addr addr attrs in
   `Html { tag; attrs; bool_attrs; handlers; children; text = Some text; void = false }
 
 let void_element (tag : string) ?(attrs : (string * string) list = [])
     ?(bool_attrs : string list = []) ?(handlers : (string * _ handler) list = [])
-    ?(children : _ node list = []) ?(text : string = "") () : 'msg node =
+    ?(children : _ node list = []) ?(text : string = "") ?addr () : 'msg node =
+  let attrs = merge_addr addr attrs in
   `Html { tag; attrs; bool_attrs; handlers; children; text = Some text; void = true }
 
-(** Build a normal (closing-tag) element. MLX desugars [<tag ...>] to this. *)
-let tag name ?attrs ?bool_attrs ?handlers ?children ?text () =
-  element name ?attrs ?bool_attrs ?handlers ?children ?text ()
+(** Build a normal (closing-tag) element. MLX desugars [<tag ...>] to this.
+
+    [?addr] names a TEA loop on a child host ([Cmd.send] target). Wire:
+    [data-well-addr]. Not a vdom [key]. Omitted / empty = unaddressable. *)
+let tag name ?attrs ?bool_attrs ?handlers ?children ?text ?addr () =
+  element name ?attrs ?bool_attrs ?handlers ?children ?text ?addr ()
 
 (** Build a void/self-closing element (e.g. [<input />]). *)
-let void_tag name ?attrs ?bool_attrs ?handlers ?children ?text () =
-  void_element name ?attrs ?bool_attrs ?handlers ?children ?text ()
+let void_tag name ?attrs ?bool_attrs ?handlers ?children ?text ?addr () =
+  void_element name ?attrs ?bool_attrs ?handlers ?children ?text ?addr ()
 
 (** Wrap a vdom into a node. *)
 let node (v : 'msg vdom) : 'msg node = `Html v

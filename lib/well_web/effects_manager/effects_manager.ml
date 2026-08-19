@@ -44,6 +44,11 @@ let run_one ~instance_id (cmd : Component_access.cmd) =
     ~perform:(fun f ->
       let dispatch (m : Obj.t) = publish_msg ~instance_id m in
       try f ~dispatch with _ -> ())
+    ~send:(fun ~addr packed ->
+      match Component_access.dispatch_of_addr ~addr with
+      | None -> ()
+      | Some dispatch ->
+        try dispatch (Obj.obj packed : Component_access.msg) with _ -> ())
 
 let handle_cmd ~instance_id envelope =
   let cmd : Component_access.cmd =

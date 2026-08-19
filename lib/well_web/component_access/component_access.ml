@@ -152,6 +152,7 @@ module Cmd = struct
     | Focus of string
     | Batch of ('msg, 'emits) t list
     | Perform of (dispatch:('msg -> unit) -> unit)
+    | Send of string * Obj.t
 
   let none = None
   let msg m = Msg m
@@ -161,21 +162,24 @@ module Cmd = struct
   let focus selector = Focus selector
   let batch cs = Batch cs
   let perform f = Perform f
+  let send ~addr m = Send (addr, Obj.repr m)
 
   let rec is_none : (_, _) t -> bool = function
     | None -> true
     | Batch cs -> List.for_all is_none cs
     | _ -> false
 
-  let rec iter ~none ~msg ~emit ~emit_dom ~focus ~perform cmd =
+  let rec iter ~none ~msg ~emit ~emit_dom ~focus ~perform ~send cmd =
     match cmd with
     | None -> none ()
     | Msg m -> msg m
     | Emit e -> emit e
     | Emit_dom (name, detail) -> emit_dom ~name ~detail
     | Focus s -> focus s
-    | Batch cs -> List.iter (iter ~none ~msg ~emit ~emit_dom ~focus ~perform) cs
+    | Batch cs ->
+      List.iter (iter ~none ~msg ~emit ~emit_dom ~focus ~perform ~send) cs
     | Perform f -> perform f
+    | Send (addr, packed) -> send ~addr packed
 end
 
 type emits = Obj.t
@@ -211,12 +215,16 @@ type instance = Instance : {
   mutable projected : Bridge.element list;
   mutable projected_captured : bool;
   mutable dispatch : msg -> unit;
+  mutable addr : string option;
 } -> instance
 
 let types : (string, (module COMPONENT) * bool) Hashtbl.t =
   Hashtbl.create 16
 
 let instances : (string, instance) Hashtbl.t =
+  Hashtbl.create 64
+
+let addrs : (string, string) Hashtbl.t =
   Hashtbl.create 64
 
 let counter = ref 0
@@ -243,10 +251,59 @@ let create_instance ~tag_name ~dom_element =
            projected = [];
            projected_captured = false;
            dispatch = (fun _ -> ());
+           addr = None;
          });
     instance_id
 
+let unbind_addr ~instance_id =
+  match Hashtbl.find_opt instances instance_id with
+  | None -> ()
+  | Some (Instance r) ->
+    (match r.addr with
+     | None -> ()
+     | Some addr ->
+       (match Hashtbl.find_opt addrs addr with
+        | Some owner when owner = instance_id -> Hashtbl.remove addrs addr
+        | _ -> ());
+       r.addr <- None)
+
+let bind_addr ~instance_id ~addr =
+  let addr = String.trim addr in
+  match Hashtbl.find_opt instances instance_id with
+  | None ->
+    failwith ("ComponentAccess.bind_addr: unknown instance " ^ instance_id)
+  | Some (Instance r) ->
+    if addr = "" then unbind_addr ~instance_id
+    else begin
+      (match r.addr with
+       | Some old when old <> addr ->
+         (match Hashtbl.find_opt addrs old with
+          | Some owner when owner = instance_id -> Hashtbl.remove addrs old
+          | _ -> ())
+       | _ -> ());
+      (match Hashtbl.find_opt addrs addr with
+       | Some other when other <> instance_id ->
+         (match Hashtbl.find_opt instances other with
+          | Some (Instance o) -> o.addr <- None
+          | None -> ())
+       | _ -> ());
+      r.addr <- Some addr;
+      Hashtbl.replace addrs addr instance_id
+    end
+
+let dispatch_of_addr ~addr : (msg -> unit) option =
+  let addr = String.trim addr in
+  if addr = "" then None
+  else
+    match Hashtbl.find_opt addrs addr with
+    | None -> None
+    | Some instance_id ->
+      (match Hashtbl.find_opt instances instance_id with
+       | None -> None
+       | Some (Instance r) -> Some r.dispatch)
+
 let destroy_instance ~instance_id =
+  unbind_addr ~instance_id;
   Hashtbl.remove instances instance_id
 
 let dom_element ~instance_id =

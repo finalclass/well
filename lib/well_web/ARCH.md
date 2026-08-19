@@ -11,6 +11,7 @@
 |---|---|
 | ComponentState | RAM (per-instancja). Persystencja konfigurowalna w przyszłości (localStorage, serwer). Historia stanu (time-travel) — możliwa. |
 | ComponentDefinition | First-class module (init/update/view/props/emits) + konfiguracja (tag_name, shadow_dom). |
+| LoopAddr | RAM. Tożsamość pętli: `addr` → `dispatch`. Życie = connect…disconnect. W ComponentAccess. |
 
 ## Components table
 
@@ -26,7 +27,7 @@
 
 **Well.Web** jest pojedynczym Clientem — fasadą dla aplikacji. Implementacja dziś:
 
-- `well_web.ml` — `val component` (entry-point), lifecycle `on_connect` / `on_disconnect`, rejestracja custom elementu przez Bridge, mount path (create → init → persist → **Inputs.hydrate** → vdom → cmd).
+- `well_web.ml` — `val component` (entry-point), lifecycle `on_connect` / `on_disconnect`, rejestracja custom elementu przez Bridge, mount path (create → init → `bind_addr` → persist → **Inputs.hydrate** → vdom → cmd).
 - `rendering.ml` — subscribe `"vdom"`, blit/sync vdom → DOM przez Bridge (attrs **i bool_attrs**); **attach_listener** na handlerach DOM → `dispatch` → publish `"msg"` (ścieżka interakcji użytkownika). Węzeł `tag="#slot"`: reparent projected light-DOM z ComponentAccess (tożsamość węzłów, bez rebuild).
 - `inputs.ml` — Inputs: hydrate host attrs/properties przy connect; `attributeChangedCallback` + JS property setters → publish `"msg"` (ta sama ścieżka co eventy DOM).
 
@@ -50,7 +51,7 @@ What
 How
 
 How-to-access -> Where
-- [StateAccess]->(ComponentState)  [ComponentAccess]->(ComponentDefinition)
+- [StateAccess]->(ComponentState)  [ComponentAccess]->(ComponentDefinition)  [ComponentAccess]->(LoopAddr)
 
 Cross-cutting
 - [MessageBus] [Bridge]
@@ -64,7 +65,7 @@ Wolatylności enkapsulowane per warstwa:
 | Manager | LoopManager | Mechanika pętli TEA (scheduling, batching, re-entrancja) |
 | Manager | EffectsManager | Słownik + interpretacja efektów wychodzących (Cmd, DOM-ops) |
 | Access | StateAccess | Lokalizacja stanu (pure-client, localStorage, baza, SSR) |
-| Access | ComponentAccess | Interfejs/kontrakt modułu komponentu (init/update/view/props/emits) |
+| Access | ComponentAccess | Interfejs/kontrakt modułu komponentu (init/update/view/props/emits) + mapowanie instancji + `addr` → `dispatch` |
 | Cross-cutting | MessageBus | Komunikacja async między warstwami (Pub/Sub, kolejkowane in/out) |
 | Cross-cutting | Bridge | Translacja żądań runtime do świata zewnętrznego (JS-runtime, FFI jsoo) |
 
@@ -93,6 +94,8 @@ HandleInteraction
                  ~> [EffectsManager]
                       -> [Bridge]
                       ~> [MessageBus]  (* perform/msg → "msg" → LoopManager *)
+                      -> [ComponentAccess]  (* send: addr → dispatch *)
+                      ~> [MessageBus]  (* send → "msg" pętli dziecka *)
 ```
 
 Komunikacja Client↔Manager i Manager↔Manager jest **wyłącznie asynchroniczna** przez MessageBus (decyzja architektoniczna — spójność od góry do dołu, ponieważ część komunikacji i tak musi być async). `MessageBus.publish` = enqueue + `setTimeout(flush, 0)` — po powrocie z `on_connect` / handlera ani vdom, ani EffectsManager jeszcze nie zbiegły. Sync `->` tylko Manager→Access, Access→Resource, Manager/Effects→Bridge; oraz **mount-only** Client→Access w `on_connect` (nie kopiować na inne UC).
@@ -109,11 +112,11 @@ Przy pierwszym `Well_web.component` Client woła `ensure_runtime` i rejestruje
 | Topic MessageBus | Subskrybent | Rola |
 |---|---|---|
 | `"msg"` | LoopManager (`handle_msg`) | pętla TEA: update → persist → vdom/cmd |
-| `"cmd"` | EffectsManager (`handle_cmd`) | interpretacja Cmd (emit/focus/perform/batch/msg) |
+| `"cmd"` | EffectsManager (`handle_cmd`) | interpretacja Cmd (emit/focus/perform/batch/msg/send) |
 | `"vdom"` | Rendering (`init` → subscribe) | sync vdom → live DOM przez Bridge |
 
 Publikują na te topiki (żywe moduły):
-- `"msg"` — Rendering (handlery DOM), Inputs (attr/property change), EffectsManager (`Cmd.msg` / `perform`→dispatch), Client mount gdy `init` woła żywy `dispatch`
+- `"msg"` — Rendering (handlery DOM), Inputs (attr/property change), EffectsManager (`Cmd.msg` / `perform`→dispatch / `send`→`dispatch` dziecka), Client mount gdy `init` woła żywy `dispatch`
 - `"vdom"` / `"cmd"` — LoopManager (po update) oraz Client mount (`on_connect`)
 
 Access **nie** subskrybuje Bus.
@@ -132,6 +135,7 @@ MountInstance
        -> (ComponentDefinition)
   -> [ComponentAccess]          (* init_state ~dispatch live; init may dispatch *)
        -> (ComponentDefinition)
+  -> [ComponentAccess]          (* bind_addr z data-well-addr, jeśli jest *)
   -> [StateAccess]              (* Client persist — nie LoopManager *)
        -> (ComponentState)
   -> [Inputs]                   (* hydrate host attrs + JS properties → update sync *)
@@ -160,20 +164,44 @@ Kolejność w `on_connect` (wiążąca):
    `(state * cmd)`; **nie** publikuje na Bus. Client-supplied `dispatch` może
    enqueue `"msg"` **tylko jeśli** `init` sam woła `dispatch`. Zwrócony `cmd`
    **nie** jest tu uruchamiany.
-3. `StateAccess.persist` — Client zapisuje stan początkowy (LoopManager
+3. `bind_addr` — jeśli host ma `data-well-addr`, Client woła
+   `ComponentAccess.bind_addr` (`addr → dispatch` tej pętli). Brak atrybutu
+   = pętla bez addr (jak dotychczas). `dispatch` jest już żywy.
+4. `StateAccess.persist` — Client zapisuje stan początkowy (LoopManager
    **nie** woła `init_state`).
-4. `Inputs.hydrate_instance` — odczyt atrybutów hosta (props z `parse_string`)
+5. `Inputs.hydrate_instance` — odczyt atrybutów hosta (props z `parse_string`)
    oraz już ustawionych JS properties; każdy prop → `update` **synchronicznie**
    + persist (bez Bus `"msg"`, żeby pierwszy paint widział host inputs).
    Skip no-op gdy `equal` mówi „bez zmian".
-5. `capture_projection` — zrzut light-DOM hosta (dzieci spoza TEA) na instancję
+6. `capture_projection` — zrzut light-DOM hosta (dzieci spoza TEA) na instancję
    w ComponentAccess; host pusty pod root TEA. **Przed** pierwszym paintem.
-6. `render_view` + publish `"vdom"` — enqueue pierwszego painta (flush Bus async)
+7. `render_view` + publish `"vdom"` — enqueue pierwszego painta (flush Bus async)
    ze stanu **po** hydrate; `view` dostaje token projected (`#slot`) i żywy
    `dispatch`. Rendering przy `#slot` reparentuje projected nodes (nie klonuje).
-7. rejestracja w Client `Instance_table` (lokalna tabela host→instance).
-8. `publish_cmd` init cmd na `"cmd"` (skip gdy `Cmd.none`) — jeden envelope;
+8. rejestracja w Client `Instance_table` (lokalna tabela host→instance).
+9. `publish_cmd` init cmd na `"cmd"` (skip gdy `Cmd.none`) — jeden envelope;
    EffectsManager interpretuje po flushu Bus.
+
+Disconnect: `unbind_addr` (w `destroy_instance`) zdejmuje wpis tylko gdy
+ta instancja nadal posiada `addr`. Potem destroy Rendering / Inputs / Access /
+State.
+
+`Cmd.send` (parent → child) nie idzie przez host object w kodzie aplikacji:
+
+```call-chain
+SendToLoop
+
+[EffectsManager]                (* Cmd.send ~addr child_msg *)
+  -> [ComponentAccess]          (* dispatch_of_addr *)
+  <brak addr>
+    [No-op]
+  <jest>
+    ~> [MessageBus]             (* topic "msg" — dispatch dziecka *)
+         ~> [LoopManager]       (* pętla dziecka *)
+```
+
+Dwa hosty z tym samym `addr`: last writer wins (błąd aplikacji). `addr`
+nie jest `key` vdom i nie jest `ref` instancji.
 
 ## Call chain — PropChange (attr / JS property po mount)
 
@@ -190,7 +218,12 @@ HandlePropChange
 ```
 
 - Observed attributes: nazwy props skalarnych (`int`/`float`/`bool`/`string`)
-  oraz `attr_or_prop` (string z HTML → `of_string`).
+  oraz `attr_or_prop` (string z HTML → `of_string`), **oraz** `data-well-addr`
+  (tożsamość pętli, nie Prop).
+- `data-well-addr` **nie** idzie przez Inputs: Client `bind_host_addr`
+  (connect i `attributeChangedCallback`). Rendering nie specjalizuje `addr`
+  — `Html.element ~addr` wstawia `data-well-addr` do `attrs`; blit/sync jak
+  każdy atrybut. `addr` **nie** jest `key` vdom (diff nadal pozycyjny).
 - JS properties na prototypie CE: **wszystkie** props (w tym `list`/`of_eq`
   oraz `attr_or_prop`); listy **tylko** property (brak codecu JSON w
   atrybucie). `attr_or_prop`: JS string → `of_string`; inna wartość JS →
@@ -198,12 +231,14 @@ HandlePropChange
 - Skip gdy `equal` last-seen == nowa wartość.
 - Attr removal → default skalarny; `Props.list` ← JS Array lub OCaml list.
 - Connect: transfer own data props → `__well_prop_*` (unshadow CE accessors).
-- Disconnect: `Rendering.destroy_instance` (unsub + detach root) + Inputs
-  cache + Access/State.
+- Disconnect: `unbind_addr` (w `destroy_instance`) + `Rendering.destroy_instance`
+  (unsub + detach root) + Inputs cache + Access/State.
 
 Sync Client→Access w tym łańcuchu jest **wyłącznie mount lifecycle** — nie
-kopiować na HandleInteraction ani inne UC.
+kopiować na HandleInteraction ani inne UC. Wyjątek: zmiana `data-well-addr`
+po mount to Client → ComponentAccess (`bind_addr` / `unbind_addr`), nadal
+bez Bus.
 
-`Cmd.perform` z init/update wykonuje wyłącznie EffectsManager; w `perform`
-wolno async I/O + `dispatch`, nie nawigacja parent/DOM (→ `emit` / `emit_dom`
-/ `focus`).
+`Cmd.perform` / `Cmd.send` z init/update wykonuje wyłącznie EffectsManager;
+w `perform` wolno async I/O + `dispatch`, nie nawigacja parent/DOM
+(→ `emit` / `emit_dom` / `focus`). `send` nie woła `dispatch` z `view`.

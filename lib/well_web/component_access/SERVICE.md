@@ -4,8 +4,10 @@
 
 Ukrywa definicje zarejestrowanych typów komponentów (moduły first-class z
 `init`/`update`/`view`/`props`/`emits`) oraz mapowania instancji (instance_id ↔
-DOM element ↔ definicja). Pozwala LoopManagerowi zlecać wykonanie
-`init`/`update`/`view` na module komponentu bez znajomości jego typów.
+DOM element ↔ definicja) i **tożsamości pętli** (`addr` → `dispatch`).
+Pozwala LoopManagerowi zlecać wykonanie `init`/`update`/`view` na module
+komponentu bez znajomości jego typów; EffectsManagerowi — `dispatch_of_addr`
+dla `Cmd.send`.
 
 ## Abstraction boundary
 
@@ -36,9 +38,24 @@ XHR w tej warstwie).
 | `focus sel` | rAF + `querySelector` na hoście + `.focus()` |
 | `batch cs` | sekwencja dzieci (zagnieżdżenia OK) |
 | `perform f` | `f ~dispatch` z żywym dispatch na `"msg"` |
+| `send ~addr m` | `dispatch` pętli związanej z `addr` (parent → child) |
 
-`Cmd.iter ~none ~msg ~emit ~emit_dom ~focus ~perform` — jedyny punkt foldu
+`Cmd.iter ~none ~msg ~emit ~emit_dom ~focus ~perform ~send` — jedyny punkt foldu
 drzewa komend; woła go **EffectsManager**, nie Access.
+
+### Addr — tożsamość pętli
+
+Access trzyma mapę `addr → instance_id` oraz `addr` na instancji. `dispatch`
+pętli jest ten sam, co w `init_state` (publish `"msg"`).
+
+- `bind_addr` — last writer wins (dwa hosty z tym samym `addr` = błąd aplikacji).
+- `unbind_addr` — tylko gdy ta instancja nadal posiada wpis (disconnect po
+  nadpisaniu nie wymazuje nowego właściciela).
+- `dispatch_of_addr` — `None` gdy brak / po destroy.
+- `destroy_instance` zawsze `unbind_addr`.
+
+Access **nie** czyta atrybutów hosta — Client podaje `addr` z
+`data-well-addr` przy connect / zmianie atrybutu.
 
 ### `init_state` i żywy `dispatch`
 
@@ -79,6 +96,12 @@ kopertę `(state * cmd)`.
   poza dokumentem (niewidoczne) do destroy instancji.
 - `render_view` woła `view` z żywym `dispatch` (ten sam, co w `init_state`)
   oraz tokenem projected — nie stubem `unit`.
+- `bind_addr` wymaga istniejącej instancji (`create_instance` już wołane).
+  Pusty / whitespace `addr` = `unbind_addr`. Last writer wins.
+- `unbind_addr` / `destroy_instance` zdejmują wpis tylko gdy ta instancja
+  nadal posiada `addr` (disconnect przegranego last-writera nie kasuje
+  zwycięzcy).
+- `dispatch_of_addr` zwraca `None` gdy brak wpisu albo instancja zniszczona.
 
 ## Scenarios
 
@@ -99,6 +122,9 @@ kopertę `(state * cmd)`.
   default_value). `kind` rozróżnia `List` (JS Array / OCaml list),
   `Complex` (`of_eq`) i `Attr_or_prop` (atrybut string + JS value).
 - `instance_id_of_element` — reverse lookup host → instance_id.
+- [BindAddr](component_access.mli) — zwiąż `addr` z `dispatch` pętli.
+- [UnbindAddr](component_access.mli) — odwiąż przy disconnect (jeśli nasz wpis).
+- [DispatchOfAddr](component_access.mli) — lookup dla `Cmd.send`.
 
 ## Verification strategy
 
@@ -113,3 +139,6 @@ integracyjnie z LoopManagerem na konkretnym komponencie (`Counter` z
   `instance_id` są błędem).
 - Czy wiele instancji tego samego typu jest niezależnych (stan jednej nie
   wpływa na drugą).
+- Czy `bind_addr` / `dispatch_of_addr` trafia w `dispatch` właściwej pętli;
+  czy dwa `addr` nie mieszają; czy `destroy_instance` zdejmuje tylko swój
+  wpis; czy last writer wins.
