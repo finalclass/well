@@ -4204,8 +4204,8 @@ Well.Auth.login_and_set_session : request -> email:string -> password:string -> 
 Well.Auth.logout : request -> unit
 
 (* OTP *)
-Well.Auth.initiate_otp : email:string -> unit -> (string, string) result  (* returns code *)
-Well.Auth.verify_otp : email:string -> code:string -> ?ip:string -> unit -> (user, string) result
+Well.Auth.initiate_otp : email:string -> unit -> (string, string) result  (* returns code; does not check user exists *)
+Well.Auth.verify_otp : email:string -> code:string -> ?ip:string -> unit -> (user, string) result  (* existing user only *)
 
 (* User settings — JSON blob per user *)
 Well.Auth.get_settings : user_id:int -> unit -> Yojson.Safe.t option

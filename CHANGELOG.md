@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Fixes
+- **Auth OTP:** `verify_otp` no longer inserts a `_well_users` row when the
+  email is unknown. A valid code for a missing account is consumed and
+  returns `Error "Invalid or expired code"`. `initiate_otp` still does not
+  check whether the email exists.
 - **Well.Web SVG blit:** `Bridge.create_element` uses `document.createElementNS`
   for SVG tags (`svg`, `path`, `g`, …). HTML `createElement("svg")` produced
   non-SVG nodes that did not paint. `div` and other HTML tags are unchanged.

@@ -641,13 +641,12 @@ let initiate_otp_and_send ?(subject = "Your sign-in code") ~email () =
     | Ok () -> Ok ()
     | Error message -> Error message)
 
-(** Verify an OTP code. On success, returns the user (auto-created if new). *)
+(** Verify an OTP code. On success, returns the existing user. Never creates accounts. *)
 let verify_otp ~email ~code ?(ip = "") () =
   let email = normalize_email email in
   Db.with_well_db @@ fun db ->
   ensure_tables db;
   let now = now_unix () in
-  (* Find valid OTP *)
   let stmt = Sqlite3.prepare db
     "SELECT id FROM _well_otps WHERE email = ? AND code = ? AND expires_at >= ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
@@ -656,16 +655,11 @@ let verify_otp ~email ~code ?(ip = "") () =
   match Sqlite3.step stmt with
   | Sqlite3.Rc.ROW ->
     let _ = Sqlite3.finalize stmt in
-    (* Delete all OTPs for this email (single-use) *)
     let del = Sqlite3.prepare db
       "DELETE FROM _well_otps WHERE email = ?" in
     let _ = Sqlite3.bind del 1 (Sqlite3.Data.TEXT email) in
     let _ = Sqlite3.step del in
     let _ = Sqlite3.finalize del in
-    (* Forgive login attempts on successful OTP *)
-    _forgive_attempts db ~email;
-    _record_attempt db ~email ~ip ~is_valid:true;
-    (* Find or create user *)
     let user_stmt = Sqlite3.prepare db
       (Printf.sprintf "SELECT %s FROM _well_users WHERE email = ?" _user_cols) in
     let _ = Sqlite3.bind user_stmt 1 (Sqlite3.Data.TEXT email) in
@@ -675,23 +669,14 @@ let verify_otp ~email ~code ?(ip = "") () =
        let _ = Sqlite3.finalize user_stmt in
        if user.is_archived then
          Error "Account is archived"
-       else
+       else begin
+         _forgive_attempts db ~email;
+         _record_attempt db ~email ~ip ~is_valid:true;
          Ok user
+       end
      | _ ->
        let _ = Sqlite3.finalize user_stmt in
-       (* Auto-create user without password for OTP-only flow *)
-       let ins = Sqlite3.prepare db
-         "INSERT INTO _well_users (email, password_hash) VALUES (?, '')" in
-       let _ = Sqlite3.bind ins 1 (Sqlite3.Data.TEXT email) in
-       (match Sqlite3.step ins with
-        | Sqlite3.Rc.DONE ->
-          let _ = Sqlite3.finalize ins in
-          let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
-          Ok { id; email; first_name = ""; last_name = ""; language = "pl";
-               phone_number = ""; is_archived = false; created_at = "" }
-        | _ ->
-          let _ = Sqlite3.finalize ins in
-          Error "Failed to create user"))
+       Error "Invalid or expired code")
   | _ ->
     let _ = Sqlite3.finalize stmt in
     _record_attempt db ~email ~ip ~is_valid:false;

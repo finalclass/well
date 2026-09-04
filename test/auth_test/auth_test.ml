@@ -274,6 +274,10 @@ let () =
 
     (* ── OTP delivery through Well.Mailer ────────────────────────────── *)
 
+    let r_otp_user =
+      Well.Auth.register ~email:"otp@example.com" ~password:"password123" ()
+    in
+    check "otp user: register" (Result.is_ok r_otp_user);
     Well.Mailer.setup
       { from_email = "noreply@example.com"; from_name = "Well"; adapter = Log };
     let sent_otp =
@@ -302,6 +306,19 @@ let () =
       Well.Auth.verify_otp ~email:"otp@example.com" ~code:otp_code ()
     in
     check "initiate_otp_and_send: verifiable" (Result.is_ok verified_otp);
+
+    let unknown_email = "otp-unknown@example.com" in
+    let unknown_otp = Well.Auth.initiate_otp ~email:unknown_email () in
+    check "initiate_otp: unknown email ok" (Result.is_ok unknown_otp);
+    let unknown_code = Result.get_ok unknown_otp in
+    let verified_unknown =
+      Well.Auth.verify_otp ~email:unknown_email ~code:unknown_code ()
+    in
+    check "verify_otp: unknown email fails" (Result.is_error verified_unknown);
+    check "verify_otp: unknown email msg"
+      (Result.get_error verified_unknown = "Invalid or expired code");
+    check "verify_otp: does not create user"
+      (Option.is_none (Well.Auth.find_user_by_email unknown_email));
 
     (* ── with_db ─────────────────────────────────────────────────────── *)
 
