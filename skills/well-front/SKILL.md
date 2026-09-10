@@ -422,7 +422,7 @@ Well.get "/counter" @@ fun _req ->
 
 After writing/changing a component:
 ```bash
-dune build          # web/ → register.bc.js, then static/dune copies it to static/app.js
+make build          # well build: web/ → register.bc.js, then static/dune copies it to static/app.js
 ```
 Open the page that embeds `<well-*>` and confirm the custom element renders and reacts to clicks/inputs.
 

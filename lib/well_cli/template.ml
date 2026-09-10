@@ -42,7 +42,7 @@ let makefile =
   {|.PHONY: build check test clean lock dev
 
 build:
-	dune build
+	well build
 
 check:
 	dune build @check
@@ -69,10 +69,9 @@ Built with [well](https://github.com/anthropics/well) — full-stack OCaml web f
 
 ```bash
 make dev          # start dev server with hot reload (dune exec -w)
-make build        # build
+make build        # well build (dune + patchelf + bundled .so)
 make test         # run tests
 make check        # type-check only (faster)
-well build        # production build (patchelf + bundled .so)
 well release      # deployable .tar.gz archive
 ```
 
@@ -4747,7 +4746,7 @@ Well apps are single-binary deployments. The scaffold generates a `.service` fil
 well build    # requires: patchelf (pacman -S patchelf / apt install patchelf)
 ```
 
-1. Runs `dune build`
+1. Runs `dune build` (app agents must call this via `well build` / `make build`, never raw `dune build`)
 2. Auto-discovers all shared libraries via `ldd`
 3. Copies binary + all `.so` to `_release/`
 4. Runs `patchelf` — sets interpreter to `bin/lib/ld-linux-*.so` and rpath to `$ORIGIN/lib`
@@ -4827,7 +4826,7 @@ expr | map .field               # Pipeline: map, filter, count, first, sort
 Compiled by bun to `well.js`. Auto-initializes as `window.well`.
 
 **Build**: `static/dune` has rules that run `bun build` with `(mode promote)` — output JS lands in source tree.
-Just run `dune build` (or `make build`) to rebuild TS. Add new `.ts` files by adding a `(rule ...)` to `static/dune`:
+Just run `make build` (`well build`) to rebuild TS. Never raw `dune build`. Add new `.ts` files by adding a `(rule ...)` to `static/dune`:
 ```lisp
 (rule
  (targets my-script.js)
@@ -6533,7 +6532,7 @@ Well.get "/counter" @@ fun _req ->
 
 After writing/changing a component:
 ```bash
-dune build          # web/ → register.bc.js, then static/dune copies it to static/app.js
+make build          # well build: web/ → register.bc.js, then static/dune copies it to static/app.js
 ```
 Open the page that embeds `<well-*>` and confirm the custom element renders and reacts to clicks/inputs.
 
