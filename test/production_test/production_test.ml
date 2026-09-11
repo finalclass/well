@@ -578,6 +578,15 @@ let () =
       (url "/t/prod/csrf-check") in
     check "csrf: XHR bypass 200" (resp_xhr.status = 200);
 
+    let resp_xhr_cross = Well.fetch ~method_:"POST"
+      ~headers:[("cookie", sid_cookie);
+                ("x-requested-with", "XMLHttpRequest");
+                ("origin", "https://evil.example")]
+      (url "/t/prod/csrf-check") in
+    check "csrf: cross-origin XHR 403" (resp_xhr_cross.status = 403);
+    check "csrf: cross-origin body"
+      (contains_str ~needle:"cross-origin" resp_xhr_cross.body);
+
     (* GET/HEAD/OPTIONS skip CSRF *)
     let resp_get = Well.fetch ~headers:[("cookie", sid_cookie)] (url "/t/prod/csrf-token") in
     check "csrf: GET skips" (resp_get.status = 200);

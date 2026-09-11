@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Breaking changes
+- **`Well.cors`:** `origins` is required and must be non-empty. There is no
+  default `["*"]`. Call `Well.cors ~origins:[...] ()`. The middleware never
+  sets `Access-Control-Allow-Credentials`.
+
+### Security
+- **CSRF:** unsafe methods are rejected when `Sec-Fetch-Site` is `cross-site`
+  or `same-site`, or when `Origin` is `null` / does not match `Host`, even if
+  `X-Requested-With: XMLHttpRequest` is set. Same-origin XHR without a token
+  still passes.
+
 ### Fixes
 - **Auth OTP:** `verify_otp` no longer inserts a `_well_users` row when the
   email is unknown. A valid code for a missing account is consumed and

@@ -34,34 +34,35 @@ let logger : middleware = fun next req ->
 
 (* ── CORS ─────────────────────────────────────────────────────────── *)
 
-(** CORS middleware. Configurable allowed origins, methods, headers, and max age. *)
-let cors ?(origins = ["*"])
+let cors ~origins
     ?(methods = ["GET"; "POST"; "PUT"; "DELETE"; "OPTIONS"])
     ?(headers = ["Content-Type"; "Authorization"])
     ?(max_age = 86400) () : middleware =
+  if origins = [] then invalid_arg "Well.cors: origins must not be empty";
   fun next req ->
     let origin =
       match List.assoc_opt "origin" req.headers with
       | Some o -> o
       | None -> ""
     in
-    let allowed =
-      List.mem "*" origins || List.mem origin origins
-    in
+    let star = List.mem "*" origins in
+    let allowed = star || List.mem origin origins in
     let add_cors resp =
       if not allowed then resp
       else
-        resp
-        |> header "Access-Control-Allow-Origin"
-             (if List.mem "*" origins then "*" else origin)
-        |> header "Access-Control-Allow-Methods"
-             (String.concat ", " methods)
-        |> header "Access-Control-Allow-Headers"
-             (String.concat ", " headers)
+        let resp =
+          resp
+          |> header "Access-Control-Allow-Origin" (if star then "*" else origin)
+          |> header "Access-Control-Allow-Methods" (String.concat ", " methods)
+          |> header "Access-Control-Allow-Headers" (String.concat ", " headers)
+        in
+        if star then resp else header "Vary" "Origin" resp
     in
     if req.meth = "OPTIONS" then
-      add_cors (`Text "" |> status 204)
-      |> header "Access-Control-Max-Age" (string_of_int max_age)
+      let resp = `Text "" |> status 204 in
+      if allowed then
+        add_cors resp |> header "Access-Control-Max-Age" (string_of_int max_age)
+      else resp
     else
       add_cors (next req)
 
@@ -149,7 +150,53 @@ let csrf_token req = Csrf_ctx.get req
 
 let _csrf_warned_no_session = Atomic.make false
 
-(** CSRF protection middleware. Validates tokens on state-changing requests (POST, PUT, DELETE). *)
+open struct
+  let starts_with_ci s prefix =
+    let n = String.length prefix in
+    String.length s >= n && String.lowercase_ascii (String.sub s 0 n) = prefix
+
+  let origin_authority raw =
+    let o = String.trim raw in
+    if String.lowercase_ascii o = "null" then None
+    else
+      let rest =
+        if starts_with_ci o "https://" then
+          Some (String.sub o 8 (String.length o - 8))
+        else if starts_with_ci o "http://" then
+          Some (String.sub o 7 (String.length o - 7))
+        else None
+      in
+      match rest with
+      | None -> None
+      | Some auth ->
+          if auth = "" then None
+          else if
+            String.exists (function '/' | '?' | '#' | '@' -> true | _ -> false) auth
+          then None
+          else Some auth
+
+  let fetch_site_blocked (req : request) =
+    match List.assoc_opt "sec-fetch-site" req.headers with
+    | None -> false
+    | Some v ->
+        (match String.lowercase_ascii (String.trim v) with
+         | "cross-site" | "same-site" -> true
+         | _ -> false)
+
+  let origin_blocked (req : request) =
+    match List.assoc_opt "origin" req.headers with
+    | None -> false
+    | Some raw ->
+        (match origin_authority raw with
+         | None -> true
+         | Some auth ->
+             (match List.assoc_opt "host" req.headers with
+              | None -> true
+              | Some host ->
+                  String.lowercase_ascii auth
+                  <> String.lowercase_ascii (String.trim host)))
+end
+
 let csrf : middleware = fun next req ->
   if req.session_id = "" && not (Atomic.get _csrf_warned_no_session) then begin
     Atomic.set _csrf_warned_no_session true;
@@ -170,6 +217,8 @@ let csrf : middleware = fun next req ->
     req.meth = "GET" || req.meth = "HEAD" || req.meth = "OPTIONS"
   in
   if safe_method then next req
+  else if fetch_site_blocked req || origin_blocked req then
+    `Text "Forbidden — cross-origin request" |> status 403
   else
     let is_xhr =
       match List.assoc_opt "x-requested-with" req.headers with

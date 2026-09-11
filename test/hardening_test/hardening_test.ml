@@ -82,6 +82,167 @@ let () =
   check "secure_headers: Referrer-Policy" (List.assoc_opt "Referrer-Policy" hdrs <> None);
   check "secure_headers: HSTS" (List.assoc_opt "Strict-Transport-Security" hdrs <> None);
 
+  let hdr_ci name headers =
+    let n = String.lowercase_ascii name in
+    List.find_map (fun (k, v) ->
+      if String.lowercase_ascii k = n then Some v else None) headers
+  in
+  let mk_req ?(meth = "GET") ?(headers = []) ?(body = "") ?(session_id = "s") ()
+    : Well.request =
+    { meth; path = "/"; headers; body; params = []; query = []; session_id;
+      _context = [] }
+  in
+  let run mw req = Well.resolve (mw test_handler req) in
+  let csrf_token_for sid =
+    let r =
+      Well.resolve
+        (Well.csrf (fun req -> Well.text (Well.csrf_token req))
+           (mk_req ~session_id:sid ()))
+    in
+    r.r_body
+  in
+
+  (match
+     try
+       let _ = Well.cors ~origins:[] () test_handler (mk_req ()) in
+       `Ok
+     with Invalid_argument _ -> `Raised
+   with
+   | `Raised -> check "cors: empty origins raises" true
+   | `Ok -> check "cors: empty origins raises" false);
+
+  let cors_app = Well.cors ~origins:["https://app.example.com"] () in
+  let allowed =
+    run cors_app
+      (mk_req ~headers:[("origin", "https://app.example.com")] ())
+  in
+  check "cors: allowed ACAO"
+    (hdr_ci "Access-Control-Allow-Origin" allowed.r_headers
+     = Some "https://app.example.com");
+  check "cors: allowed Vary Origin"
+    (hdr_ci "Vary" allowed.r_headers = Some "Origin");
+  check "cors: no credentials"
+    (hdr_ci "Access-Control-Allow-Credentials" allowed.r_headers = None);
+  (match hdr_ci "Access-Control-Allow-Headers" allowed.r_headers with
+   | Some h ->
+     check "cors: default headers omit X-Requested-With"
+       (not (try
+               let _ =
+                 Str.search_forward (Str.regexp_string "X-Requested-With") h 0
+               in true
+             with Not_found -> false))
+   | None -> check "cors: default Allow-Headers present" false);
+
+  let denied =
+    run cors_app
+      (mk_req ~headers:[("origin", "https://evil.example")] ())
+  in
+  check "cors: denied no ACAO"
+    (hdr_ci "Access-Control-Allow-Origin" denied.r_headers = None);
+
+  let star = Well.cors ~origins:["*"] () in
+  let star_resp =
+    run star (mk_req ~headers:[("origin", "https://anywhere.example")] ())
+  in
+  check "cors: star ACAO" (hdr_ci "Access-Control-Allow-Origin" star_resp.r_headers = Some "*");
+  check "cors: star no credentials"
+    (hdr_ci "Access-Control-Allow-Credentials" star_resp.r_headers = None);
+  check "cors: star no Vary required"
+    (hdr_ci "Vary" star_resp.r_headers = None);
+
+  let opt =
+    Well.resolve
+      (cors_app test_handler
+         (mk_req ~meth:"OPTIONS"
+            ~headers:[("origin", "https://app.example.com")] ()))
+  in
+  check "cors: OPTIONS 204" (opt.r_status = 204);
+  check "cors: OPTIONS ACAO"
+    (hdr_ci "Access-Control-Allow-Origin" opt.r_headers
+     = Some "https://app.example.com");
+
+  let sid = "csrf-origin" in
+  let tok = csrf_token_for sid in
+  let csrf_post ?(headers = []) ?(body = "") () =
+    run Well.csrf
+      (mk_req ~meth:"POST" ~session_id:sid ~headers ~body ())
+  in
+
+  let get_ok = run Well.csrf (mk_req ~session_id:sid ()) in
+  check "csrf: GET without token" (get_ok.r_status = 200);
+
+  let missing = csrf_post () in
+  check "csrf: missing token 403" (missing.r_status = 403);
+  check "csrf: missing token body"
+    (try let _ = Str.search_forward (Str.regexp_string "invalid CSRF token") missing.r_body 0 in true
+     with Not_found -> false);
+
+  let form_ok =
+    csrf_post
+      ~headers:[("content-type", "application/x-www-form-urlencoded")]
+      ~body:("_csrf_token=" ^ tok) ()
+  in
+  check "csrf: form token 200" (form_ok.r_status = 200);
+
+  let header_ok = csrf_post ~headers:[("x-csrf-token", tok)] () in
+  check "csrf: header token 200" (header_ok.r_status = 200);
+
+  let xhr_ok = csrf_post ~headers:[("x-requested-with", "XMLHttpRequest")] () in
+  check "csrf: XHR without origin 200" (xhr_ok.r_status = 200);
+
+  let xhr_cross =
+    csrf_post
+      ~headers:[("x-requested-with", "XMLHttpRequest");
+                ("sec-fetch-site", "cross-site")] ()
+  in
+  check "csrf: XHR cross-site 403" (xhr_cross.r_status = 403);
+  check "csrf: XHR cross-site body"
+    (try let _ = Str.search_forward (Str.regexp_string "cross-origin") xhr_cross.r_body 0 in true
+     with Not_found -> false);
+
+  let same_site =
+    csrf_post ~headers:[("sec-fetch-site", "same-site")] ()
+  in
+  check "csrf: same-site 403" (same_site.r_status = 403);
+
+  let evil =
+    csrf_post
+      ~headers:[("origin", "https://evil.example");
+                ("host", "example.com");
+                ("x-requested-with", "XMLHttpRequest");
+                ("x-csrf-token", tok)] ()
+  in
+  check "csrf: evil origin 403" (evil.r_status = 403);
+  check "csrf: evil origin body"
+    (try let _ = Str.search_forward (Str.regexp_string "cross-origin") evil.r_body 0 in true
+     with Not_found -> false);
+
+  let null_origin = csrf_post ~headers:[("origin", "null")] () in
+  check "csrf: null origin 403" (null_origin.r_status = 403);
+
+  let same_origin_xhr =
+    csrf_post
+      ~headers:[("origin", "https://example.com");
+                ("host", "example.com");
+                ("x-requested-with", "XMLHttpRequest")] ()
+  in
+  check "csrf: matching origin XHR 200" (same_origin_xhr.r_status = 200);
+
+  let same_fetch_no_token =
+    csrf_post ~headers:[("sec-fetch-site", "same-origin")] ()
+  in
+  check "csrf: same-origin still needs token" (same_fetch_no_token.r_status = 403);
+  check "csrf: same-origin token body"
+    (try let _ = Str.search_forward (Str.regexp_string "invalid CSRF token")
+           same_fetch_no_token.r_body 0 in true
+     with Not_found -> false);
+
+  let none_fetch =
+    csrf_post
+      ~headers:[("sec-fetch-site", "none"); ("x-csrf-token", tok)] ()
+  in
+  check "csrf: none + token 200" (none_fetch.r_status = 200);
+
   (* ── Integration tests ──────────────────────────────────────────── *)
 
   (* Register test routes before starting server *)

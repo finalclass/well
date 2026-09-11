@@ -40,10 +40,10 @@ module Registry = Registry
 (** Request logging middleware. Logs method, path, status, and latency. *)
 let logger = Middleware.logger
 
-(** CORS middleware. Configurable allowed origins, methods, headers, and max age. *)
+(** CORS middleware. [origins] is required and must be non-empty. *)
 let cors = Middleware.cors
 
-(** CSRF protection middleware. Validates tokens on state-changing requests. *)
+(** CSRF protection middleware. *)
 let csrf = Middleware.csrf
 
 (** Get the CSRF token for the current request. *)

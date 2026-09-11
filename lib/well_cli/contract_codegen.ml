@@ -1847,8 +1847,8 @@ let generate_ocaml_browser_module cm =
 let generate_ocaml_browser_rpc () =
   {|open Js_of_ocaml
 
-(* CSRF: Well skips CSRF checks when X-Requested-With: XMLHttpRequest is set
-   (see Well middleware). Token is still sent when present for stricter setups.
+(* CSRF: after Origin / Sec-Fetch-Site, Well may skip the token when
+   X-Requested-With: XMLHttpRequest is set. Token is still sent when present.
    Sources (in order): <meta name="csrf-token">, then window.__WELL_CSRF.
    Note: __DG_CSRF is not read here — set meta/__WELL_CSRF or extend if migrating DG. *)
 let csrf_token () : string =

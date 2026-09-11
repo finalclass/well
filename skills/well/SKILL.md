@@ -949,7 +949,7 @@ Well.csrf : middleware             (* CSRF token validation *)
 Well.session_middleware : middleware (* session cookie management — auto-registered *)
 
 Well.rate_limit : max_requests:int -> window_ms:int -> unit -> middleware
-Well.cors : ?origins:string list -> ?methods:string list -> ?headers:string list
+Well.cors : origins:string list -> ?methods:string list -> ?headers:string list
          -> ?max_age:int -> unit -> middleware
 Well.require_auth : ?login_path:string -> unit -> middleware  (* redirects to login *)
 Well.basic_auth : check:(string -> string -> bool) -> ?realm:string -> unit -> middleware

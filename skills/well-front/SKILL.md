@@ -269,9 +269,9 @@ For service contracts, **use the generated OCaml browser Proxy** — do not hand
 - Mirror of TS `Proxy` / `rpc.ts`: same `POST /rpc/<Service>/<method>`, same
   positional `to_wire`/`of_wire` arrays.
 - Headers: `Content-Type: application/json`, `X-Requested-With: XMLHttpRequest`
-  (Well CSRF middleware may skip token check for this header). Optional
-  `X-CSRF-Token` from `<meta name="csrf-token">` or `window.__WELL_CSRF`
-  (not `__DG_CSRF` — set meta/`__WELL_CSRF` if migrating DG).
+  (same-origin XHR may skip the CSRF token; `Origin` / `Sec-Fetch-Site` still
+  apply). Optional `X-CSRF-Token` from `<meta name="csrf-token">` or
+  `window.__WELL_CSRF` (not `__DG_CSRF` — set meta/`__WELL_CSRF` if migrating DG).
 - Callback is `(response, string) result`. **Always handle `Error`**: HTTP
   non-2xx, network failure, non-JSON body, Well service body
   `{"error":"..."}` on 2xx, and `of_wire` decode failures — all surface as
