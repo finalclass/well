@@ -175,7 +175,8 @@ let render_list model =
               <td>
                 <button class="btn btn-sm" data-lv-click='["ShowEdit",%d]'>Edit</button>
                 <button class="btn btn-sm" style="color:var(--red)"
-                  data-lv-click='["DeleteUser",%d]'>Delete</button>
+                  data-lv-click='["DeleteUser",%d]'
+                  data-lv-confirm="Delete user %s?">Delete</button>
               </td>
             </tr>|}
                u.id
@@ -183,7 +184,8 @@ let render_list model =
                (esc u.created_at)
                grants_html
                u.id
-               u.id )
+               u.id
+               (esc u.email) )
            model.users )
   in
   Printf.sprintf

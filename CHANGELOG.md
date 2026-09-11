@@ -21,6 +21,8 @@
 - **Well.Web SVG blit:** `Bridge.create_element` uses `document.createElementNS`
   for SVG tags (`svg`, `path`, `g`, …). HTML `createElement("svg")` produced
   non-SVG nodes that did not paint. `div` and other HTML tags are unchanged.
+- **Cap users:** Delete on `/_cap/users` calls `window.confirm` first
+  (`data-lv-confirm`). Cancel does not send the LiveView delete.
 
 ### New features
 - **Well.Web `addr` + `Cmd.send`:** a parent names a child loop with
