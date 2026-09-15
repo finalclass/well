@@ -1,0 +1,9 @@
+[actor]
+name = "SummaryBuilder"
+version = 1
+
+[actor.accepts]
+Build = "Reports.ReportBatch"
+
+[actor.emits]
+Built = "Reports.Summary"

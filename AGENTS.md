@@ -44,6 +44,8 @@ Znany, niezależny failure runtime: `oauth_provider_test` — ignorować.
 1. `lib/well_web/ARCH.md` — statyczna architektura podsystemu well.web (warstwy
    IDesign, komponenty, call-graph, resource map). Poziom podsystemu; well.web
    jest częścią większego `well`, ale tu opisana jest jego wewnętrzna struktura.
+1a. `lib/well/actor/SERVICE.md` — trwałe instancje i obiegi nowego
+   `Well.Actor`; zakres, API, kontrakty, trwałość i plan testów.
 2. `lib/<service>/SERVICE.md` — rola, granica abstrakcji, założenia, scenariusze,
    strategia weryfikacji usługi. **Czarnoskrzynkowa** — co usługa oferuje, nie
    jak jest zbudowana w środku.
@@ -78,6 +80,10 @@ Dla usług backendu z kontraktem TOML, trzeci artefakt to `lib/contract/<Service
 - **SQLite:** handle `Sqlite3.db` NIE jest thread-safe. Każdy aktor otwiera
   własne połączenie w `init` z `PRAGMA journal_mode=WAL` i `busy_timeout=5000`.
   Nigdy nie współdziel handle między aktorami/domainami. Brak connection poolu.
+- **Nowy Well.Actor:** serializowany state nie zawiera handle SQLite ani
+  innych zasobów procesu. Reguły zasobów aktywacji i połączeń prywatnego
+  magazynu Actor określają `lib/well/actor/API.md` i `DURABILITY.md`;
+  powyższa reguła `init` pozostaje dla dotychczasowych aktorów.
 - **Bez `Co-Authored-By` w commitach.**
 
 ## Konwencje frontendu well.web

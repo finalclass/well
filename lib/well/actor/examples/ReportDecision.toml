@@ -1,0 +1,10 @@
+[actor]
+name = "ReportDecision"
+version = 1
+
+[actor.accepts]
+Choose = "Reports.Request"
+
+[actor.emits]
+Accepted = "Reports.Request"
+Rejected = "Reports.Summary"

@@ -1,0 +1,47 @@
+{
+  "format": 1,
+  "name": "choice",
+  "version": "1",
+  "entry": "decide",
+  "input_type": "Reports.Request",
+  "bindings": {},
+  "nodes": {
+    "decide": {
+      "kind": "actor",
+      "actor": "ReportDecision",
+      "id": {
+        "fixed": "default"
+      },
+      "accept": "Choose",
+      "emission_mode": "one",
+      "outputs": {
+        "Accepted": "report",
+        "Rejected": "rejected"
+      },
+      "join": null
+    },
+    "report": {
+      "kind": "actor",
+      "actor": "Reporter",
+      "id": {
+        "input_path": [
+          "reporter_id"
+        ]
+      },
+      "accept": "Generate",
+      "emission_mode": "one",
+      "outputs": {
+        "Produced": "done"
+      },
+      "join": null
+    },
+    "done": {
+      "kind": "end",
+      "input_type": "Reports.Report"
+    },
+    "rejected": {
+      "kind": "end",
+      "input_type": "Reports.Summary"
+    }
+  }
+}

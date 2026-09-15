@@ -1,0 +1,62 @@
+{
+  "format": 1,
+  "name": "dynamic-reports",
+  "version": "1",
+  "entry": "spawn",
+  "input_type": "Reports.RequestList",
+  "bindings": {},
+  "nodes": {
+    "spawn": {
+      "kind": "actor",
+      "actor": "ReportSpawner",
+      "id": {
+        "fixed": "default"
+      },
+      "accept": "Generate",
+      "emission_mode": "many",
+      "outputs": {
+        "Requested": "report"
+      },
+      "join": "collect"
+    },
+    "report": {
+      "kind": "actor",
+      "actor": "Reporter",
+      "id": {
+        "input_path": [
+          "reporter_id"
+        ]
+      },
+      "accept": "Generate",
+      "emission_mode": "one",
+      "outputs": {
+        "Produced": "collect"
+      },
+      "join": null
+    },
+    "collect": {
+      "kind": "join",
+      "item_type": "Reports.Report",
+      "batch_type": "Reports.ReportBatch",
+      "timeout_ms": 30000,
+      "next": "summary"
+    },
+    "summary": {
+      "kind": "actor",
+      "actor": "SummaryBuilder",
+      "id": {
+        "fixed": "default"
+      },
+      "accept": "Build",
+      "emission_mode": "one",
+      "outputs": {
+        "Built": "done"
+      },
+      "join": null
+    },
+    "done": {
+      "kind": "end",
+      "input_type": "Reports.Summary"
+    }
+  }
+}

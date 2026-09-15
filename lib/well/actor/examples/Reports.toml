@@ -1,0 +1,16 @@
+[msg.Request.struct]
+reporter_id = "string"
+subject = "string"
+
+[msg.RequestList.struct]
+requests = { type = "list", of = "Request" }
+
+[msg.Report.struct]
+source = "string"
+text = "string"
+
+[msg.ReportBatch.struct]
+items = { type = "list", of = "Report" }
+
+[msg.Summary.struct]
+text = "string"

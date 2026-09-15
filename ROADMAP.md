@@ -735,6 +735,11 @@ frameworka (format, reguły kodowania, przykłady). Wzorzec: ściągnąć z dg.
 
 ### 9.4 Usługi (aktorzy) — Erlang-inspired na EIO
 
+Nowy, trwały wariant `Well.Actor.register_type` i obiegi wiadomości mają
+osobny kontrakt: [Well.Actor](lib/well/actor/SERVICE.md). Poniższy opis
+pozostaje kontekstem dotychczasowego modelu; nie określa trwałości nowego
+Actor. `Well.Service` oraz stara ścieżka `Actor.register` zachowują zachowanie.
+
 Każda usługa to aktor z:
 - **Mailbox** — kolejka wiadomości (EIO Stream lub Mutex + Queue)
 - **Stan** — prywatny, mutowalny w obrębie aktora

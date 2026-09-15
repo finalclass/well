@@ -1,0 +1,9 @@
+[actor]
+name = "Reporter"
+version = 1
+
+[actor.accepts]
+Generate = "Reports.Request"
+
+[actor.emits]
+Produced = "Reports.Report"
