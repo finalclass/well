@@ -114,6 +114,10 @@ let fetch_with_net = Fetch.fetch_with_net
 (** Make a streaming HTTP request with an explicit [net] handle. Body delivered via callback. *)
 let fetch_stream_with_net = Fetch.fetch_stream_with_net
 
+(** Open a streaming HTTP request bound to [sw]. Returns status and headers
+    before the body iterator is used. *)
+let open_http_stream = Fetch.open_stream
+
 (* ── Re-exports: Channel ─────────────────────────────────────────── *)
 
 (** Result of a successful channel join: topics to subscribe and optional initial state. *)

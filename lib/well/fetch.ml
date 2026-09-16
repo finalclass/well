@@ -296,6 +296,95 @@ let fetch_stream_with_net ~net ?(method_ = "POST") ?(headers = []) ?(body = "")
     send_and_stream tls_flow)
   else send_and_stream tcp_flow
 
+let iter_body ~method_ reader hdrs on_data =
+  if method_ = "HEAD" then ()
+  else
+  let is_chunked =
+    match List.assoc_opt "transfer-encoding" hdrs with
+    | Some v -> String.lowercase_ascii (String.trim v) = "chunked"
+    | None -> false
+  in
+  if is_chunked then begin
+    let rec loop () =
+      let line = read_line_crlf reader in
+      let size_str =
+        match String.index_opt line ';' with
+        | Some i -> String.sub line 0 i
+        | None -> line
+      in
+      match int_of_string_opt ("0x" ^ String.trim size_str) with
+      | None | Some 0 -> ()
+      | Some n ->
+        let rec take_chunk remaining =
+          if remaining <= 0 then ()
+          else
+            let n = min remaining 65536 in
+            on_data (Eio.Buf_read.take n reader);
+            take_chunk (remaining - n)
+        in
+        take_chunk n;
+        (try ignore (read_line_crlf reader) with _ -> ());
+        loop ()
+    in
+    loop ()
+  end else
+    match List.assoc_opt "content-length" hdrs with
+    | Some s -> (
+        match int_of_string_opt s with
+        | Some total when total > 0 ->
+            let rec take remaining =
+              if remaining <= 0 then ()
+              else
+                let n = min remaining 65536 in
+                on_data (Eio.Buf_read.take n reader);
+                take (remaining - n)
+            in
+            take total
+        | _ -> ())
+    | None ->
+        (try
+           while true do
+             let c = Eio.Buf_read.any_char reader in
+             let buf = Buffer.create 4096 in
+             Buffer.add_char buf c;
+             (try
+               let avail = Eio.Buf_read.buffered_bytes reader in
+               if avail > 0 then
+                 Buffer.add_string buf (Eio.Buf_read.take avail reader)
+             with _ -> ());
+             on_data (Buffer.contents buf)
+           done
+         with End_of_file | Eio.Io _ -> ())
+
+(** Open a streaming GET/POST. Status and headers are available before [iter]
+    reads the body. The connection is bound to [sw]. *)
+let open_stream ~sw ~net ?(method_ = "GET") ?(headers = []) ?(body = "") url =
+  let parsed = parse_url url in
+  let req_str =
+    build_request ~method_ ~host:parsed.p_host ~port:parsed.p_port
+      ~path:parsed.p_path ~headers ~body
+  in
+  let addr = resolve net parsed.p_host parsed.p_port in
+  let tcp_flow = Eio.Net.connect ~sw net addr in
+  let attach flow =
+    Eio.Flow.copy_string req_str flow;
+    let reader = Eio.Buf_read.of_flow ~max_size:(1024 * 1024) flow in
+    let status = parse_status reader in
+    let resp_hdrs = parse_headers reader in
+    let iter on_data = iter_body ~method_ reader resp_hdrs on_data in
+    (status, resp_hdrs, iter)
+  in
+  if parsed.p_scheme = "https" then (
+    let tls_cfg = tls_config () in
+    let host =
+      Option.bind
+        (Domain_name.of_string parsed.p_host |> Result.to_option)
+        (fun dn -> Domain_name.host dn |> Result.to_option)
+    in
+    let tls_flow = Tls_eio.client_of_flow ?host tls_cfg tcp_flow in
+    attach tls_flow)
+  else attach tcp_flow
+
 (** Make an HTTP request. Supports HTTP and HTTPS with system CA certificates. Must be called within [Well.run]. *)
 let fetch ?(method_ = "GET") ?(headers = []) ?(body = "") url =
   !_impl ~method_ ~headers ~body url

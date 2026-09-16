@@ -131,7 +131,7 @@ let write_response ?(keep_alive=false) ?(head=false) flow resolved =
   if not head then Buffer.add_string buf resolved.r_body;
   Eio.Flow.copy_string (Buffer.contents buf) flow
 
-let write_stream_response flow cfg extra_headers =
+let write_chunked_body flow cfg extra_headers =
   let buf = Buffer.create 256 in
   Buffer.add_string buf
     (Printf.sprintf "HTTP/1.1 %d %s\r\n" cfg.stream_status
@@ -154,5 +154,28 @@ let write_stream_response flow cfg extra_headers =
       Eio.Flow.copy_string chunk flow
     end
   in
-  cfg.stream_fn write_chunk;
-  Eio.Flow.copy_string "0\r\n\r\n" flow
+  match
+    try
+      cfg.stream_fn write_chunk;
+      `Ok
+    with exn -> `Fail exn
+  with
+  | `Ok -> Eio.Flow.copy_string "0\r\n\r\n" flow
+  | `Fail exn -> raise exn
+
+let write_stream_response flow cfg extra_headers =
+  match cfg.stream_open with
+  | None -> write_chunked_body flow cfg extra_headers
+  | Some open_fn ->
+      Eio.Switch.run @@ fun sw ->
+        match open_fn sw with
+        | Stream_reject resp ->
+            write_response ~keep_alive:false ~head:false flow (resolve resp)
+        | Stream_accept accepted ->
+            write_chunked_body flow
+              { stream_status = accepted.accept_status;
+                stream_content_type = accepted.accept_content_type;
+                stream_headers = accepted.accept_headers;
+                stream_fn = accepted.accept_iter;
+                stream_open = None }
+              extra_headers

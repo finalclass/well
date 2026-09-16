@@ -16,15 +16,27 @@ type request = {
 
 (* ── Response types ───────────────────────────────────────────────── *)
 
-type stream_config = {
+type stream_accept = {
+  accept_status : int;
+  accept_content_type : string;
+  accept_headers : (string * string) list;
+  accept_iter : (string -> unit) -> unit;
+}
+
+and stream_open_result =
+  | Stream_reject of response
+  | Stream_accept of stream_accept
+
+and stream_config = {
   stream_status : int;
   stream_content_type : string;
   stream_headers : (string * string) list;
   stream_fn : (string -> unit) -> unit;
+  stream_open : (Eio.Switch.t -> stream_open_result) option;
 }
 
 (** Polymorphic variant response type. Superset of [Yojson.Safe.t] with HTML, text, redirect, streaming, and custom status/header variants. *)
-type custom = {
+and custom = {
   status : int option;
   headers : (string * string) list;
   body : response;
@@ -86,7 +98,13 @@ let redirect url : response = `Redirect url
 let stream ?(content_type = "application/octet-stream") ?(status = 200)
     ?(headers = []) fn : response =
   `Stream { stream_status = status; stream_content_type = content_type;
-            stream_headers = headers; stream_fn = fn }
+            stream_headers = headers; stream_fn = fn; stream_open = None }
+
+let stream_open fn : response =
+  `Stream { stream_status = 200;
+            stream_content_type = "application/octet-stream";
+            stream_headers = []; stream_fn = (fun _ -> ());
+            stream_open = Some fn }
 
 (* ── Response transformers ─────────────────────────────────────────── *)
 
