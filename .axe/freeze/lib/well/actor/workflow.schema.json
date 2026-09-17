@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:well:actor:workflow:1",
+  "title": "Well.Actor workflow format 1",
+  "type": "object",
+  "properties": {
+    "format": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "entry": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+    },
+    "input_type": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9_]{0,63}\\.[A-Z][A-Za-z0-9_]{0,63}$"
+    },
+    "bindings": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
+    },
+    "nodes": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/node"
+      }
+    }
+  },
+  "required": [
+    "format",
+    "name",
+    "version",
+    "entry",
+    "input_type",
+    "bindings",
+    "nodes"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "node": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/actor"
+        },
+        {
+          "$ref": "#/$defs/fork"
+        },
+        {
+          "$ref": "#/$defs/join"
+        },
+        {
+          "$ref": "#/$defs/end"
+        },
+        {
+          "$ref": "#/$defs/drop"
+        }
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "actor"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]{0,63}$"
+        },
+        "id": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "fixed": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "fixed"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "binding": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+                }
+              },
+              "required": [
+                "binding"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "input_path": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][A-Za-z0-9_]{0,63}$"
+                  }
+                }
+              },
+              "required": [
+                "input_path"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "accept": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]{0,63}$"
+        },
+        "emission_mode": {
+          "enum": [
+            "one",
+            "optional",
+            "many"
+          ]
+        },
+        "outputs": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Za-z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+          }
+        },
+        "join": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "actor",
+        "id",
+        "accept",
+        "emission_mode",
+        "outputs",
+        "join"
+      ],
+      "additionalProperties": false
+    },
+    "fork": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "fork"
+        },
+        "input_type": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]{0,63}\\.[A-Z][A-Za-z0-9_]{0,63}$"
+        },
+        "branches": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+              },
+              "next": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+              }
+            },
+            "required": [
+              "name",
+              "next"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "join": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "input_type",
+        "branches",
+        "join"
+      ],
+      "additionalProperties": false
+    },
+    "join": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "join"
+        },
+        "item_type": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]{0,63}\\.[A-Z][A-Za-z0-9_]{0,63}$"
+        },
+        "batch_type": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]{0,63}\\.[A-Z][A-Za-z0-9_]{0,63}$"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2592000000
+        },
+        "next": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+        }
+      },
+      "required": [
+        "kind",
+        "item_type",
+        "batch_type",
+        "timeout_ms",
+        "next"
+      ],
+      "additionalProperties": false
+    },
+    "end": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "end"
+        },
+        "input_type": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]{0,63}\\.[A-Z][A-Za-z0-9_]{0,63}$"
+        }
+      },
+      "required": [
+        "kind",
+        "input_type"
+      ],
+      "additionalProperties": false
+    },
+    "drop": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "drop"
+        },
+        "input_type": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]{0,63}\\.[A-Z][A-Za-z0-9_]{0,63}$"
+        }
+      },
+      "required": [
+        "kind",
+        "input_type"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

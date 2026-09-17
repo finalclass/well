@@ -1,0 +1,7 @@
+(test
+ (name actor_contract_test)
+ (libraries well well.test yojson unix actor_example_contracts actor_reporter_impl actor_summary_impl)
+ (deps
+  (source_tree %{project_root}/lib/well/actor/examples)
+  (source_tree %{project_root}/test/actor_reporter_impl)
+  (source_tree %{project_root}/test/actor_summary_impl)))

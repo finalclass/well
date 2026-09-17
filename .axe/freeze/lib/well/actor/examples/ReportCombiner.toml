@@ -1,0 +1,9 @@
+[actor]
+name = "ReportCombiner"
+version = 1
+
+[actor.accepts]
+Combine = "Reports.ReportBatch"
+
+[actor.emits]
+Produced = "Reports.Report"

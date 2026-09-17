@@ -1,0 +1,3 @@
+(library
+ (name actor_summary_impl)
+ (libraries well actor_example_contracts))

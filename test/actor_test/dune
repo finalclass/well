@@ -1,0 +1,4 @@
+(test
+ (name actor_test)
+ (libraries well well.test yojson unix eio eio_main sqlite3 mirage-crypto-rng.unix)
+ (deps (source_tree %{project_root}/lib/well/actor)))

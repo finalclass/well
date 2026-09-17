@@ -1,0 +1,9 @@
+[actor]
+name = "ReportSpawner"
+version = 1
+
+[actor.accepts]
+Generate = "Reports.RequestList"
+
+[actor.emits]
+Requested = "Reports.Request"

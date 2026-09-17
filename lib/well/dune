@@ -1,4 +1,12 @@
 (library
  (name well)
  (public_name well.core)
+ (private_modules
+  actor_jcs
+  actor_json
+  actor_types
+  actor_contract
+  actor_workflow
+  actor_store
+  actor_runtime)
  (libraries eio eio_main yojson unix tls-eio mirage-crypto-rng.unix mirage-crypto-pk x509 ptime domain-name digestif base64 zarith str well_html sqlite3 zip otoml))

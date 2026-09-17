@@ -1,0 +1,30 @@
+(executable
+ (name gen)
+ (modules gen)
+ (libraries well unix))
+
+(rule
+ (targets
+  reports.ml
+  reports.mli
+  reporter.ml
+  reporter.mli
+  report_decision.ml
+  report_decision.mli
+  report_spawner.ml
+  report_spawner.mli
+  report_combiner.ml
+  report_combiner.mli
+  summary_builder.ml
+  summary_builder.mli)
+ (deps
+  gen.exe
+  (source_tree %{project_root}/lib/well/actor/examples))
+ (action
+  (run ./gen.exe %{project_root}/lib/well/actor/examples .)))
+
+(library
+ (name actor_example_contracts)
+ (wrapped false)
+ (modules reports reporter report_decision report_spawner report_combiner summary_builder)
+ (libraries well yojson))
