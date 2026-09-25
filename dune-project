@@ -24,6 +24,7 @@
   yojson
   sqlite3
   tls-eio
+  (x509 (>= 1.2.0))
   mirage-crypto-pk
   digestif
   base64

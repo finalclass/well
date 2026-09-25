@@ -299,7 +299,8 @@ let create_csr domain =
   in
   let dn : X509.Distinguished_name.t = [
     X509.Distinguished_name.Relative_distinguished_name.singleton
-      (X509.Distinguished_name.CN domain)
+      (X509.Distinguished_name.CN
+         (X509.Distinguished_name.Common_name.v domain))
   ] in
   let san = X509.General_name.singleton X509.General_name.DNS [domain] in
   let extensions =

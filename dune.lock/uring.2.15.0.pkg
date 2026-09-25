@@ -30,7 +30,7 @@
   (url
    https://github.com/ocaml-multicore/ocaml-uring/releases/download/v2.15.0/uring-2.15.0.tbz)
   (checksum
-   sha256=30ad45e6d4dbbd94f9324c99af3dbcfa78f8f98a3c5717710810c782151d3186)))
+   sha512=0f101c1a68f8de1f4d05614d1284beb0755cffa82605c48df6e9b7a336249f614d0eb46f9626063ac96fca5345b248abf4cb193a9d00047bd1edb3c1aa714c7c)))
 
 (enabled_on_platforms
  (only

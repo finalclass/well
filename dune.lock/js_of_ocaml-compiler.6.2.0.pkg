@@ -22,4 +22,4 @@
   (url
    https://github.com/ocsigen/js_of_ocaml/releases/download/6.2.0/js_of_ocaml-6.2.0.tbz)
   (checksum
-   sha256=7cc641778d1b172a352a88333ee0e8c621365a0acfcd9b87e38bfddb8dd2a5da)))
+   sha512=da50c79e1ad667df22abe03d0928ee135729c90cf09279e3c4854aec66557e8600890ca58f550529de1b1a44698720890b97528df167fd9e10cce24c71e763e6)))

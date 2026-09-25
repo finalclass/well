@@ -11,4 +11,5 @@
  (fetch
   (url
    https://gitlab.inria.fr/fpottier/menhir/-/archive/20250912/archive.tar.gz)
-  (checksum md5=b8f83df02226419f99e49f1b637dcb11)))
+  (checksum
+   sha512=72c85ec63104d6a7c7b6305b4642b86909fcad2e46561427ad596e37e686b3c94cd382da440f058d32800a15b157b80a8242df8043440a209ba73d209657ea84)))
