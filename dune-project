@@ -9,6 +9,14 @@
   (preprocess
    (run well-mlx-pp %{input-file}))))
 
+; Cyrograf is pinned to a published, reachable revision on
+; github.com/finalclass/cyrograf (main). Do not replace with a home path,
+; placeholder SHA or a rewritten single root commit.
+(pin
+ (url "git+https://github.com/finalclass/cyrograf#0b886ea9e5965448e6c5d1855713220835b573a8")
+ (package
+  (name cyrograf)))
+
 (package
  (name well)
  (version 1.3.1)
@@ -36,4 +44,5 @@
   camlzip
   (js_of_ocaml (= 6.2.0))
   (js_of_ocaml-compiler (= 6.2.0))
-  (js_of_ocaml-ppx (= 6.2.0))))
+  (js_of_ocaml-ppx (= 6.2.0))
+  cyrograf))

@@ -1,0 +1,23 @@
+[service.rpc]
+reserve = "ReserveRequest -> ReserveResponse"
+
+[msg.ReserveRequest.struct]
+owner_id = "string"
+quantity = "int"
+note = { type = "string", optional = true }
+
+[msg.Reservation.struct]
+id = "string"
+item = "Common.Thing"
+
+[msg.Problem.struct]
+code = "string"
+message = "string"
+
+[msg.ReserveResponse.variant]
+Reserved = "Reservation"
+Rejected = "Problem"
+Unavailable = "void"
+
+[msg.ReservationBatch.struct]
+items = { type = "list", of = "Reservation" }

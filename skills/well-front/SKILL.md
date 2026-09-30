@@ -264,17 +264,17 @@ EffectsManager runs commands; component code only builds them.
 For service contracts, **use the generated OCaml browser Proxy** — do not hand-roll
 `Http.get/post` or JSON wire under a contract.
 
-- Generate: `well contract build` → `lib/contract/build/ocaml_browser/`
+- Generate: `well contract build` (or `dune build`) → `lib/contract_generated/adapters_browser/`
   (`rpc.ml` + per-service modules with `module Proxy`).
 - Mirror of TS `Proxy` / `rpc.ts`: same `POST /rpc/<Service>/<method>`, same
-  positional `to_wire`/`of_wire` arrays.
+  positional Drut arrays (`to_drut`/`from_drut`).
 - Headers: `Content-Type: application/json`, `X-Requested-With: XMLHttpRequest`
   (same-origin XHR may skip the CSRF token; `Origin` / `Sec-Fetch-Site` still
   apply). Optional `X-CSRF-Token` from `<meta name="csrf-token">` or
   `window.__WELL_CSRF` (not `__DG_CSRF` — set meta/`__WELL_CSRF` if migrating DG).
 - Callback is `(response, string) result`. **Always handle `Error`**: HTTP
   non-2xx, network failure, non-JSON body, Well service body
-  `{"error":"..."}` on 2xx, and `of_wire` decode failures — all surface as
+  `{"error":"..."}` on 2xx, and `from_drut` decode failures — all surface as
   `Error msg` (no uncaught exception into `Cmd.perform` / EffectsManager).
 - Call site (inside `Cmd.perform`):
 

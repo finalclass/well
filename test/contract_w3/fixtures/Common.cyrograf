@@ -1,0 +1,15 @@
+// W3 fixture: shared messages referenced across modules by the RPCs.
+struct Thing {
+  id: String
+  label?: String
+}
+
+struct Numbers {
+  small: Int
+  big: Int
+  negative: Int
+  ratio: Float
+  unicode: String
+}
+
+struct Empty {}

@@ -1,0 +1,4 @@
+(executable
+ (name main)
+ (libraries well.core contract contract_data cyrograf yojson eio eio_main unix
+   str))

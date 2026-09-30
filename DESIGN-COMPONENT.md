@@ -322,7 +322,7 @@ Użycie w HTML shella (rodzic = Manager stanu):
 
   Brak LiveView (TEA go zastępuje).
 - **`app.js`** — generowany z aplikacji well. Zawiera: proxy RPC (z
-  `contract_codegen`) + wszystkie komponenty (kod wołający `component`).
+  `Contract_adapters` i danych Cyrografu) + wszystkie komponenty (kod wołający `component`).
 
 Skutek: `well.js` cache'uje się długo (zmienia się tylko przy release
 frameworka), `app.js` cache-bust per build. Strona wstawia:

@@ -1,0 +1,28 @@
+// W2 native fixture: structs, a variant, a list, an optional and one RPC.
+struct ReserveRequest {
+  owner_id: String
+  quantity: Int
+  note?: String
+}
+
+struct Reservation {
+  id: String
+  item: Common.Thing
+}
+
+struct Problem {
+  code: String
+  message: String
+}
+
+variant ReserveResponse {
+  Reserved(Reservation)
+  Rejected(Problem)
+  Unavailable
+}
+
+struct ReservationBatch {
+  items: List<Reservation>
+}
+
+rpc reserve(ReserveRequest) -> ReserveResponse

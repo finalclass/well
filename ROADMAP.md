@@ -591,6 +591,14 @@ Podejście jak ExDoc w Elixirze - dokumentacja W KODZIE.
 
 ## 9. Kontrakty i usługi (aktorzy)
 
+> **Właściciel języka i kodeków:** Cyrograf. Well komponuje kompilator
+> Cyrografu z własnymi adapterami usług, proxy i aktorów. Kontrakt integracji
+> i plan testów migracji: [SERVICE.md](lib/well_cli/contract/SERVICE.md) oraz
+> [STP.md](lib/well_cli/contract/STP.md); plan:
+> [PLAN-CYROGRAF-MIGRATION.md](PLAN-CYROGRAF-MIGRATION.md). Poniższy opis §9
+> pozostaje kontekstem dotychczasowego modelu do zakończenia migracji (W7);
+> kontraktem wiążącym jest integracja Well z Cyrografem.
+
 ### 9.1 Wizja
 
 System inspirowany trzema źródłami:
@@ -605,9 +613,12 @@ mailbox (kolejkę wiadomości), supervision (restart po awarii).
 W przeciwieństwie do Erlanga nie mamy izolacji na poziomie VM — używamy EIO fiber +
 `try...with` jako granicy izolacji. Crash jednej usługi nie zabija reszty systemu.
 
-### 9.2 Kontrakty — TOML → codegen
+### 9.2 Kontrakty — `.cyrograf` → codegen
 
-Wzorzec z dg, wbudowany w framework jako standard.
+Wzorzec z dg, wbudowany w framework jako standard. Od migracji W6 natywnym
+źródłem jest `.cyrograf` (właściciel języka: Cyrograf); zwykły TOML pozostaje
+wejściem zgodności obsługiwanym przez Cyrograf. Poniższy zapis TOML opisuje
+dotychczasowy model i jego zgodność, nie drugi, równoległy format Well.
 
 ```toml
 # contract/UserManager.toml
@@ -657,7 +668,11 @@ Failed = "string"
 
 ### 9.3 Codegen — generowany kod
 
-`well contract build` czyta `contract/*.toml` i generuje kod.
+`well contract build` czyta źródła z `lib/contract/` (natywnie `.cyrograf`,
+zgodnościowo `.toml`) i publikuje komplet w `lib/contract_generated/`
+(`ocaml/`, `ocaml_js/`, `adapters/`, `adapters_browser/`, `typescript/`,
+`go/`, `dart/`, wspólny `manifest.json`). Ten sam mechanizm jest krokiem
+`dune build` nowego scaffoldu.
 
 **Codegen napisany w OCaml** (nie Go jak w dg — spójność frameworka).
 **TOML parser: `otoml`** (zero zależności, TOML 1.0 compliant, z opam).

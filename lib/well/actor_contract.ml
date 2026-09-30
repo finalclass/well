@@ -310,285 +310,6 @@ let read_input_path (desc : descriptor) ~payload_type payload path =
     in
     go schema payload path
 
-(* ── TOML catalog ─────────────────────────────────────────────────── *)
-
-let module_name_of_file path =
-  Filename.basename path |> Filename.chop_extension |> String.capitalize_ascii
-
-let toml_files dir =
-  Sys.readdir dir
-  |> Array.to_list
-  |> List.filter (fun f -> Filename.check_suffix f ".toml")
-  |> List.sort String.compare
-  |> List.map (fun f -> Filename.concat dir f)
-
-let get_table toml path =
-  match Otoml.find_opt toml Otoml.get_table path with
-  | Some pairs -> Some pairs
-  | None -> None
-
-let rec parse_type ~module_name ~available value =
-  match value with
-  | Otoml.TomlString s ->
-    if List.mem s primitives then Ok (Primitive s)
-    else if String.contains s '.' then
-      if qualified_type s && List.mem s available then Ok (Reference s)
-      else Error ("unknown type " ^ s)
-    else
-      let q = module_name ^ "." ^ s in
-      if ident_actor s && List.mem q available then Ok (Reference q)
-      else Error ("unknown type " ^ s)
-  | Otoml.TomlTable pairs | Otoml.TomlInlineTable pairs ->
-    let get_str k =
-      match List.assoc_opt k pairs with
-      | Some (Otoml.TomlString s) -> Some s
-      | _ -> None
-    in
-    let get_bool k =
-      match List.assoc_opt k pairs with
-      | Some (Otoml.TomlBoolean b) -> Some b
-      | _ -> None
-    in
-    let optional = Option.value ~default:false (get_bool "optional") in
-    let keys = List.map fst pairs in
-    let allowed = ["type"; "of"; "optional"] in
-    if List.exists (fun k -> not (List.mem k allowed)) keys then
-      Error "unknown type table key"
-    else
-      (match get_str "type" with
-       | Some "list" ->
-         (match get_str "of" with
-          | None -> Error "list requires of"
-          | Some of_ ->
-            parse_type ~module_name ~available (Otoml.TomlString of_)
-            |> Result.map (fun s -> if optional then Optional (List s) else List s))
-       | Some "optional" ->
-         (match get_str "of" with
-          | None -> Error "optional requires of"
-          | Some of_ ->
-            parse_type ~module_name ~available (Otoml.TomlString of_)
-            |> Result.map (fun s -> Optional s))
-       | Some s ->
-         parse_type ~module_name ~available (Otoml.TomlString s)
-         |> Result.map (fun t -> if optional then Optional t else t)
-       | None -> Error "type table missing type")
-  | _ -> Error "invalid type value"
-
-let parse_catalog source_dir =
-  let files = toml_files source_dir in
-  if files = [] then Error [err "InvalidContract" "no TOML files"]
-  else
-    let errors = ref [] in
-    let push e = errors := e :: !errors in
-    let parsed =
-      List.filter_map (fun path ->
-        match Otoml.Parser.from_file_result path with
-        | Error msg ->
-          push (err ~path:(Some path) "InvalidContract" msg);
-          None
-        | Ok toml -> Some (path, toml)
-      ) files
-    in
-    List.iter (fun (path, toml) ->
-      match get_table toml ["service"; "rpc"] with
-      | Some _ ->
-        push (err ~path:(Some path) "InvalidContract" "service.rpc is not allowed in Actor contracts")
-      | None -> ()
-    ) parsed;
-    let available =
-      List.concat_map (fun (path, toml) ->
-        let module_name = module_name_of_file path in
-        match get_table toml ["msg"] with
-        | None -> []
-        | Some pairs -> List.map (fun (n, _) -> module_name ^ "." ^ n) pairs
-      ) parsed
-    in
-    let modules_rev = ref [] in
-    let messages_rev = ref [] in
-    let actors_rev = ref [] in
-    let seen_modules = Hashtbl.create 8 in
-    List.iter (fun (path, toml) ->
-      let module_name = module_name_of_file path in
-      let norm = ocaml_module_name module_name in
-      if Hashtbl.mem seen_modules norm then
-        push (err ~path:(Some path) "InvalidContract" ("module name collision " ^ module_name))
-      else Hashtbl.add seen_modules norm ();
-      modules_rev := module_name :: !modules_rev;
-      (match get_table toml ["msg"] with
-       | None -> ()
-       | Some pairs ->
-         List.iter (fun (msg_name, msg_val) ->
-           if not (ident_actor msg_name) then
-             push (err ~path:(Some (path ^ "/msg/" ^ msg_name)) "InvalidContract" "invalid message name")
-           else
-             let struct_pairs, variant_pairs =
-               match msg_val with
-               | Otoml.TomlTable ps | Otoml.TomlInlineTable ps ->
-                 let st =
-                   match List.assoc_opt "struct" ps with
-                   | Some (Otoml.TomlTable s | Otoml.TomlInlineTable s) -> Some s
-                   | _ -> None
-                 in
-                 let vr =
-                   match List.assoc_opt "variant" ps with
-                   | Some (Otoml.TomlTable s | Otoml.TomlInlineTable s) -> Some s
-                   | _ -> None
-                 in
-                 let extra = List.filter (fun (k, _) -> k <> "struct" && k <> "variant") ps in
-                 if extra <> [] then
-                   push (err ~path:(Some (path ^ "/msg/" ^ msg_name)) "InvalidContract" "unknown message key");
-                 (st, vr)
-               | _ -> (None, None)
-             in
-             match struct_pairs, variant_pairs with
-             | Some _, Some _ ->
-               push (err ~path:(Some (path ^ "/msg/" ^ msg_name)) "InvalidContract" "struct and variant together")
-             | Some fields, None ->
-               let rec go acc = function
-                 | [] ->
-                   messages_rev := {
-                     module_name; name = msg_name;
-                     qualified = module_name ^ "." ^ msg_name;
-                     schema = Struct (List.rev acc);
-                   } :: !messages_rev
-                 | (fname, fval) :: rest ->
-                   if not (ident_field fname) then
-                     push (err ~path:(Some (path ^ "/msg/" ^ msg_name ^ "/" ^ fname)) "InvalidContract" "invalid field name")
-                   else
-                     match parse_type ~module_name ~available fval with
-                     | Error msg ->
-                       push (err ~path:(Some (path ^ "/msg/" ^ msg_name ^ "/" ^ fname)) "InvalidContract" msg)
-                     | Ok ty -> go ((fname, ty) :: acc) rest
-               in
-               go [] fields
-             | None, Some ctors ->
-               let rec go acc = function
-                 | [] ->
-                   messages_rev := {
-                     module_name; name = msg_name;
-                     qualified = module_name ^ "." ^ msg_name;
-                     schema = Variant (List.rev acc);
-                   } :: !messages_rev
-                 | (cname, cval) :: rest ->
-                   if not (ident_actor cname) then
-                     push (err ~path:(Some (path ^ "/msg/" ^ msg_name ^ "/" ^ cname)) "InvalidContract" "invalid constructor")
-                   else
-                     match parse_type ~module_name ~available cval with
-                     | Error msg ->
-                       push (err ~path:(Some (path ^ "/msg/" ^ msg_name ^ "/" ^ cname)) "InvalidContract" msg)
-                     | Ok ty -> go ((cname, ty) :: acc) rest
-               in
-               go [] ctors
-             | None, None ->
-               push (err ~path:(Some (path ^ "/msg/" ^ msg_name)) "InvalidContract" "message must be struct or variant")
-         ) pairs);
-      match get_table toml ["actor"] with
-      | None -> ()
-      | Some pairs ->
-        let name =
-          match List.assoc_opt "name" pairs with
-          | Some (Otoml.TomlString n) -> n
-          | _ -> ""
-        in
-        let version =
-          match List.assoc_opt "version" pairs with
-          | Some (Otoml.TomlInteger v) -> v
-          | _ -> 0
-        in
-        if String.length name >= 7 && String.sub name 0 7 = "__well." then
-          push (err ~path:(Some path) "InvalidContract" "reserved actor name");
-        if not (ident_actor name) then
-          push (err ~path:(Some path) "InvalidContract" "invalid actor name");
-        if version <= 0 then
-          push (err ~path:(Some path) "InvalidContract" "version must be positive");
-        let table_of key =
-          match List.assoc_opt key pairs with
-          | Some (Otoml.TomlTable t | Otoml.TomlInlineTable t) -> t
-          | _ -> []
-        in
-        let parse_map key =
-          let t = table_of key in
-          List.filter_map (fun (k, v) ->
-            if not (ident_actor k) then begin
-              push (err ~path:(Some (path ^ "/actor/" ^ key ^ "/" ^ k)) "InvalidContract" "invalid constructor name");
-              None
-            end else
-              match v with
-              | Otoml.TomlString ty ->
-                let q =
-                  if String.contains ty '.' then ty else module_name ^ "." ^ ty
-                in
-                if not (List.mem q available) then begin
-                  push (err ~path:(Some (path ^ "/actor/" ^ key ^ "/" ^ k)) "InvalidContract" ("unknown type " ^ ty));
-                  None
-                end else Some (k, q)
-              | _ ->
-                push (err ~path:(Some (path ^ "/actor/" ^ key ^ "/" ^ k)) "InvalidContract" "expected type name");
-                None
-          ) t
-        in
-        let accepts = parse_map "accepts" in
-        let emits = parse_map "emits" in
-        if accepts = [] then
-          push (err ~path:(Some path) "InvalidContract" "accepts must be non-empty");
-        let known = ["name"; "version"; "accepts"; "emits"] in
-        List.iter (fun (k, _) ->
-          if not (List.mem k known) then
-            push (err ~path:(Some path) "InvalidContract" ("unknown actor key " ^ k))
-        ) pairs;
-        actors_rev := {
-          module_name; name; version; accepts; emits;
-        } :: !actors_rev
-    ) parsed;
-    let messages = List.rev !messages_rev in
-    let qnames = List.map (fun m -> m.qualified) messages in
-    let dup =
-      let seen = Hashtbl.create 16 in
-      List.filter (fun q ->
-        if Hashtbl.mem seen q then true else (Hashtbl.add seen q (); false)
-      ) qnames
-    in
-    List.iter (fun q -> push (err "InvalidContract" ("duplicate type " ^ q))) dup;
-    let by_q = List.map (fun m -> m.qualified, m.schema) messages in
-    List.iter (fun m ->
-      List.iter (fun r ->
-        if not (List.mem_assoc r by_q) then
-          push (err "InvalidContract" ("unknown reference " ^ r ^ " in " ^ m.qualified))
-      ) (collect_refs [] m.schema)
-    ) messages;
-    let rec cycle_from start path schema =
-      match schema with
-      | Reference n ->
-        if n = start && path <> [] then true
-        else if List.mem n path then false
-        else
-          (match List.assoc_opt n by_q with
-           | None -> false
-           | Some s -> cycle_from start (n :: path) s)
-      | List s | Optional s -> cycle_from start path s
-      | Struct fs -> List.exists (fun (_, s) -> cycle_from start path s) fs
-      | Variant cs -> List.exists (fun (_, s) -> cycle_from start path s) cs
-      | Primitive _ -> false
-    in
-    List.iter (fun m ->
-      if cycle_from m.qualified [] m.schema then
-        push (err "InvalidContract" ("cyclic type " ^ m.qualified))
-    ) messages;
-    let actor_names = Hashtbl.create 8 in
-    List.iter (fun (a : actor_def) ->
-      if Hashtbl.mem actor_names a.name then
-        push (err "InvalidContract" ("duplicate actor " ^ a.name))
-      else Hashtbl.add actor_names a.name ()
-    ) (List.rev !actors_rev);
-    if !errors <> [] then Error (List.rev !errors)
-    else
-      Ok {
-        modules = List.rev !modules_rev;
-        messages;
-        actors = List.rev !actors_rev;
-        files = List.map (fun path -> path, module_name_of_file path) files;
-      }
-
 let descriptor_of_catalog (cat : catalog) =
   let msg_pairs_unhashed =
     List.map (fun (m : msg_def) -> m.qualified, m.schema) cat.messages
@@ -750,379 +471,6 @@ let define desc ~actor_type (raw : (module RAW_ACTOR)) =
         raw;
       }
 
-(* ── Codegen ──────────────────────────────────────────────────────── *)
-
-let rec type_to_ocaml local = function
-  | Primitive "string" | Primitive "date" -> "string"
-  | Primitive "int" -> "int"
-  | Primitive "float" -> "float"
-  | Primitive "bool" -> "bool"
-  | Primitive "void" -> "unit"
-  | Primitive "record" -> "Yojson.Safe.t"
-  | Primitive n -> n
-  | Reference q ->
-    (match String.split_on_char '.' q with
-     | [m; t] when m = local -> t ^ ".t"
-     | [m; t] -> ocaml_module_name m ^ "." ^ t ^ ".t"
-     | _ -> q ^ ".t")
-  | List s -> type_to_ocaml local s ^ " list"
-  | Optional s -> type_to_ocaml local s ^ " option"
-  | Struct _ -> "Yojson.Safe.t"
-  | Variant _ -> "Yojson.Safe.t"
-
-let rec to_wire_expr local expr = function
-  | Primitive "string" | Primitive "date" -> Printf.sprintf "`String %s" expr
-  | Primitive "int" -> Printf.sprintf "`Int %s" expr
-  | Primitive "float" -> Printf.sprintf "`Float %s" expr
-  | Primitive "bool" -> Printf.sprintf "`Bool %s" expr
-  | Primitive "void" -> "`Null"
-  | Primitive "record" -> Printf.sprintf "(%s :> Yojson.Safe.t)" expr
-  | Reference q ->
-    (match String.split_on_char '.' q with
-     | [m; t] when m = local -> Printf.sprintf "%s.to_wire %s" t expr
-     | [m; t] -> Printf.sprintf "%s.%s.to_wire %s" (ocaml_module_name m) t expr
-     | _ -> Printf.sprintf "to_wire %s" expr)
-  | List s ->
-    Printf.sprintf "`List (List.map (fun item -> %s) %s)" (to_wire_expr local "item" s) expr
-  | Optional s ->
-    Printf.sprintf "(match %s with None -> `Null | Some x -> %s)" expr (to_wire_expr local "x" s)
-  | _ -> expr
-
-let rec of_wire_expr local expr = function
-  | Primitive "string" | Primitive "date" ->
-    Printf.sprintf "(match %s with `String s -> Ok s | _ -> Error \"expected string\")" expr
-  | Primitive "int" ->
-    Printf.sprintf
-      "(match %s with `Int n when n >= -9007199254740991 && n <= 9007199254740991 -> Ok n | _ -> Error \"expected int\")"
-      expr
-  | Primitive "float" ->
-    Printf.sprintf
-      "(match %s with `Float f when Float.is_finite f -> Ok f | `Int n -> Ok (float_of_int n) | _ -> Error \"expected float\")"
-      expr
-  | Primitive "bool" ->
-    Printf.sprintf "(match %s with `Bool b -> Ok b | _ -> Error \"expected bool\")" expr
-  | Primitive "void" ->
-    Printf.sprintf "(match %s with `Null -> Ok () | _ -> Error \"expected null\")" expr
-  | Primitive "record" ->
-    Printf.sprintf "(match %s with `Assoc _ as o -> Ok o | _ -> Error \"expected object\")" expr
-  | Reference q ->
-    (match String.split_on_char '.' q with
-     | [m; t] when m = local -> Printf.sprintf "%s.of_wire %s" t expr
-     | [m; t] -> Printf.sprintf "%s.%s.of_wire %s" (ocaml_module_name m) t expr
-     | _ -> Printf.sprintf "of_wire %s" expr)
-  | List s ->
-    Printf.sprintf
-      "(match %s with `List items -> let rec go acc = function [] -> Ok (List.rev acc) | item :: rest -> (match %s with Ok v -> go (v :: acc) rest | Error e -> Error e) in go [] items | _ -> Error \"expected list\")"
-      expr (of_wire_expr local "item" s)
-  | Optional s ->
-    Printf.sprintf
-      "(match %s with `Null -> Ok None | x -> (match %s with Ok v -> Ok (Some v) | Error e -> Error e))"
-      expr (of_wire_expr local "x" s)
-  | _ -> Printf.sprintf "Error \"unsupported\""
-
-let ocaml_quote s = "\"" ^ String.escaped s ^ "\""
-
-let descriptor_loader desc_json qualified =
-  Printf.sprintf
-    "let message_type =\n    let d = match Well.Actor.Generated.descriptor (Yojson.Safe.from_string %s) with\n      | Ok d -> d\n      | Error _ -> invalid_arg \"actor descriptor\"\n    in\n    match Well.Actor.Generated.message_type d ~name:%s ~encode:to_wire ~decode:of_wire with\n    | Ok t -> t\n    | Error e -> invalid_arg e.message\n"
-    (ocaml_quote desc_json) (ocaml_quote qualified)
-
-let generate_struct local msg_name fields desc_json =
-  let buf = Buffer.create 512 in
-  let p fmt = Printf.bprintf buf fmt in
-  let fields = List.map (fun (n, ty) -> escape_keyword n, ty) fields in
-  p "module %s = struct\n" msg_name;
-  (match fields with
-   | [] ->
-     p "  type t = unit\n\n";
-     p "  let make () = ()\n\n";
-     p "  let to_wire (_ : t) : Yojson.Safe.t = `List []\n\n";
-     p "  let of_wire (wire : Yojson.Safe.t) : (t, string) result =\n";
-     p "    match wire with `List [] -> Ok () | _ -> Error \"expected empty array\"\n\n"
-   | _ ->
-     p "  type t = {\n";
-     List.iter (fun (esc, ty) -> p "    %s : %s;\n" esc (type_to_ocaml local ty)) fields;
-     p "  }\n\n";
-     p "  let make";
-     List.iter (fun (esc, _) -> p " ~%s" esc) fields;
-     p " () = {";
-     List.iteri (fun i (esc, _) -> if i > 0 then p "; "; p "%s" esc) fields;
-     p " }\n\n";
-     p "  let to_wire (v : t) : Yojson.Safe.t =\n    `List [\n";
-     List.iter (fun (esc, ty) -> p "      %s;\n" (to_wire_expr local ("v." ^ esc) ty)) fields;
-     p "    ]\n\n";
-     p "  let of_wire (wire : Yojson.Safe.t) : (t, string) result =\n";
-     p "    match wire with\n";
-     p "    | `List arr when List.length arr = %d ->\n" (List.length fields);
-     p "      let a = Array.of_list arr in\n";
-     let rec nest i =
-       if i = List.length fields then begin
-         p "      Ok {";
-         List.iteri (fun j (esc, _) -> if j > 0 then p "; "; p "%s" esc) fields;
-         p "}\n";
-         List.iter (fun _ -> p "      )\n") fields
-       end else
-         let (esc, ty) = List.nth fields i in
-         p "      (match %s with\n" (of_wire_expr local (Printf.sprintf "a.(%d)" i) ty);
-         p "       | Error e -> Error e\n";
-         p "       | Ok %s ->\n" esc;
-         nest (i + 1)
-     in
-     nest 0;
-     p "    | _ -> Error \"%s: expected array\"\n\n" msg_name);
-  p "  %s" (descriptor_loader desc_json (local ^ "." ^ msg_name));
-  p "end\n";
-  Buffer.contents buf
-
-
-let generate_variant local msg_name ctors desc_json =
-  let buf = Buffer.create 512 in
-  let p fmt = Printf.bprintf buf fmt in
-  p "module %s = struct\n" msg_name;
-  p "  type t =\n";
-  List.iter (fun (name, ty) ->
-    match ty with
-    | Primitive "void" -> p "    | %s\n" name
-    | _ -> p "    | %s of %s\n" name (type_to_ocaml local ty)
-  ) ctors;
-  p "\n";
-  p "  let to_wire (v : t) : Yojson.Safe.t =\n    match v with\n";
-  List.iter (fun (name, ty) ->
-    match ty with
-    | Primitive "void" -> p "    | %s -> `List [`String %s; `Null]\n" name (ocaml_quote name)
-    | _ ->
-      p "    | %s payload -> `List [`String %s; %s]\n"
-        name (ocaml_quote name) (to_wire_expr local "payload" ty)
-  ) ctors;
-  p "\n";
-  p "  let of_wire (wire : Yojson.Safe.t) : (t, string) result =\n    match wire with\n";
-  List.iter (fun (name, ty) ->
-    match ty with
-    | Primitive "void" ->
-      p "    | `List [`String %s; `Null] | `List [`String %s] -> Ok %s\n"
-        (ocaml_quote name) (ocaml_quote name) name
-    | _ ->
-      p "    | `List [`String %s; payload] ->\n      (match %s with Ok v -> Ok (%s v) | Error e -> Error e)\n"
-        (ocaml_quote name) (of_wire_expr local "payload" ty) name
-  ) ctors;
-  p "    | _ -> Error \"%s: unexpected variant\"\n\n" msg_name;
-  p "  %s" (descriptor_loader desc_json (local ^ "." ^ msg_name));
-  p "end\n";
-  Buffer.contents buf
-
-let generate_msg local (m : msg_def) desc_json =
-  match m.schema with
-  | Struct fields -> generate_struct local m.name fields desc_json
-  | Variant ctors -> generate_variant local m.name ctors desc_json
-  | _ -> ""
-
-let generate_actor local (a : actor_def) desc_json =
-  let buf = Buffer.create 1024 in
-  let p fmt = Printf.bprintf buf fmt in
-  let q ty =
-    match String.split_on_char '.' ty with
-    | [m; t] when m = local -> t ^ ".t"
-    | [m; t] -> ocaml_module_name m ^ "." ^ t ^ ".t"
-    | _ -> ty
-  in
-  let qmod ty =
-    match String.split_on_char '.' ty with
-    | [m; t] when m = local -> t
-    | [m; t] -> ocaml_module_name m ^ "." ^ t
-    | _ -> ty
-  in
-  p "module Inbound = struct\n";
-  p "  type t =\n";
-  List.iter (fun (k, ty) -> p "    | %s of %s\n" k (q ty)) a.accepts;
-  p "  let of_wire ~kind json =\n    match kind with\n";
-  List.iter (fun (k, ty) ->
-    p "    | %s -> (match %s.of_wire json with Ok v -> Ok (%s v) | Error e -> Error e)\n"
-      (ocaml_quote k) (qmod ty) k
-  ) a.accepts;
-  p "    | _ -> Error (\"unknown inbound \" ^ kind)\n";
-  p "end\n\n";
-  p "module Outbound = struct\n";
-  p "  type t =\n";
-  (match a.emits with
-   | [] -> p "    | Unused of unit\n"
-   | emits -> List.iter (fun (k, ty) -> p "    | %s of %s\n" k (q ty)) emits);
-  p "  let to_wire = function\n";
-  (match a.emits with
-   | [] -> p "    | Unused () -> (\"Unused\", `Null)\n"
-   | emits ->
-     List.iter (fun (k, ty) ->
-       p "    | %s v -> (%s, %s.to_wire v)\n" k (ocaml_quote k) (qmod ty)
-     ) emits);
-  p "end\n\n";
-  p "type inbound = Inbound.t\n";
-  p "type outbound = Outbound.t\n\n";
-  p "module type IMPL = sig\n";
-  p "  type state\n";
-  p "  val state_version : int\n";
-  p "  val init : Well.Actor.actor_id -> state\n";
-  p "  val state_to_wire : state -> Yojson.Safe.t\n";
-  p "  val state_of_wire : Yojson.Safe.t -> (state, string) result\n";
-  p "  val handle : Well.Actor.context -> state -> inbound ->\n";
-  p "    (state * outbound list, Well.Actor.failure) result\n";
-  p "end\n\n";
-  p "let make (module I : IMPL) =\n";
-  p "  let d = match Well.Actor.Generated.descriptor (Yojson.Safe.from_string %s) with\n"
-    (ocaml_quote desc_json);
-  p "    | Ok d -> d\n";
-  p "    | Error _ -> invalid_arg %s\n" (ocaml_quote (a.name ^ ".make: descriptor"));
-  p "  in\n";
-  p "  let raw = (module struct\n";
-  p "    type state = I.state\n";
-  p "    type inbound = Inbound.t\n";
-  p "    type outbound = Outbound.t\n";
-  p "    let state_version = I.state_version\n";
-  p "    let init = I.init\n";
-  p "    let state_to_wire = I.state_to_wire\n";
-  p "    let state_of_wire = I.state_of_wire\n";
-  p "    let inbound_of_wire = Inbound.of_wire\n";
-  p "    let outbound_to_wire = Outbound.to_wire\n";
-  p "    let handle = I.handle\n";
-  p "  end : Well.Actor.Generated.RAW_ACTOR) in\n";
-  p "  match Well.Actor.Generated.define d ~actor_type:%s raw with\n" (ocaml_quote a.name);
-  p "  | Ok def -> def\n";
-  p "  | Error _ -> invalid_arg %s\n" (ocaml_quote (a.name ^ ".make"));
-  Buffer.contents buf
-
-let generate_struct_mli local msg_name fields =
-  let buf = Buffer.create 256 in
-  let p fmt = Printf.bprintf buf fmt in
-  p "module %s : sig\n" msg_name;
-  (match fields with
-   | [] -> p "  type t = unit\n  val make : unit -> t\n"
-   | _ ->
-     p "  type t = {\n";
-     List.iter (fun (n, ty) ->
-       p "    %s : %s;\n" (escape_keyword n) (type_to_ocaml local ty)
-     ) fields;
-     p "  }\n";
-     p "  val make :";
-     List.iter (fun (n, ty) ->
-       p " %s:%s ->" (escape_keyword n) (type_to_ocaml local ty)
-     ) fields;
-     p " unit -> t\n");
-  p "  val to_wire : t -> Yojson.Safe.t\n";
-  p "  val of_wire : Yojson.Safe.t -> (t, string) result\n";
-  p "  val message_type : t Well.Actor.message_type\n";
-  p "end\n";
-  Buffer.contents buf
-
-let generate_variant_mli local msg_name ctors =
-  let buf = Buffer.create 256 in
-  let p fmt = Printf.bprintf buf fmt in
-  p "module %s : sig\n" msg_name;
-  p "  type t =\n";
-  List.iter (fun (name, ty) ->
-    match ty with
-    | Primitive "void" -> p "    | %s\n" name
-    | _ -> p "    | %s of %s\n" name (type_to_ocaml local ty)
-  ) ctors;
-  p "  val to_wire : t -> Yojson.Safe.t\n";
-  p "  val of_wire : Yojson.Safe.t -> (t, string) result\n";
-  p "  val message_type : t Well.Actor.message_type\n";
-  p "end\n";
-  Buffer.contents buf
-
-let generate_actor_mli local (a : actor_def) =
-  let buf = Buffer.create 512 in
-  let p fmt = Printf.bprintf buf fmt in
-  let q ty =
-    match String.split_on_char '.' ty with
-    | [m; t] when m = local -> t ^ ".t"
-    | [m; t] -> ocaml_module_name m ^ "." ^ t ^ ".t"
-    | _ -> ty
-  in
-  p "module Inbound : sig\n  type t =\n";
-  List.iter (fun (k, ty) -> p "    | %s of %s\n" k (q ty)) a.accepts;
-  p "end\n";
-  p "module Outbound : sig\n  type t =\n";
-  (match a.emits with
-   | [] -> p "    | Unused of unit\n"
-   | emits -> List.iter (fun (k, ty) -> p "    | %s of %s\n" k (q ty)) emits);
-  p "end\n";
-  p "type inbound = Inbound.t\n";
-  p "type outbound = Outbound.t\n";
-  p "module type IMPL = sig\n";
-  p "  type state\n";
-  p "  val state_version : int\n";
-  p "  val init : Well.Actor.actor_id -> state\n";
-  p "  val state_to_wire : state -> Yojson.Safe.t\n";
-  p "  val state_of_wire : Yojson.Safe.t -> (state, string) result\n";
-  p "  val handle : Well.Actor.context -> state -> inbound ->\n";
-  p "    (state * outbound list, Well.Actor.failure) result\n";
-  p "end\n";
-  p "val make : (module IMPL) -> Well.Actor.definition\n";
-  Buffer.contents buf
-
-let local_messages cat module_name =
-  List.filter (fun (m : msg_def) -> m.module_name = module_name) cat.messages
-
-let topo_local cat module_name =
-  let msgs = local_messages cat module_name in
-  let qset = List.map (fun m -> m.qualified) msgs in
-  let deps m =
-    collect_refs [] m.schema |> List.filter (fun r -> List.mem r qset)
-  in
-  let remaining = ref msgs in
-  let ordered = ref [] in
-  while !remaining <> [] do
-    let ready, blocked =
-      List.partition (fun m ->
-        List.for_all (fun d ->
-          List.exists (fun (o : msg_def) -> o.qualified = d) !ordered
-        ) (deps m)
-      ) !remaining
-    in
-    if ready = [] then (ordered := !remaining @ !ordered; remaining := [])
-    else (ordered := !ordered @ ready; remaining := blocked)
-  done;
-  !ordered
-
-let generate_ml cat desc module_name =
-  let desc_json = Yojson.Safe.to_string desc.json in
-  let buf = Buffer.create 2048 in
-  List.iter (fun m ->
-    Buffer.add_string buf (generate_msg module_name m desc_json);
-    Buffer.add_char buf '\n'
-  ) (topo_local cat module_name);
-  List.iter (fun (a : actor_def) ->
-    if a.module_name = module_name then
-      Buffer.add_string buf (generate_actor module_name a desc_json)
-  ) cat.actors;
-  Buffer.contents buf
-
-let generate_mli cat module_name =
-  let buf = Buffer.create 1024 in
-  List.iter (fun (m : msg_def) ->
-    match m.schema with
-    | Struct fields -> Buffer.add_string buf (generate_struct_mli module_name m.name fields)
-    | Variant ctors -> Buffer.add_string buf (generate_variant_mli module_name m.name ctors)
-    | _ -> ()
-  ) (topo_local cat module_name);
-  List.iter (fun (a : actor_def) ->
-    if a.module_name = module_name then
-      Buffer.add_string buf (generate_actor_mli module_name a)
-  ) cat.actors;
-  Buffer.contents buf
-
-let snake_file module_name = snake_case module_name ^ ".ml"
-let snake_mli module_name = snake_case module_name ^ ".mli"
-
-let generate_dune cat =
-  let mods =
-    cat.modules
-    |> List.map snake_case
-    |> List.sort String.compare
-    |> String.concat " "
-  in
-  Printf.sprintf
-    "(library\n (name actor_contracts)\n (wrapped false)\n (libraries well.core yojson)\n (modules %s))\n"
-    mods
-
 let manifest_name = ".well-actor-manifest.json"
 
 let file_sha path =
@@ -1198,62 +546,120 @@ let check_output_dir output_dir =
           Error [err "InvalidContract" "output_dir contains foreign files"]
         else Ok ()
 
+let map_compile_error (e : Well_contract.Actor_compile.error) =
+  match e.path with
+  | Some path -> err ~path:(Some path) e.code e.message
+  | None -> err e.code e.message
+
+let rec schema_of_cyrograf (t : Cyrograf.Schema.type_) =
+  match t with
+  | Cyrograf.Schema.Primitive p -> Primitive (Cyrograf.Schema.primitive_name p)
+  | Cyrograf.Schema.Reference q -> Reference (Cyrograf.Schema.qualified_name q)
+  | Cyrograf.Schema.List e -> List (schema_of_cyrograf e)
+  | Cyrograf.Schema.Optional e -> Optional (schema_of_cyrograf e)
+
+let catalog_of_loaded (loaded : Well_contract.Actor_compile.loaded) =
+  let modules =
+    List.map (fun (m : Cyrograf.Schema.module_) -> m.name) loaded.schema.modules
+  in
+  let messages =
+    List.concat_map
+      (fun (m : Cyrograf.Schema.module_) ->
+        List.map
+          (fun (msg : Cyrograf.Schema.message) ->
+            let schema =
+              match msg.kind with
+              | Cyrograf.Schema.Struct fields ->
+                Struct
+                  (List.map
+                     (fun (f : Cyrograf.Schema.field) -> f.name, schema_of_cyrograf f.type_)
+                     fields)
+              | Cyrograf.Schema.Variant constructors ->
+                Variant
+                  (List.map
+                     (fun (c : Cyrograf.Schema.constructor) ->
+                       c.name, schema_of_cyrograf c.payload)
+                     constructors)
+            in
+            { module_name = m.name; name = msg.name;
+              qualified = m.name ^ "." ^ msg.name; schema })
+          m.messages)
+      loaded.schema.modules
+  in
+  let actors =
+    List.map
+      (fun (a : Well_contract.Actor_compile.actor_decl) ->
+        { module_name = a.module_name; name = a.name; version = a.version;
+          accepts = a.accepts; emits = a.emits })
+      loaded.actors
+  in
+  { modules; messages; actors; files = [] }
+
 let build ~source_dir ~output_dir =
   if source_dir = output_dir then
     Error [err "InvalidContract" "output_dir must be distinct from source_dir"]
   else
-    match parse_catalog source_dir with
-    | Error e -> Error e
-    | Ok cat ->
-      match check_output_dir output_dir with
-      | Error e -> Error e
-      | Ok () ->
-        let desc = descriptor_of_catalog cat in
-        let parent = Filename.dirname output_dir in
-        let tmp = Filename.concat parent (Filename.basename output_dir ^ ".generating") in
-        rm_rf tmp;
-        mkdir_p (Filename.concat tmp "ocaml");
-        let written = ref [] in
-        List.iter (fun module_name ->
-          let ml_name = "ocaml/" ^ snake_file module_name in
-          let mli_name = "ocaml/" ^ snake_mli module_name in
-          let ml = generate_ml cat desc module_name in
-          let mli = generate_mli cat module_name in
-          write_file (Filename.concat tmp ml_name) ml;
-          write_file (Filename.concat tmp mli_name) mli;
-          written := ml_name :: mli_name :: !written
-        ) cat.modules;
-        let dune = generate_dune cat in
-        write_file (Filename.concat tmp "ocaml/dune") dune;
-        written := "ocaml/dune" :: !written;
-        let desc_s = Yojson.Safe.to_string desc.json ^ "\n" in
-        write_file (Filename.concat tmp "descriptor.json") desc_s;
-        written := "descriptor.json" :: !written;
-        let files =
-          List.map (fun rel ->
-            rel, file_sha (Filename.concat tmp rel)
-          ) (List.sort String.compare !written)
-        in
-        let manifest =
-          Yojson.Safe.to_string (`Assoc [
-            "format", `Int 1;
-            "files", `Assoc (List.map (fun (n, h) -> n, `String h) files);
-          ]) ^ "\n"
-        in
-        write_file (Filename.concat tmp manifest_name) manifest;
-        let old = output_dir ^ ".old" in
-        (try
-           if Sys.file_exists output_dir then begin
-             rm_rf old;
-             Unix.rename output_dir old
-           end;
-           Unix.rename tmp output_dir;
-           rm_rf old;
-           Ok ()
-         with exn ->
-           (try if Sys.file_exists old && not (Sys.file_exists output_dir) then
-              Unix.rename old output_dir with _ -> ());
-           Error [err "InvalidContract" ("replace failed: " ^ Printexc.to_string exn)])
+    match Well_contract.Actor_compile.load ~source_dir with
+    | Error errors -> Error (List.map map_compile_error errors)
+    | Ok loaded ->
+      let desc = descriptor_of_catalog (catalog_of_loaded loaded) in
+      (match
+         Well_contract.Actor_codegen.generate ~data_library:"actor_data"
+           ~data_prefix:"ocaml_data" ~adapter_prefix:"ocaml"
+           ~schema:loaded.schema ~actors:loaded.actors
+           ~descriptor_json:(Yojson.Safe.to_string desc.json) ()
+       with
+       | Error errors -> Error (List.map map_compile_error errors)
+       | Ok artifacts ->
+         (match check_output_dir output_dir with
+          | Error e -> Error e
+          | Ok () ->
+            let parent = Filename.dirname output_dir in
+            let tmp = Filename.concat parent (Filename.basename output_dir ^ ".generating") in
+            rm_rf tmp;
+            mkdir_p tmp;
+            List.iter
+              (fun (a : Well_contract.Actor_codegen.artifact) ->
+                let target = Filename.concat tmp a.path in
+                mkdir_p (Filename.dirname target);
+                write_file target a.contents)
+              artifacts;
+            let desc_s = Yojson.Safe.to_string desc.json ^ "\n" in
+            write_file (Filename.concat tmp "descriptor.json") desc_s;
+            let written =
+              "descriptor.json"
+              :: List.map (fun (a : Well_contract.Actor_codegen.artifact) -> a.path) artifacts
+            in
+            let files =
+              List.map
+                (fun rel -> rel, file_sha (Filename.concat tmp rel))
+                (List.sort String.compare written)
+            in
+            let manifest =
+              Yojson.Safe.to_string
+                (`Assoc [
+                   "format", `Int 1;
+                   "files", `Assoc (List.map (fun (n, h) -> n, `String h) files);
+                 ])
+              ^ "\n"
+            in
+            write_file (Filename.concat tmp manifest_name) manifest;
+            let old = output_dir ^ ".old" in
+            (try
+               if Sys.file_exists output_dir then begin
+                 rm_rf old;
+                 Unix.rename output_dir old
+               end;
+               Unix.rename tmp output_dir;
+               rm_rf old;
+               Ok ()
+             with exn ->
+               (try
+                  if Sys.file_exists old && not (Sys.file_exists output_dir) then
+                    Unix.rename old output_dir
+                with _ -> ());
+               Error
+                 [err "InvalidContract" ("replace failed: " ^ Printexc.to_string exn)])))
 
 let validate_payload (desc : descriptor) ~payload_type json =
   match find_message desc payload_type with

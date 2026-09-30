@@ -1,7 +1,10 @@
 # Przykłady kontraktowe
 
-Każdy JSON jest pełną definicją obiegu formatu 1. Pliki TOML stanowią jeden
-katalog wejściowy generatora Actor, nie rozszerzenie kontraktów RPC.
+Każdy JSON jest pełną definicją obiegu formatu 1. Katalog stanowi jedno
+wejście generatora Actor: wiadomości w `.cyrograf`, metadane aktorów w
+`.actor.toml`. Mieszany plik TOML (`[msg]` + `[actor]`) pozostaje obsługiwaną
+ścieżką zgodności, ale nie jest już formą dostarczanych przykładów. To nie jest
+rozszerzenie kontraktów RPC.
 
 | Obieg | Wejście pozycjonalne | Oczekiwany przebieg |
 |---|---|---|
@@ -17,10 +20,13 @@ nazwę klucza w payloadzie. Przykłady używają timeout wykonania 60000 ms.
 
 ## Kontrakty
 
-[Reports.toml](Reports.toml) definiuje wspólne wiadomości.
-[Reporter.toml](Reporter.toml), [ReportSpawner.toml](ReportSpawner.toml),
-[ReportDecision.toml](ReportDecision.toml), [ReportCombiner.toml](ReportCombiner.toml)
-i [SummaryBuilder.toml](SummaryBuilder.toml) określają niezależne typy aktorów.
+[Reports.cyrograf](Reports.cyrograf) definiuje wspólne wiadomości jako natywne
+źródło Cyrografu. [Reporter.actor.toml](Reporter.actor.toml),
+[ReportSpawner.actor.toml](ReportSpawner.actor.toml),
+[ReportDecision.actor.toml](ReportDecision.actor.toml),
+[ReportCombiner.actor.toml](ReportCombiner.actor.toml)
+i [SummaryBuilder.actor.toml](SummaryBuilder.actor.toml) określają niezależne
+typy aktorów w metadanych Well; Cyrograf nie interpretuje `[actor]`.
 
 ## Przykładowa implementacja jednego typu
 

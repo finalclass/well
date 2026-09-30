@@ -8,7 +8,7 @@ ich tutaj — jeśli coś tu brzmi lakonicznie, szczegóły są w linkowanym pli
 
 Full-stackowy framework webowy w OCaml 5 (EIO, fiber-per-connection). Jeden
 binarny plik, brak JavaScriptu dla logiki biznesowej. MLX = JSX dla OCaml.
-SQLite (bundled). Kontrakty usług w TOML → codegen (OCaml server, OCaml browser Proxy/jsoo, TS, Go, Dart). Klient przeglądarki: `build/ocaml_browser` `Proxy`, nie ręczny Http pod kontrakt.
+SQLite (bundled). Kontrakty usług w `.cyrograf` (zgodność TOML) → codegen (OCaml server, OCaml browser Proxy/jsoo, TS, Go, Dart). Klient przeglądarki: `lib/contract_generated` `Proxy`, nie ręczny Http pod kontrakt.
 Pełna wizja i stan w `ROADMAP.md`.
 
 Dwie warstwy frontendu:
@@ -46,6 +46,11 @@ Znany, niezależny failure runtime: `oauth_provider_test` — ignorować.
    jest częścią większego `well`, ale tu opisana jest jego wewnętrzna struktura.
 1a. `lib/well/actor/SERVICE.md` — trwałe instancje i obiegi nowego
    `Well.Actor`; zakres, API, kontrakty, trwałość i plan testów.
+1b. `lib/well_cli/contract/SERVICE.md` + `lib/well_cli/contract/STP.md` —
+   kontrakt integracji Well z Cyrografem: źródła `.cyrograf`, artefakty,
+   dispatch tekstowy, kontekst, rozróżnienie błędów, publikacja, rozszerzenie
+   Actor oraz kryteria M01–M13. Cyrograf jest właścicielem języka i kodeków;
+   Well tylko komponuje je z adapterami. Plan: `PLAN-CYROGRAF-MIGRATION.md`.
 2. `lib/<service>/SERVICE.md` — rola, granica abstrakcji, założenia, scenariusze,
    strategia weryfikacji usługi. **Czarnoskrzynkowa** — co usługa oferuje, nie
    jak jest zbudowana w środku.
@@ -60,6 +65,9 @@ Znany, niezależny failure runtime: `oauth_provider_test` — ignorować.
 
 Dla usług backendu z kontraktem TOML, trzeci artefakt to `lib/contract/<Service>.toml`
 (opis metody w TOML jest wiążący — kod musi go zrealizować dosłownie).
+Docelowe źródła migrują do `.cyrograf`; Cyrograf jest właścicielem języka,
+typów i kodeków, a Well generuje wyłącznie adaptery i publikuje wynik.
+Migrację opisuje `lib/well_cli/contract/SERVICE.md`.
 
 ## Twarde reguły
 

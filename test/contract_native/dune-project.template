@@ -1,0 +1,18 @@
+(lang dune 3.17)
+
+(pin
+ (url "git+file://@WELL_SNAPSHOT@")
+ (package
+  (name well)))
+
+(pin
+ (url "git+file://@CYROGRAF_SNAPSHOT@")
+ (package
+  (name cyrograf)))
+
+(package
+ (name consumer)
+ (depends
+  ocaml
+  well
+  cyrograf))

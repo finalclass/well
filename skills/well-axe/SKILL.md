@@ -82,19 +82,23 @@ for a large batch, not just a final build after all implementation is done.
 
 ### 3. Contracts first
 
-The authored contract is Markdown in `docs/<service>/`: SDD contract index,
-linked RPC specs and shared types. Generated `lib/contract/<Service>.toml` is a
-projection, never an alternative source. For legacy authored TOML, follow an
-explicit project convention; do not migrate its format incidentally.
+The authored contract is the project's native source: a `.cyrograf` file per
+module under `lib/contract/` (Markdown may embed the same contract in
+```cyrograf``` fences, which project deterministically to `.cyrograf`). Plain
+TOML remains a Cyrograf compatibility input, so legacy authored TOML keeps an
+explicit project convention; do not migrate its format incidentally and never
+keep two definitions of the same module. The generated `lib/contract_generated`
+tree is a projection, never an alternative source.
 
-For each affected service, parse all linked TOML fences with a real TOML parser
-and merge semantically. Reject conflicting keys, duplicate type definitions,
-multiple RPC owners, unlinked contract-bearing files and unresolved references.
-Repeated service tables may contribute disjoint or identical method keys.
-Validate qualified references against dependency type catalogs. Emit deterministic,
-comment-free TOML, then run the project contract-generation command (typically
-`well contract build`). Only root writes generated files. Generation success is
-not evidence that the full application compiles.
+For each affected service, collect the linked contract blocks (`.cyrograf` or
+legacy TOML) and merge semantically with the language owner's compiler. Reject
+conflicting keys, duplicate type definitions, multiple RPC owners, unlinked
+contract-bearing files and unresolved references. Repeated tables may contribute
+disjoint or identical method keys. Validate qualified references against
+dependency type catalogs. Then run the project contract-generation command
+(typically `well contract build`, which `dune build` also drives). Only root
+writes generated files. Generation success is not evidence that the full
+application compiles.
 
 Prefer generated types and Proxy to temporary implementations. If compilation
 requires a stub, use an explicit unimplemented failure, never a fake success or

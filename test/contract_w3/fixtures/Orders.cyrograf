@@ -1,0 +1,34 @@
+// W3 fixture: RPCs that cross module boundaries and carry wide integers.
+struct ReserveRequest {
+  owner_id: String
+  quantity: Int
+  note?: String
+  thing: Common.Thing
+  tags: List<String>
+}
+
+struct Reservation {
+  id: String
+  item: Common.Thing
+  count: Int
+}
+
+struct Problem {
+  code: String
+  message: String
+}
+
+variant ReserveResponse {
+  Reserved(Reservation)
+  Rejected(Problem)
+  Unavailable
+}
+
+struct ReservationBatch {
+  items: List<Reservation>
+}
+
+rpc reserve(ReserveRequest) -> ReserveResponse
+rpc echo(Common.Thing) -> Common.Thing
+rpc numbers(Common.Numbers) -> Common.Numbers
+rpc empty(Common.Empty) -> Common.Empty

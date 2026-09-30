@@ -131,7 +131,8 @@ myapp/
 │   ├── pages/home_page.mlx                  # Pages.Home_page — routes: Well.get "/" ...
 │   ├── live/counter_live.mlx                # Live.Counter_live — LiveView module
 │   ├── services/note_access_impl.ml         # Services.Note_access_impl
-│   └── contract/                            # Service contracts (TOML)
+│   ├── contract/                            # Service contracts (.cyrograf)
+│   └── contract_generated/                  # Generated data + adapters
 ├── static/                                  # CSS, JS, assets
 └── test/myapp_test.ml                       # Tests
 ```
@@ -1272,41 +1273,57 @@ let url = Well.S3.presigned_url s3 ~method_:"GET" ~key:"photos/cat.jpg" ~expires
 
 ---
 
-## Service Contracts (TOML)
+## Service Contracts (.cyrograf)
 
-Define service interfaces in TOML, generate OCaml + TypeScript + Go + Dart.
+Define service interfaces in `.cyrograf` (owned by Cyrograf), then generate
+OCaml + TypeScript + Go + Dart. Plain TOML stays a Cyrograf compatibility
+input, but a module must have exactly one definition in `lib/contract/`.
 
-```toml
-# contract/TaskAccess.toml
-[service.rpc]
-list = "ListReq -> TaskList"
-create = "CreateReq -> Task"
-
-[msg.Task.struct]
-id = "int"
-title = "string"
-completed = "bool"
-
-[msg.ListReq.struct]
-limit = "int"
-
-[msg.CreateReq.struct]
-title = "string"
-
-[msg.TaskList.struct]
-tasks = { type = "list", of = "Task" }
+```
+lib/contract/TaskAccess.cyrograf
+lib/contract_generated/          # output; produced by dune build
+  ocaml/            (contract_data)          ocaml_js/  (contract_data_browser)
+  adapters/         (contract)               adapters_browser/ (contract_browser)
+  typescript/       (wire codecs + Proxy)    manifest.json  schema.json
 ```
 
-Generate: `well contract build .`
+```cyrograf
+// lib/contract/TaskAccess.cyrograf
+struct Task {
+  id: Int
+  title: String
+  completed: Bool
+}
+
+struct ListReq {
+  limit: Int
+}
+
+struct CreateReq {
+  title: String
+}
+
+struct TaskList {
+  tasks: List<Task>
+}
+
+rpc list(ListReq) -> TaskList
+rpc create(CreateReq) -> Task
+```
+
+Build: `dune build` regenerates `lib/contract_generated` (or run
+`well contract build lib/contract lib/contract_generated` explicitly).
+The generated type lives in the data library (`Contract_data.Task_access`),
+while the adapter module owns `IMPL`, `make_spec` and the `~ctx` callers.
 
 Implement:
 ```ocaml
 module Impl : Task_access.IMPL = struct
-  let list _ctx (req : Task_access.ListReq.t) =
-    Task_access.TaskList.make ~tasks ()
+  let list _ctx (_req : Contract_data.Task_access.ListReq.t) =
+    Contract_data.Task_access.TaskList.make ~tasks ()
 
-  let create _ctx (req : Task_access.CreateReq.t) =
-    Task_access.Task.make ~id ~title:req.title ~completed:false ()
+  let create _ctx (req : Contract_data.Task_access.CreateReq.t) =
+    Contract_data.Task_access.Task.make ~id ~title:req.title ~completed:false ()
 end
 
 let spec = Task_access.make_spec (module Impl)
@@ -1314,9 +1331,12 @@ let spec = Task_access.make_spec (module Impl)
 
 Register in `lib/app.ml`:
 ```ocaml
-Well.Service.register Services.Task_access_impl.spec;
+Well.Service.register_drut Services.Task_access_impl.spec;
 Well.Service.expose "TaskAccess";  (* creates /rpc/TaskAccess/* HTTP routes *)
 ```
+
+Public message conversions are only `to_drut`/`from_drut`; do not add another
+codec or parse JSON before the generated decoder.
 
 ### Service Module
 
@@ -1657,8 +1677,8 @@ well build                    # Production build (dune + patchelf + bundle .so �
 well release                  # Build + create .tar.gz archive for deployment
 well test [-w] [-f pat] [--jobs n] [-u]  # Run tests (watch, filter, concurrency, snapshots)
 well docs [--open] [-o dir]   # Generate HTML documentation from (** *) comments
-well contract build [dir]     # Generate OCaml/TS/Go/Dart + OCaml browser Proxy
-                              # Browser: build/ocaml_browser (use Proxy, not Http)
+well contract build          # Generate contracts (default lib/contract -> lib/contract_generated)
+                              # Browser: lib/contract_generated (use Proxy, not Http)
 well db diff                  # Show pending schema migrations
 well db rollback [path]       # Restore from .bak backup
 well repl [-s socket] [-e expr]  # Interactive service query shell
@@ -1799,6 +1819,6 @@ When adding a new feature, you typically need:
 2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let pool = lazy (Well.Db.create_pool ())`
 3. **LiveView**: Create `lib/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields. Register with `Well.live "/feature" (module Live.Feature_live)` in `lib/app.ml`. Then create a GET page that embeds `<Well.LiveView name="feature" />`. Both steps are required — `Well.live` only registers the WS handler, not the page.
 4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or LiveViews
-5. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module, register + expose in `lib/app.ml`
+5. **Service**: add a `.cyrograf` contract under `lib/contract/`, run `well contract build` (or `dune build`), implement the `IMPL` module, register with `Well.Service.register_drut` + `expose` in `lib/app.ml`
 6. **Auth-protected**: Add `~middleware:[Well.require_auth ()]` or wrap handler with `Well.Auth.require_grant`
 7. **Tests**: Add to `test/` with `Well.Db.with_test_db` for DB tests or `Well.with_test_server` for integration tests

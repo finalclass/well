@@ -1,0 +1,6 @@
+(test
+ (name contract_actor_test)
+ (libraries well well.test yojson unix)
+ (deps
+  fixtures/baseline_descriptor.json
+  (source_tree %{project_root}/lib/well/actor/examples)))

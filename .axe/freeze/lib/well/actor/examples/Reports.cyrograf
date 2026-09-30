@@ -1,0 +1,24 @@
+// Shared actor messages. Native Cyrograf source; the actor metadata lives in
+// the separate *.actor.toml files owned by Well.
+
+struct Request {
+  reporter_id: String
+  subject: String
+}
+
+struct RequestList {
+  requests: List<Request>
+}
+
+struct Report {
+  source: String
+  text: String
+}
+
+struct ReportBatch {
+  items: List<Report>
+}
+
+struct Summary {
+  text: String
+}

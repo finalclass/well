@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "description": "Rzeczywisty układ autorowanej specyfikacji Well dla śledzenia zatwierdzonej delty. Well nie ma katalogu docs/ ani axe.toml, więc mechaniczny delta.py operujący na docs/ nie opisuje tego układu i nie może zaliczyć baseline.",
+  "tracked": [
+    "AGENTS.md",
+    "ROADMAP.md",
+    "DESIGN-COMPONENT.md",
+    "README.md",
+    "CHANGELOG.md",
+    "HANDOFF-FRONTEND.md",
+    "HANDOFF-HTML-VDOM-UNIFIED.md",
+    "HANDOFF-TYPED-EVENT-HANDLERS.md",
+    "cmd-extend.md",
+    "lib/well/SERVICE.md",
+    "lib/well/actor/SERVICE.md",
+    "lib/well/actor/API.md",
+    "lib/well/actor/ARCH.md",
+    "lib/well/actor/CONTRACT.md",
+    "lib/well/actor/DURABILITY.md",
+    "lib/well/actor/STP.md",
+    "lib/well/actor/WORKFLOW.md",
+    "lib/well_web/ARCH.md",
+    "lib/well_web/SERVICE.md",
+    "lib/well_web/bridge/SERVICE.md",
+    "lib/well_web/component_access/SERVICE.md",
+    "lib/well_web/effects_manager/SERVICE.md",
+    "lib/well_web/loop_manager/SERVICE.md",
+    "lib/well_web/message_bus/SERVICE.md",
+    "lib/well_web/state_access/SERVICE.md",
+    "lib/well_cli/contract/SERVICE.md",
+    "lib/well_cli/contract/STP.md",
+    "skills/well/SKILL.md",
+    "skills/well-front/SKILL.md",
+    "skills/well-axe/SKILL.md"
+  ],
+  "derived_contracts": [
+    "lib/contract/<Service>.toml (projekcja; nie autorowana)",
+    "lib/contract_generated/** (wynik integracji; nie autorowany)"
+  ],
+  "freeze": {
+    "path": ".axe/freeze",
+    "verified_scope": "lib/well/actor/** oraz wskazane SERVICE.md; ostatni automatycznie zweryfikowany obraz 2026-09-17",
+    "rule": "Freeze nie obejmuje niezweryfikowanych zmian W0 ani cudzej zaległej delty. Każdy etap W1–W7 przesuwa freeze wyłącznie dla zweryfikowanych przez siebie specyfikacji i dopiero po przejściu własnego wymaganego odbioru z STP."
+  },
+  "delta": {
+    "authorization": "Przyjęty plan PLAN-CYROGRAF-MIGRATION.md i polecenie jego wykonania; nie fikcyjny verified freeze.",
+    "evidence": "Odciski SHA-256 plików delty i mapowanie na etapy w progress/Wn.json oraz w raporcie Wn.",
+    "no_implicit_baseline": "Brak docs/ i axe.toml nie upoważnia do zaliczenia baseline ani do utworzenia nowego przez skopiowanie niezweryfikowanego stanu."
+  }
+}

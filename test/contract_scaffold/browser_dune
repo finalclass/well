@@ -1,0 +1,5 @@
+(executable
+ (name browser_main)
+ (modes js)
+ (libraries contract_browser contract_data_browser js_of_ocaml)
+ (preprocess (pps js_of_ocaml-ppx)))

@@ -1,0 +1,8 @@
+[msg.UserCtx.struct]
+user_id = "string"
+
+[msg.Thing.struct]
+id = "string"
+label = { type = "string", optional = true }
+
+[msg.Empty.struct]

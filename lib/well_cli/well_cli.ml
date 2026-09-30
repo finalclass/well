@@ -2,6 +2,9 @@ let commands : Command.t list ref = ref []
 
 let register cmd = commands := cmd :: !commands
 
+module Contract_build = Contract_build
+module Contract_adapters = Contract_adapters
+
 let sorted_commands () =
   List.sort (fun (a : Command.t) (b : Command.t) -> String.compare a.name b.name) !commands
 

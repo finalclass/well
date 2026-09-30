@@ -17,7 +17,7 @@ aktorem. Obieg aplikacji enkapsuluje orkiestrację; kod aktora lokalną regułę
 | ActorDefinitionAccess | Access | dostęp do metadanych i zarejestrowanego zachowania |
 | ExecutionAccess | Access | atomowe operacje na trwałym wykonaniu i stanie |
 | Scheduler | Utility | gotowość, przydział aktywacji, zegary i wybudzenia |
-| Contract | narzędzie | projekcja kontraktu TOML na typy, kodeki i metadane |
+| Contract | narzędzie | projekcja kontraktu Cyrografu i metadanych `[actor]` na typy, kodeki i deskryptor |
 | Join actor | zachowanie wbudowane | zbieranie wyników konkretnej grupy |
 
 ```static-architecture

@@ -21,10 +21,10 @@
   gen.exe
   (source_tree %{project_root}/lib/well/actor/examples))
  (action
-  (run ./gen.exe %{project_root}/lib/well/actor/examples .)))
+  (run ./gen.exe %{project_root}/lib/well/actor/examples . adapters)))
 
 (library
  (name actor_example_contracts)
  (wrapped false)
  (modules reports reporter report_decision report_spawner report_combiner summary_builder)
- (libraries well yojson))
+ (libraries well yojson actor_data))

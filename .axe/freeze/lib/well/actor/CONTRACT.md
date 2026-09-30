@@ -1,11 +1,15 @@
 # Kontrakty aktorów, typy i generowanie
 
-## TOML
+## Źródła i metadane
 
-Kontrakt typu aktora używa istniejącego języka `[msg.*]` i osobnej tabeli
-`[actor]`. Definicje wiadomości nie są endpointami RPC.
+Wiadomości aktora definiuje się w źródłach `.cyrograf`; Cyrograf jest jedynym
+właścicielem gramatyki typów i generowania kodeków. Well utrzymuje wyłącznie
+metadane typu aktora — tabelę `[actor]` w osobnym pliku Well, np.
+`Reporter.actor.toml`. `[actor]` nie jest interpretowane przez Cyrograf.
+Definicje wiadomości nie są endpointami RPC.
 
 ```toml
+# Reporter.actor.toml
 [actor]
 name = "Reporter"
 version = 1
@@ -24,53 +28,60 @@ emits może być puste. Klucze accepts/emits są nazwami konstruktorów OCaml:
 są generowane w osobnych modułach Inbound i Outbound.
 
 Wartość każdego wpisu jest kwalifikowaną albo lokalną nazwą wiadomości
-z `[msg]`, nie anonimowym JSON-em. Rodzaj wiadomości i typ jej payloadu są
+z `.cyrograf`, nie anonimowym JSON-em. Rodzaj wiadomości i typ jej payloadu są
 różnymi pojęciami: Produced i Corrected mogą mieć ten sam Reports.Report.
 
-Plik może zawierać `[actor]` wraz z `[msg]`, albo tylko `[msg]` jako wspólny
-katalog. Mieszanie `[actor]` i `[service.rpc]` w jednym pliku jest błędem
-kontraktu aktorowego. Obecny język i generowanie kontraktów usług nie są
-przy tej okazji zmieniane.
+Adapter Well obsługuje też zastane, mieszane pliki TOML. Wtedy odczytuje
+wyłącznie rozszerzenie `[actor]`, zachowuje kolejność reszty i przekazuje
+deklaracje wiadomości do Cyrografu; nie utrzymuje drugiego parsera typów.
+Nieznanych kluczy nie wolno zgubić podczas projekcji — są błędem, nie cichym
+pominięciem. Mieszanie `[actor]` i `[service.rpc]` w jednym pliku pozostaje
+błędem kontraktu aktorowego.
 
-Nazwa modułu kontraktu wynika z nazwy pliku, np. `Reports.toml` → Reports.
-Nazwy pól rekordów: `[a-z][A-Za-z0-9_]{0,63}`; słowa kluczowe OCaml są
-escapowane wyłącznie w wygenerowanym kodzie, nigdy w metadanych i ścieżkach.
-Duplikaty, nieznane klucze, nieznane referencje, kolizje nazw po normalizacji,
-cykliczne definicje typów i jednoczesne struct+variant są odrzucane.
+Nazwa modułu kontraktu wynika z nazwy pliku, np. `Reports.cyrograf` → Reports.
+Nazwy pól rekordów są walidowane przez Cyrograf według jego języka. Duplikaty,
+nieznane klucze, nieznane referencje, kolizje nazw po normalizacji, cykliczne
+definicje typów i jednoczesne struct+variant odrzuca Cyrograf.
 
 ## Współdzielone typy
 
-```toml
-[msg.Request.struct]
-reporter_id = "string"
-subject = "string"
+```cyrograf
+struct Request {
+  reporter_id: String
+  subject: String
+}
 
-[msg.RequestList.struct]
-requests = { type = "list", of = "Request" }
+struct RequestList {
+  requests: List<Request>
+}
 
-[msg.Report.struct]
-source = "string"
-text = "string"
+struct Report {
+  source: String
+  text: String
+}
 
-[msg.ReportBatch.struct]
-items = { type = "list", of = "Report" }
+struct ReportBatch {
+  items: List<Report>
+}
 
-[msg.Summary.struct]
-text = "string"
+struct Summary {
+  text: String
+}
 ```
 
 Każdy kwalifikowany typ jest zdefiniowany dokładnie raz. Aktorzy zależą od
 biblioteki wspólnych kontraktów, nie od implementacji pozostałych aktorów.
 Definicje wiadomości używanych w przykładach są kompletne w examples.
 
-## Typy i wire
+## Typy i Drut
 
-Obsługiwane typy: string, int, float, bool, void, date, record; kwalifikowane
-referencje do struct/variant; list of i optional w istniejącej składni TOML.
-`ctx` nie jest typem wiadomości Actor: dane kontekstu aplikacji deklaruje się
-jawnie jako rekord. Brak automatycznego wstrzykiwania rpc_ctx.
+Obsługiwane typy i reguły języka należą do Cyrografu: string, int, float, bool,
+void, date, record; kwalifikowane referencje do struct/variant; list i optional
+w składni `.cyrograf`. `ctx` nie jest typem wiadomości Actor: dane kontekstu
+aplikacji deklaruje się jawnie jako rekord. Brak automatycznego wstrzykiwania
+rpc_ctx; Cyrograf odrzuca źródłowy `Ctx` jako `UnsupportedFrameworkType`.
 
-- struct → tablica wartości w kolejności deklaracji pól TOML;
+- struct → tablica wartości w kolejności deklaracji pól;
 - variant → `["Constructor", payload]`;
 - optional → null dla braku, wartość dla obecności; pozycja nie znika;
 - list → tablica elementów; void → null;
@@ -83,10 +94,12 @@ nieznane tagi wariantów i wartości poza zakresem. `record` nie umożliwia
 statycznego adresowania input_path ani nie zastępuje typowanego wejścia.
 Date ma postać string jak w kontraktach Well; brak dodatkowego parsowania
 kalendarzowego w wersji 1. Reguła int dotyczy Actor, nie zmienia RPC.
+Wiadomości zewnętrzne przechodzą przez Drut tekstowy, a nie przez pośredni
+JSON AST, który mógłby zaokrąglić liczbę.
 
 ## Metadane
 
-Generator zapisuje descriptor.json:
+Adapter Well odwzorowuje schemat Cyrografu na dotychczasowy `descriptor.json`:
 
 - format=1;
 - modules: nazwy kontraktów;
@@ -95,10 +108,14 @@ Generator zapisuje descriptor.json:
 - actors: nazwa typu → version, accepts, emits;
 - schema_hash per typ oraz actor_contract_hash per typ aktora.
 
-Listy pól zachowują kolejność TOML, nawet jeśli słowniki mają sortowane
+Listy pól zachowują kolejność źródła, nawet jeśli słowniki mają sortowane
 klucze. Hash typu uwzględnia jego kwalifikowaną nazwę, uporządkowany schemat
 oraz pełne, topologicznie rozwinięte referencje. Hash kontraktu aktora
-uwzględnia nazwę, version i typy accepts/emits wraz z hashami.
+uwzględnia nazwę, version i typy accepts/emits wraz z hashami. Plik
+`schema.json` Cyrografu jest odrębnym artefaktem i nie zastępuje deskryptora;
+odwzorowanie jest jawne i porównywane JCS/SHA-256 ze starym wynikiem dla
+niezmienionego znaczenia. Nowe typy natywne bez starego odpowiednika nie
+otrzymują pozornej gwarancji zgodności.
 
 Kanonizacja: [RFC 8785 (JCS)](https://www.rfc-editor.org/rfc/rfc8785), UTF-8, SHA-256, zapis małymi literami hex.
 Dotyczy deskryptorów, workflow i porównywania admission. Wartości wejścia
@@ -112,12 +129,17 @@ odtwarzaniu starych wiadomości.
 
 ## Wynik generowania
 
-Dla każdego modułu kontraktu:
+Cyrograf generuje typy wiadomości oraz `to_drut`/`from_drut`; Well dokłada
+adaptery typu aktora. Dla każdego modułu kontraktu:
 
-- OCaml: typy wiadomości, make, to_wire, of_wire oraz witness message_type;
-- dla typu aktora: Inbound.t, Outbound.t, IMPL i make : (module IMPL) → definition;
+- Cyrograf (OCaml): typy wiadomości, `make` oraz `to_drut`, `from_drut`;
+- Well (adapter aktora): witness `message_type`, Inbound.t, Outbound.t, IMPL
+  i `make : (module IMPL) → definition`;
 - osobna biblioteka typów i metadanych bez implementacji aktorów;
-- descriptor.json do walidacji obiegu i przyszłego edytora.
+- `descriptor.json` do walidacji obiegu i przyszłego edytora.
+
+Well używa wyłącznie publicznych konwersji Cyrografu (`to_drut`/`from_drut`)
+i nie utrzymuje własnej kopii kodeka ani drugiego parsera typów.
 
 Przykładowe API Reporter:
 
@@ -150,8 +172,10 @@ Moduł `Reports.Request` udostępnia `message_type : t Well.Actor.message_type`.
 To umożliwia `Message (Reports.Request.message_type, request)` przy send.
 Źródłowa biblioteka Reporter nie musi znać nazwy kolejnego węzła.
 
-State ma własny codec i state_version: TOML opisuje zewnętrzne wiadomości,
-nie narzuca modelu prywatnego stanu. Nie ma funkcji Proxy wykonujących RPC
+State ma własny codec i state_version: Cyrograf opisuje zewnętrzne wiadomości,
+nie narzuca modelu prywatnego stanu. Wiadomości zewnętrzne są konwertowane przez
+`to_drut`/`from_drut`; runtime otrzymuje surowy tekst payloadu przed jakimkolwiek
+krokiem, który mógłby zaokrąglić liczbę. Nie ma funkcji Proxy wykonujących RPC
 pod rodzajami wiadomości aktora. Pierwsza wersja wymaga generatora OCaml
 oraz JSON metadata; dodatkowe języki nie są wymagane do uruchomienia Actor.
 Nie zmienia się outputu istniejącego generatora TS/Go/Dart/browser dla RPC.
@@ -185,26 +209,26 @@ val message_type : descriptor -> name:string ->
   ('a message_type, error) result
 ```
 
-Generator opakowuje IMPL w RAW_ACTOR, dołącza wygenerowane kodeki i
-zweryfikowany descriptor. Niepoprawne metadane w ręcznie zmienionym kodzie
-zwracają błąd; wygenerowane make może zgłosić Invalid_argument przy błędzie
-własnego artefaktu, przed register_type. Runtime dodatkowo waliduje każdy wire
-względem deskryptora, niezależnie od kodeka modułu.
+Generator (Cyrograf plus adapter Well) opakowuje IMPL w RAW_ACTOR, dołącza
+wygenerowane kodeki i zweryfikowany descriptor. Niepoprawne metadane w ręcznie
+zmienionym kodzie zwracają błąd; wygenerowane make może zgłosić Invalid_argument
+przy błędzie własnego artefaktu, przed register_type. Runtime dodatkowo waliduje
+każdy wire względem deskryptora, niezależnie od kodeka modułu.
 
 ## Powtarzalność i błędy generatora
 
 Te same pliki wejściowe dają bajtowo identyczne artefakty; brak czasu,
 losowych identyfikatorów i zależności od kolejności katalogu. Generator
 najpierw parsuje oraz waliduje cały katalog. Błąd kontraktu nie pozostawia
-częściowo podmienionego zestawu wyników. Błędy zawierają plik, ścieżkę tabeli
-i powód. Brak cichego zastępowania nieznanego typu stringiem.
+częściowo podmienionego zestawu wyników. Błędy zawierają plik, ścieżkę
+deklaracji i powód. Brak cichego zastępowania nieznanego typu stringiem.
 
 Generator nie kompiluje implementacji ani nie otwiera magazynu Actor.
-Przykłady TOML podlegają temu samemu parserowi i walidatorowi co aplikacja.
+Przykłady `.cyrograf` podlegają temu samemu parserowi i walidatorowi co aplikacja.
 
 ## Narzędzie w granicy Actor
 
-Generowanie jest oddzielne od istniejącego well contract build:
+Generowanie kontraktów aktora jest wejściem bibliotecznym:
 
 ```ocaml
 module Contract : sig
@@ -216,14 +240,17 @@ end
 Pełna nazwa: Well.Actor.Contract.build. Jest wywoływalne z krótkiego
 programu OCaml aplikacji lub narzędzia build, przed uruchomieniem runtime'u.
 Nie wymaga configure/register_type. Katalog source_dir zawiera wyłącznie
-kontrakty aktorów i ich wspólne typy. Podanie kontraktu service.rpc jest
-błędem tego narzędzia, nie zmianą obsługi RPC w Well.
+kontrakty aktorów, ich wspólne typy i metadane `[actor]`. Podanie kontraktu
+service.rpc jest błędem tego narzędzia, nie zmianą obsługi RPC w Well.
 
-Output: ocaml/<snake_case_module>.ml, ocaml/<snake_case_module>.mli,
-ocaml/dune oraz descriptor.json. Biblioteka w ocaml/dune nazywa się
-actor_contracts i zależy od well.core oraz yojson. Nie łączy implementacji
-aktorów. Output_dir musi być odrębnym katalogiem dedykowanym temu narzędziu;
-nie nadpisuje się katalogu dotychczasowego generatora RPC.
+Wiadomości pochodzą z Cyrografu; adaptery aktora są generowane w Well.
+Kierunek zależności to `well.core -> narzędzie kontraktowe -> cyrograf.compiler`,
+nigdy odwrotnie. Output: `ocaml/<snake_case_module>.ml`,
+`ocaml/<snake_case_module>.mli`, `ocaml/dune` oraz `descriptor.json`.
+Biblioteka danych w `ocaml/dune` zależy od publicznej biblioteki wiadomości
+Cyrografu, `well.core` oraz yojson; nie łączy implementacji aktorów.
+Output_dir musi być odrębnym katalogiem dedykowanym temu narzędziu; nie
+nadpisuje się katalogu dotychczasowego generatora RPC.
 
 Build tworzy wynik w katalogu tymczasowym obok output_dir. Jeśli output_dir
 istnieje i zawiera inne pliki niż poprzedni manifest Actor, zwraca błąd.
@@ -233,10 +260,11 @@ Nie deklaruje się atomowego publish wielu plików przy awarii systemu;
 manifest zawiera odciski plików, a kolejny build wykrywa niepełny zestaw
 i odtwarza go. Nie uruchamia się kompilatora na niekompletnym manifeście.
 
-Parser/generator aktorów należy do Well.Actor.Contract. Nie zmienia się
-lib/well_cli/contract_parser.ml, contract_codegen.ml ani cmd_contract.ml.
-Wspólna składnia wiadomości jest testowana względem przykładów Well,
-bez refaktoryzowania istniejącej ścieżki codegenu.
+Parser/generator typów wiadomości należy do Cyrografu. Well nie utrzymuje
+drugiego parsera typów ani kopii kodeka. Stara ścieżka
+`lib/well_cli/contract_parser.ml`, `contract_codegen.ml` i `cmd_contract.ml`
+jest usuwana dopiero po przepięciu wszystkich odwołań (W7). Migrację
+realizuje [integracja Well z Cyrografem](../well_cli/contract/SERVICE.md).
 
 ## Struktura JSON deskryptora
 
@@ -277,9 +305,11 @@ definicji, choć nie aktywuje tego aktora.
 Wygeneruj kontrakty Actor
 
 [Odczytaj katalog źródłowy]
-[Parsuj wszystkie TOML i rozwiąż typy]
+[Wywołaj analizę Cyrografu dla wiadomości]
+[Odczytaj metadane [actor] i rozwiąż accepts/emits]
 <zebrane błędy>
   (END Error list)
+[Odwzoruj schemat na descriptor]
 [Sprawdź własność katalogu wynikowego]
 <obce pliki>
   (END Error list)

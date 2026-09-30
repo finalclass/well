@@ -1,0 +1,9 @@
+(executable
+ (name gen)
+ (modules gen)
+ (libraries well_cli unix))
+
+(executable
+ (name contract_build_test)
+ (modules contract_build_test)
+ (libraries well_cli unix))

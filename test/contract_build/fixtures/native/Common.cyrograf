@@ -1,0 +1,11 @@
+// Shared messages for the W2 native fixture.
+struct UserCtx {
+  user_id: String
+}
+
+struct Thing {
+  id: String
+  label?: String
+}
+
+struct Empty {}

@@ -1,0 +1,9 @@
+(test
+ (name contract_socket_test)
+ (modules contract_socket_test)
+ (libraries well well.test yojson unix eio eio_main))
+
+(test
+ (name cap_introspection_test)
+ (modules cap_introspection_test)
+ (libraries well well.cap well.test yojson unix eio eio_main))

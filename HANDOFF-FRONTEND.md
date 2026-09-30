@@ -35,8 +35,8 @@ wolatylności (dekompozycja IDesign).
    strukturalne DOM z `if/else` w view „cicho się nie udają". Nowy system ma **OWN the DOM
    client-side**, nie round-tripować patchy stringów przez WebSocket.
 6. `~/Documents/well/lib/well_html/html.ml` (266 linii) — rendering HTML do reużycia.
-7. `~/Documents/well/lib/well_cli/contract_codegen.ml` (1590 linii) — codegen kontraktów.
-   Emituje już TS browser-facing Proxy (`generate_ts_proxy`) oraz OCaml/jsoo browser Proxy (`generate_ocaml_browser_*` → `build/ocaml_browser/`).
+7. `lib/well_cli/contract_adapters.ml` — adaptery usług do danych Cyrografu.
+   Emituje TS Proxy i OCaml/jsoo browser Proxy pod `lib/contract_generated`.
 8. Skill `/well` — obecny guidance frontendowy. Uczy LiveView. Będzie wymagał sekcji
    równoległej o nowym systemie.
 9. Skill `/axe` — spec-anchored workflow. **UŻYJ GO** dla fazy projektowej tego frameworka.
@@ -126,11 +126,10 @@ Jeden realny komponent testowy (np. counter z atrybutem, albo edytor listy).
 → Dostarcz: działający komponent z atrybutami w dół i eventami w górę.
 
 **Faza 3 — CONTRACT CODEGEN TARGET:** ✅ (jsoo browser Proxy)
-OCaml browser Proxy = mirror TS Proxy (`generate_ocaml_browser_*` w
-`contract_codegen.ml`). Output: `lib/contract/build/ocaml_browser/` (+ `rpc.ml`).
-Wire bez zmian: `Msg.to_wire`/`of_wire`, `POST /rpc/<Service>/<method>`.
-**Używaj `Service.Proxy.*`, nie hand-rolled `Http.*` pod kontrakt.** Runtime: jsoo
-(nie Melange). In-process OCaml (`build/ocaml/`) bez zmian.
+Cyrograf generuje dane OCaml i TypeScript, a `Contract_adapters.generate_browser`
+generuje bibliotekę `contract_browser` w `lib/contract_generated/adapters_browser/`.
+Profil przeglądarkowy danych znajduje się w `ocaml_js/`, dane natywne w `ocaml/`,
+a adaptery serwera w `adapters/`. Transport używa tekstu Drutu.
 
 **Faza 4 (PÓŹNIEJ, nie teraz) — OPIS FRONTU DLA AI:**
 Użytkownik chce wymyślić sposób deklaratywnego opisu komponentów, tak aby AI pisało

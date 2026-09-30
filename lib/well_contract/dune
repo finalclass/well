@@ -1,0 +1,4 @@
+(library
+ (name well_contract)
+ (public_name well.contract)
+ (libraries cyrograf cyrograf.compiler otoml yojson unix))

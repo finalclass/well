@@ -1,10 +1,13 @@
-DUNE := ./vendor/dune
+DUNE := $(shell if [ -x ./vendor/dune ]; then echo ./vendor/dune; else command -v dune; fi)
 PATCHELF := patchelf
 RELEASE_DIR := _release
 
 INSTALL_DIR := $(HOME)/.local/bin
 
-.PHONY: build check test clean lock dev release install ocamlformat-mlx
+.PHONY: build check test clean lock dev release install ocamlformat-mlx \
+	contract-check contract-build contract-native contract-publish \
+	contract-browser contract-clients contract-socket contract-actor \
+	contract-scaffold
 
 build:
 	$(DUNE) build
@@ -82,3 +85,47 @@ release: build
 		$(RELEASE_DIR)/bin/well
 	@echo "==> Release ready: $(RELEASE_DIR)/"
 	@echo "    Run with: cd $(RELEASE_DIR) && ./bin/well"
+
+# ── Contract migration targets (W2) ───────────────────────────────────
+# Binding names from lib/well_cli/contract/STP.md. Later stages extend them.
+
+W2_FIXTURES := $(CURDIR)/test/contract_build/fixtures
+W2_GEN := _build/default/test/contract_build/gen.exe
+W2_TEST := _build/default/test/contract_build/contract_build_test.exe
+CONTRACT_WORK := _build/contract-work/w2
+
+contract-check: build
+	@mkdir -p $(CONTRACT_WORK)
+	rm -rf $(CONTRACT_WORK)/native
+	$(W2_GEN) $(W2_FIXTURES)/native $(CONTRACT_WORK)/native
+	@test -f $(CONTRACT_WORK)/native/manifest.json
+
+contract-build: contract-check
+	@echo "contract-build: isolated layout generated under $(CONTRACT_WORK)/native"
+
+contract-publish: build
+	$(W2_TEST) $(CURDIR)/test/contract_build
+
+contract-native: build
+	deno run -A test/contract_native/run.ts
+
+contract-browser: build
+	deno run -A test/contract_browser/run.ts
+
+contract-clients: build
+	deno run -A test/contract_clients/run.ts
+
+contract-socket: build
+	$(DUNE) test test/contract_socket
+	deno run -A test/contract_socket/run.ts
+
+# W5: Actor descriptors/hashes against the preserved old generator, and the
+# durable store resume / Blocked regression in test/actor_test.
+contract-actor: build
+	$(DUNE) test --force test/contract_actor
+	$(DUNE) test --force test/actor_test
+
+# W6: scaffold build with native .cyrograf sources, real RPC + browser Proxy,
+# and deterministic regeneration after deleting only the generated results.
+contract-scaffold: build
+	deno run -A test/contract_scaffold/run.ts

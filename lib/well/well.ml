@@ -1122,6 +1122,14 @@ open struct
                     body = `Text result_json }));
     Service._build_rpc_ctx :=
       (fun req -> rpc_ctx_to_wire (rpc_ctx req));
+    Service._register_post_rpc :=
+      (fun path handler ->
+        Router.register "POST" path (fun req ->
+          let ctx_wire = rpc_ctx_to_wire (rpc_ctx req) in
+          let reply = handler ctx_wire req.body in
+          `Custom { status = Some reply.Service.status;
+                    headers = [("Content-Type", "application/json")];
+                    body = `Text reply.Service.body }));
     Service._cast_sw := Some sw;
     Service.start_all ~sw;
     Actor.start_all ~sw;

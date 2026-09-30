@@ -139,7 +139,7 @@ let wait_ok pid =
 let examples =
   let rec find = function
     | [] -> failwith "examples not found"
-    | p :: rest -> if Sys.file_exists (Filename.concat p "Reports.toml") then p else find rest
+    | p :: rest -> if Sys.file_exists (Filename.concat p "Reports.cyrograf") then p else find rest
   in
   find [
     "lib/well/actor/examples";
@@ -563,7 +563,7 @@ let register_wrapper () =
   let out = tmp_dir "wrap-out-" in
   let oc = open_out (Filename.concat src "Wrap.toml") in
   output_string oc
-    "[msg.Box.struct]\nname = \"string\"\nflag = { type = \"optional\", of = \"string\" }\ntag = \"Tag\"\n[msg.Tag.variant]\nA = \"string\"\nB = \"void\"\n[actor]\nname = \"Wrapper\"\nversion = 1\n[actor.accepts]\nOpen = \"Box\"\n";
+    "[msg.Box.struct]\nname = \"string\"\nflag = { type = \"string\", optional = true }\ntag = \"Tag\"\n[msg.Tag.variant]\nA = \"string\"\nB = \"void\"\n[actor]\nname = \"Wrapper\"\nversion = 1\n[actor.accepts]\nOpen = \"Box\"\n";
   close_out oc;
   match Well.Actor.Contract.build ~source_dir:src ~output_dir:out with
   | Error e ->

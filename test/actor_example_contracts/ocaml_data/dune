@@ -1,0 +1,24 @@
+(rule
+ (targets
+  drut_runtime.ml
+  reports.ml
+  reports.mli
+  reporter.ml
+  reporter.mli
+  report_decision.ml
+  report_decision.mli
+  report_spawner.ml
+  report_spawner.mli
+  report_combiner.ml
+  report_combiner.mli
+  summary_builder.ml
+  summary_builder.mli)
+ (deps
+  ../gen.exe
+  (source_tree %{project_root}/lib/well/actor/examples))
+ (action
+  (run ../gen.exe %{project_root}/lib/well/actor/examples . data)))
+
+(library
+ (name actor_data)
+ (libraries cyrograf yojson))

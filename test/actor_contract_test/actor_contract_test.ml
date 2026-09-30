@@ -7,7 +7,7 @@ let () = ignore Actor_reporter_impl.definition; ignore Actor_summary_impl.defini
 let examples =
   let rec find = function
     | [] -> failwith "examples dir not found"
-    | p :: rest -> if Sys.file_exists (Filename.concat p "Reports.toml") then p else find rest
+    | p :: rest -> if Sys.file_exists (Filename.concat p "Reports.cyrograf") then p else find rest
   in
   find [
     "lib/well/actor/examples";
@@ -156,7 +156,7 @@ let () =
         match Well.Actor.Contract.build ~source_dir:examples ~output_dir:out with
         | Error e -> fail (List.map (fun (e : Well.Actor.error) -> e.message) e |> String.concat "; ")
         | Ok () ->
-          let reports = read_file (Filename.concat out "ocaml/reports.ml") in
+          let reports = read_file (Filename.concat out "ocaml_data/reports.ml") in
           expect reports |> to_contain "v.reporter_id";
           expect reports |> to_contain "v.subject";
           expect reports |> to_contain "`List";
@@ -206,14 +206,14 @@ let () =
             Fun.protect ~finally:(fun () -> rm_rf src) (fun () ->
               let oc = open_out (Filename.concat src "Var.toml") in
               output_string oc
-                "[msg.Choice.variant]\nA = \"string\"\nB = { type = \"optional\", of = \"int\" }\n[msg.Wrap.struct]\nchoice = \"Choice\"\nitems = { type = \"list\", of = \"string\" }\n[actor]\nname = \"VarAct\"\nversion = 1\n[actor.accepts]\nGo = \"Wrap\"\n";
+                "[msg.Choice.variant]\nA = \"string\"\nB = \"int\"\n[msg.Wrap.struct]\nchoice = \"Choice\"\nitems = { type = \"list\", of = \"string\" }\nnote = { type = \"string\", optional = true }\n[actor]\nname = \"VarAct\"\nversion = 1\n[actor.accepts]\nGo = \"Wrap\"\n";
               close_out oc;
               let out2 = tmp_dir "c04-var-out-" in
               Fun.protect ~finally:(fun () -> rm_rf out2) (fun () ->
                 match Well.Actor.Contract.build ~source_dir:src ~output_dir:out2 with
                 | Error e -> fail (List.map (fun (e : Well.Actor.error) -> e.message) e |> String.concat "; ")
                 | Ok () ->
-                  let wrap = read_file (Filename.concat out2 "ocaml/var.ml") in
+                  let wrap = read_file (Filename.concat out2 "ocaml_data/var.ml") in
                   expect wrap |> to_contain "module Choice";
                   expect wrap |> to_contain "option";
                   expect wrap |> to_contain "list";
@@ -266,6 +266,53 @@ let () =
           let hb = read_file (Filename.concat out_b "descriptor.json") in
           expect (ha <> hb) |> to_be_true
         | _ -> fail "field order build"));
+
+    it "C01b split cyrograf and actor.toml equals the legacy mixed TOML" (fun () ->
+      let src_native = tmp_dir "actor-c01b-nat-" in
+      let src_legacy = tmp_dir "actor-c01b-leg-" in
+      let out_native = tmp_dir "actor-c01b-nat-out-" in
+      let out_legacy = tmp_dir "actor-c01b-leg-out-" in
+      Fun.protect
+        ~finally:(fun () ->
+          rm_rf src_native; rm_rf src_legacy; rm_rf out_native; rm_rf out_legacy)
+        (fun () ->
+          let write dir name body =
+            let oc = open_out (Filename.concat dir name) in
+            output_string oc body; close_out oc
+          in
+          write src_native "Msg.cyrograf" "struct Request {\n  a: String\n  b: Int\n}\n";
+          write src_native "Actor.actor.toml"
+            "[actor]\nname = \"Actor\"\nversion = 1\n[actor.accepts]\nGo = \"Msg.Request\"\n[actor.emits]\nOut = \"Msg.Request\"\n";
+          write src_legacy "Msg.toml" "[msg.Request.struct]\na = \"string\"\nb = \"int\"\n";
+          write src_legacy "Actor.toml"
+            "[actor]\nname = \"Actor\"\nversion = 1\n[actor.accepts]\nGo = \"Msg.Request\"\n[actor.emits]\nOut = \"Msg.Request\"\n";
+          match
+            Well.Actor.Contract.build ~source_dir:src_native ~output_dir:out_native,
+            Well.Actor.Contract.build ~source_dir:src_legacy ~output_dir:out_legacy
+          with
+          | Ok (), Ok () ->
+            expect (read_file (Filename.concat out_native "descriptor.json"))
+            |> to_equal_string (read_file (Filename.concat out_legacy "descriptor.json"));
+            let data = read_file (Filename.concat out_native "ocaml_data/msg.ml") in
+            expect data |> to_contain "to_drut";
+            expect (Sys.file_exists (Filename.concat out_native "ocaml_data/drut_runtime.ml"))
+            |> to_be_true;
+            expect (Sys.file_exists (Filename.concat out_native "ocaml/actor.ml")) |> to_be_true
+          | _ -> fail "split build"));
+
+    it "C05d legacy unknown top-level key is not silently dropped" (fun () ->
+      let src = tmp_dir "actor-c05d-src-" in
+      let out = tmp_dir "actor-c05d-out-" in
+      Fun.protect ~finally:(fun () -> rm_rf src; rm_rf out) (fun () ->
+        let oc = open_out (Filename.concat src "Bad.toml") in
+        output_string oc
+          "[msg.X.struct]\na = \"string\"\n[bogus]\nx = 1\n[actor]\nname = \"Bad\"\nversion = 1\n[actor.accepts]\nGo = \"X\"\n";
+        close_out oc;
+        match Well.Actor.Contract.build ~source_dir:src ~output_dir:out with
+        | Ok () -> fail "expected unknown top-level key error"
+        | Error errs ->
+          expect (List.length errs > 0) |> to_be_true;
+          expect (Sys.file_exists (Filename.concat out "descriptor.json")) |> to_be_false));
 
     it "C08 generated of_wire rejects bad arity" (fun () ->
       let out = tmp_dir "actor-c08-" in

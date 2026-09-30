@@ -5,7 +5,8 @@
 Weryfikacja wyłącznie nowego Actor oraz zachowania jego starej ścieżki.
 Testy wyprowadzane z tego planu powstają podczas zatwierdzonego axe sync,
 nie podczas przygotowania specyfikacji. Nie dopisuje się nowych scenariuszy
-biznesowych na podstawie szczegółów implementacji.
+biznesowych na podstawie szczegółów implementacji. Migrację kontraktów
+wiarygodnie potwierdza C11 oraz kryterium M10 [integracji](../well_cli/contract/STP.md).
 
 Fixtures: oddzielny tymczasowy magazyn na test, jawny rejestr aktorów,
 kontrolowany zegar, bariery aktywacji zamiast sleep, wstrzykiwany transport
@@ -17,16 +18,17 @@ Nie zastępuje się rzeczywistego restartu ponownym utworzeniem Hashtbl.
 
 | ID | Scenariusz i obserwowalny wynik |
 |---|---|
-| C01 | Wszystkie TOML w examples parsują się i generują typy, witness, Inbound/Outbound, IMPL, make i descriptor. |
+| C01 | Wszystkie źródła w examples (`.cyrograf` i metadane `[actor]`) parsują się i generują typy, witness, Inbound/Outbound, IMPL, make i descriptor. |
 | C02 | Wygenerowane .ml/.mli i przykład implementacji budują się z well.core. Osobne biblioteki Reporter i SummaryBuilder nie zależą od siebie. |
 | C03 | Błędny rodzaj inbound/outbound odrzuca kompilator; Message wiąże wartość z właściwym witness. |
-| C04 | Struct, variant, optional, list i referencje między plikami zachowują pozycyjny wire. Metadane pola zgadzają się z jego indeksem. |
-| C05 | Błędy TOML: nieznana nazwa, cykl typów, duplikat, zła składnia typu, kolizja nazw, actor+service, reserved name: brak częściowej podmiany output. |
-| C06 | Dwukrotna generacja i zmiana kolejności katalogu dają identyczne pliki. Zmiana kolejności pól zmienia wire/hash. |
+| C04 | Struct, variant, optional, list i referencje między plikami zachowują pozycyjny Drut. Metadane pola zgadzają się z jego indeksem. |
+| C05 | Błędy źródeł i metadanych: nieznana nazwa, cykl typów, duplikat, zła składnia typu, kolizja nazw, actor+service, reserved name: brak częściowej podmiany output. |
+| C06 | Dwukrotna generacja i zmiana kolejności katalogu dają identyczne pliki. Zmiana kolejności pól zmienia Drut/hash. |
 | C07 | Ręczny RAW_ACTOR zwracający niezgodny wire nie obchodzi walidacji. |
-| C08 | Kodeki odrzucają brak/nadmiar pozycji, nieznany wariant, NaN/Infinity i int poza zakresem. |
+| C08 | Kodeki odrzucają brak/nadmiar pozycji, nieznany wariant, NaN/Infinity i int poza zakresem na surowym tekście. |
 | C09 | Kanonizacja JCS: kolejność kluczy obiektu nie zmienia hasha, kolejność tablicy zmienia; oficjalne wektory liczb i znaków. |
 | C10 | Obcy output_dir i niepełny manifest są wykrywane; wejściowe błędy zachowują poprzedni poprawny wynik. |
+| C11 | Dla tych samych kontraktów nowy deskryptor i hashe JCS/SHA-256 są identyczne ze starym wynikiem, a nowa binarka otwiera magazyn utworzony przez starą; wznowienie niezmienionego obiegu zachowuje payloady, stan, message_id i wynik. Nowe typy bez starego odpowiednika nie mają pozornej gwarancji zgodności. |
 
 ## Admission i API
 

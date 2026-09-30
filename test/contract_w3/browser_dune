@@ -1,0 +1,6 @@
+(executable
+ (name browser_main)
+ (modules browser_main)
+ (libraries contract_browser contract_data_browser cyrograf js_of_ocaml yojson)
+ (preprocess (pps js_of_ocaml-ppx))
+ (modes js))

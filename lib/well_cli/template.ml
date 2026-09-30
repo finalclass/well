@@ -2,6 +2,8 @@ let dune_project name =
   Printf.sprintf
     {|(lang dune 3.17)
 
+(using directory-targets 0.1)
+
 (dialect
  (name mlx)
  (implementation
@@ -14,6 +16,10 @@ let dune_project name =
  (url "git+ssh://git@github.com/finalclass/well.git")
  (package (name well)))
 
+(pin
+ (url "git+https://github.com/finalclass/cyrograf#0b886ea9e5965448e6c5d1855713220835b573a8")
+ (package (name cyrograf)))
+
 (package
  (name %s)
  (version 0.0.1)
@@ -23,6 +29,7 @@ let dune_project name =
   (ocaml (and (>= 5.4) (< 5.5)))
   mlx
   well
+  cyrograf
   eio
   eio_main
   yojson
@@ -94,7 +101,8 @@ lib/
     pages/                         # route pages (home, counter, notes, ...)
     live/                          # LiveView modules (counter, activity log)
     request_id.ml                  # request ID middleware
-  contract/                        # service contracts (TOML → generated code)
+  contract/                        # service contracts (.cyrograf sources)
+  contract_generated/              # generated data + adapters (dune build)
 static/                            # CSS, JS, assets
 test/                              # tests
 data/                              # SQLite databases (gitignored)
@@ -185,7 +193,7 @@ let lib_app_dune _name =
 
 (library
  (name app)
- (libraries contract well.core well.html eio yojson sqlite3)
+ (libraries contract contract_data well.core well.html eio yojson sqlite3)
  (preprocess (pps ppx_deriving_yojson well.ppx)))
 |}
 
@@ -308,9 +316,9 @@ let app_ml _name =
       oauth_providers;
 
   (* Services — IDesign: Manager → Access → DB *)
-  Well.Service.register Services.Note_access_impl.spec;
-  Well.Service.register Services.Task_access_impl.spec;
-  Well.Service.register Services.Task_manager_impl.spec;
+  Well.Service.register_drut Services.Note_access_impl.spec;
+  Well.Service.register_drut Services.Task_access_impl.spec;
+  Well.Service.register_drut Services.Task_manager_impl.spec;
   Well.Service.expose "TaskManager";
 
   (* Keyed pub/sub — echo handler: listens for echo:cmd:*, replies on echo:result:key *)
@@ -503,35 +511,37 @@ let%query delete_note = "DELETE FROM notes WHERE id = :id"
 let pool = lazy (Well.Db.create_pool ())
 let with_db f = Well.Db.with_conn (Lazy.force pool) f
 
-let note_of_row (r : All_notes.row) : Note_access.Note.t =
+module M = Contract_data.Note_access
+
+let note_of_row (r : All_notes.row) : M.Note.t =
   { id = r.id; title = r.title; body = r.body }
 
-let note_of_find (r : Find_note.row) : Note_access.Note.t =
+let note_of_find (r : Find_note.row) : M.Note.t =
   { id = r.id; title = r.title; body = r.body }
 
 module Impl : Note_access.IMPL = struct
-  let list _ctx (_req : Note_access.ListReq.t) =
+  let list _ctx (_req : M.ListReq.t) =
     with_db @@ fun db ->
     let rows = All_notes.query db in
     let notes = List.map note_of_row rows in
-    Note_access.NoteList.make ~notes ()
+    M.NoteList.make ~notes ()
 
-  let get _ctx (req : Note_access.IdReq.t) =
+  let get _ctx (req : M.IdReq.t) =
     with_db @@ fun db ->
     match Find_note.query db ~id:req.id with
     | r :: _ -> note_of_find r
     | [] -> failwith "Note not found"
 
-  let create _ctx (req : Note_access.CreateReq.t) =
+  let create _ctx (req : M.CreateReq.t) =
     with_db @@ fun db ->
     Insert_note.exec db ~title:req.title ~body:req.body;
     let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
-    Note_access.Note.make ~id ~title:req.title ~body:req.body ()
+    M.Note.make ~id ~title:req.title ~body:req.body ()
 
-  let delete _ctx (req : Note_access.IdReq.t) =
+  let delete _ctx (req : M.IdReq.t) =
     with_db @@ fun db ->
     Delete_note.exec db ~id:req.id;
-    Note_access.Ok.make ~ok:true ()
+    M.Ok.make ~ok:true ()
 end
 
 let spec = Note_access.make_spec (module Impl)
@@ -545,7 +555,7 @@ let auth = [Well.require_auth ()]
 Well.get ~middleware:auth "/notes" @@ fun req ->
 let open Html in
 let ctx = Well.rpc_ctx req in
-let result = Note_access.list ~ctx ~limit:0 in
+let result = Services.Note_access_impl.Impl.list ctx (Contract_data.Note_access.ListReq.make ~limit:0 ()) in
 <Layout title="Notes">
 <div>
   <h1>(txt "Notes")</h1>
@@ -557,7 +567,7 @@ let result = Note_access.list ~ctx ~limit:0 in
     <button attrs=[("type", "submit")]>(txt "Add note")</button>
   </form>
   <ul attrs=[("class", "notes-list")]>
-    (result.notes |> List.map (fun (n : Note_access.Note.t) ->
+    (result.notes |> List.map (fun (n : Contract_data.Note_access.Note.t) ->
       <li>
         <strong>(txt n.title)</strong>
         (txt (" — " ^ n.body))
@@ -574,7 +584,9 @@ let ctx = Well.rpc_ctx req in
 let title = Option.value ~default:"" (Well.form req "title") in
 let body = Option.value ~default:"" (Well.form req "body") in
 if title <> "" then
-  ignore (Note_access.create ~ctx ~title ~body);
+  ignore
+    (Services.Note_access_impl.Impl.create ctx
+       (Contract_data.Note_access.CreateReq.make ~title ~body ()));
 Well.redirect "/notes"
 |}
 
@@ -1712,754 +1724,294 @@ let auth_css =
 .oauth-btn-facebook:hover { background: #e7f0fd; }
 |}
 
-let contract_note_access_toml =
-  {|[service.rpc]
-list = "ListReq -> NoteList"
-get = "IdReq -> Note"
-create = "CreateReq -> Note"
-delete = "IdReq -> Ok"
+let contract_note_access_cyrograf =
+  {|// NoteAccess — resource-access contract.
+// Native Cyrograf source. Legacy TOML stays a Cyrograf compatibility input,
+// but each module has exactly one definition in the source directory.
 
-[msg.Note.struct]
-id = "int"
-title = "string"
-body = "string"
+struct Note {
+  id: Int
+  title: String
+  body: String
+}
 
-[msg.ListReq.struct]
-limit = "int"
+struct ListReq {
+  limit: Int
+}
 
-[msg.IdReq.struct]
-id = "int"
+struct IdReq {
+  id: Int
+}
 
-[msg.CreateReq.struct]
-title = "string"
-body = "string"
+struct CreateReq {
+  title: String
+  body: String
+}
 
-[msg.NoteList.struct]
-notes = { type = "list", of = "Note" }
+struct NoteList {
+  notes: List<Note>
+}
 
-[msg.Ok.struct]
-ok = "bool"
+struct Ok {
+  ok: Bool
+}
+
+rpc list(ListReq) -> NoteList
+rpc get(IdReq) -> Note
+rpc create(CreateReq) -> Note
+rpc delete(IdReq) -> Ok
 |}
 
-let contract_task_access_toml =
-  {|[service.rpc]
-list = "ListReq -> TaskList"
-get = "IdReq -> Task"
-create = "CreateReq -> Task"
-update = "UpdateReq -> Task"
-delete = "IdReq -> Ok"
+let contract_task_access_cyrograf =
+  {|// TaskAccess — resource-access contract.
 
-[msg.Task.struct]
-id = "int"
-title = "string"
-completed = "bool"
+struct Task {
+  id: Int
+  title: String
+  completed: Bool
+}
 
-[msg.ListReq.struct]
-limit = "int"
+struct ListReq {
+  limit: Int
+}
 
-[msg.IdReq.struct]
-id = "int"
+struct IdReq {
+  id: Int
+}
 
-[msg.CreateReq.struct]
-title = "string"
+struct CreateReq {
+  title: String
+}
 
-[msg.UpdateReq.struct]
-id = "int"
-title = { type = "string", optional = true }
-completed = { type = "bool", optional = true }
+struct UpdateReq {
+  id: Int
+  title?: String
+  completed?: Bool
+}
 
-[msg.TaskList.struct]
-tasks = { type = "list", of = "Task" }
+struct TaskList {
+  tasks: List<Task>
+}
 
-[msg.Ok.struct]
-ok = "bool"
+struct Ok {
+  ok: Bool
+}
+
+rpc list(ListReq) -> TaskList
+rpc get(IdReq) -> Task
+rpc create(CreateReq) -> Task
+rpc update(UpdateReq) -> Task
+rpc delete(IdReq) -> Ok
 |}
 
-let contract_task_manager_toml =
-  {|[service.rpc]
-list = "TaskAccess.ListReq -> TaskListRes"
-add = "AddReq -> TaskRes"
-toggle = "ToggleReq -> TaskRes"
-delete = "DeleteReq -> StatusRes"
-
-[msg.AddReq.struct]
-title = "string"
-
-[msg.ToggleReq.struct]
-id = "int"
-
-[msg.DeleteReq.struct]
-id = "int"
-
-[msg.TaskListRes.struct]
-tasks = { type = "list", of = "TaskAccess.Task" }
-
-[msg.TaskRes.struct]
-task = "TaskAccess.Task"
-
-[msg.StatusRes.struct]
-ok = "bool"
-|}
-
-let contract_note_access_ml =
-  {|[@@@warning "-32"]
-
-module Note = struct
-  type t = {
-    id : int;
-    title : string;
-    body : string;
-  } [@@deriving show, yojson, eq]
-
-  let make ~id ~title ~body () =
-    { id; title; body }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.id;
-      `String v.title;
-      `String v.body;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
-      let title = (match (_g 1) with `String s -> s | _ -> "") in
-      let body = (match (_g 2) with `String s -> s | _ -> "") in
-      { id; title; body }
-    | _ -> failwith "Note.of_wire: expected JSON array"
-end
-
-module ListReq = struct
-  type t = {
-    limit : int;
-  } [@@deriving show, yojson, eq]
-
-  let make ~limit () =
-    { limit }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.limit;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let limit = (match (_g 0) with `Int i -> i | _ -> 0) in
-      { limit }
-    | _ -> failwith "ListReq.of_wire: expected JSON array"
-end
-
-module IdReq = struct
-  type t = {
-    id : int;
-  } [@@deriving show, yojson, eq]
-
-  let make ~id () =
-    { id }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.id;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
-      { id }
-    | _ -> failwith "IdReq.of_wire: expected JSON array"
-end
-
-module CreateReq = struct
-  type t = {
-    title : string;
-    body : string;
-  } [@@deriving show, yojson, eq]
-
-  let make ~title ~body () =
-    { title; body }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `String v.title;
-      `String v.body;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let title = (match (_g 0) with `String s -> s | _ -> "") in
-      let body = (match (_g 1) with `String s -> s | _ -> "") in
-      { title; body }
-    | _ -> failwith "CreateReq.of_wire: expected JSON array"
-end
-
-module Ok = struct
-  type t = {
-    ok : bool;
-  } [@@deriving show, yojson, eq]
-
-  let make ~ok () =
-    { ok }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Bool v.ok;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let ok = (match (_g 0) with `Bool b -> b | _ -> false) in
-      { ok }
-    | _ -> failwith "Ok.of_wire: expected JSON array"
-end
-
-module NoteList = struct
-  type t = {
-    notes : Note.t list;
-  } [@@deriving show, yojson, eq]
-
-  let make ~notes () =
-    { notes }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `List (List.map (fun item -> Note.to_wire item) v.notes);
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let notes = (match (_g 0) with `List items -> List.map (fun item -> Note.of_wire item) items | _ -> []) in
-      { notes }
-    | _ -> failwith "NoteList.of_wire: expected JSON array"
-end
-
-let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None
-
-module type IMPL = sig
-  val list : Well.rpc_ctx -> ListReq.t -> NoteList.t
-  val get : Well.rpc_ctx -> IdReq.t -> Note.t
-  val create : Well.rpc_ctx -> CreateReq.t -> Note.t
-  val delete : Well.rpc_ctx -> IdReq.t -> Ok.t
-end
-
-let make_spec (module I : IMPL) : Well.Service.spec =
-  { name = "NoteAccess"
-  ; rpcs = []
-  ; handler = (fun rpc_name ctx_json payload ->
-      let ctx = Well.rpc_ctx_of_wire ctx_json in
-      match rpc_name with
-      | "list" ->
-          NoteList.to_wire (I.list ctx (ListReq.of_wire payload))
-      | "get" ->
-          Note.to_wire (I.get ctx (IdReq.of_wire payload))
-      | "create" ->
-          Note.to_wire (I.create ctx (CreateReq.of_wire payload))
-      | "delete" ->
-          Ok.to_wire (I.delete ctx (IdReq.of_wire payload))
-      | _ -> failwith ("Unknown RPC: " ^ rpc_name))
-  ; set_ref = (fun f -> _service_ref := Some f)
-  }
-
-let list ~ctx ~limit =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = ListReq.to_wire (ListReq.make ~limit ()) in
-  NoteList.of_wire
-    ((match !_service_ref with
-      | Some f -> f "list" ctx_wire wire
-      | None -> failwith "NoteAccess: service not registered"))
-
-let get ~ctx ~id =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = IdReq.to_wire (IdReq.make ~id ()) in
-  Note.of_wire
-    ((match !_service_ref with
-      | Some f -> f "get" ctx_wire wire
-      | None -> failwith "NoteAccess: service not registered"))
-
-let create ~ctx ~title ~body =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = CreateReq.to_wire (CreateReq.make ~title ~body ()) in
-  Note.of_wire
-    ((match !_service_ref with
-      | Some f -> f "create" ctx_wire wire
-      | None -> failwith "NoteAccess: service not registered"))
-
-let delete ~ctx ~id =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = IdReq.to_wire (IdReq.make ~id ()) in
-  Ok.of_wire
-    ((match !_service_ref with
-      | Some f -> f "delete" ctx_wire wire
-      | None -> failwith "NoteAccess: service not registered"))
-|}
-
-let contract_task_access_ml =
-  {|[@@@warning "-32"]
-
-module Task = struct
-  type t = {
-    id : int;
-    title : string;
-    completed : bool;
-  } [@@deriving show, yojson, eq]
-
-  let make ~id ~title ~completed () =
-    { id; title; completed }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.id;
-      `String v.title;
-      `Bool v.completed;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
-      let title = (match (_g 1) with `String s -> s | _ -> "") in
-      let completed = (match (_g 2) with `Bool b -> b | _ -> false) in
-      { id; title; completed }
-    | _ -> failwith "Task.of_wire: expected JSON array"
-end
-
-module ListReq = struct
-  type t = {
-    limit : int;
-  } [@@deriving show, yojson, eq]
-
-  let make ~limit () =
-    { limit }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.limit;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let limit = (match (_g 0) with `Int i -> i | _ -> 0) in
-      { limit }
-    | _ -> failwith "ListReq.of_wire: expected JSON array"
-end
-
-module IdReq = struct
-  type t = {
-    id : int;
-  } [@@deriving show, yojson, eq]
-
-  let make ~id () =
-    { id }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.id;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
-      { id }
-    | _ -> failwith "IdReq.of_wire: expected JSON array"
-end
-
-module CreateReq = struct
-  type t = {
-    title : string;
-  } [@@deriving show, yojson, eq]
-
-  let make ~title () =
-    { title }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `String v.title;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let title = (match (_g 0) with `String s -> s | _ -> "") in
-      { title }
-    | _ -> failwith "CreateReq.of_wire: expected JSON array"
-end
-
-module UpdateReq = struct
-  type t = {
-    id : int;
-    title : string option;
-    completed : bool option;
-  } [@@deriving show, yojson, eq]
-
-  let make ~id ?title ?completed () =
-    { id; title = (match title with Some v -> Some v | None -> None); completed = (match completed with Some v -> Some v | None -> None) }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.id;
-      (let x = v.title in (match x with Some x -> `String x | None -> `Null));
-      (let x = v.completed in (match x with Some x -> `Bool x | None -> `Null));
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
-      let title = (match (_g 1) with `Null -> None | x -> Some ((match x with `String s -> s | _ -> ""))) in
-      let completed = (match (_g 2) with `Null -> None | x -> Some ((match x with `Bool b -> b | _ -> false))) in
-      { id; title; completed }
-    | _ -> failwith "UpdateReq.of_wire: expected JSON array"
-end
-
-module Ok = struct
-  type t = {
-    ok : bool;
-  } [@@deriving show, yojson, eq]
-
-  let make ~ok () =
-    { ok }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Bool v.ok;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let ok = (match (_g 0) with `Bool b -> b | _ -> false) in
-      { ok }
-    | _ -> failwith "Ok.of_wire: expected JSON array"
-end
-
-module TaskList = struct
-  type t = {
-    tasks : Task.t list;
-  } [@@deriving show, yojson, eq]
-
-  let make ~tasks () =
-    { tasks }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `List (List.map (fun item -> Task.to_wire item) v.tasks);
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let tasks = (match (_g 0) with `List items -> List.map (fun item -> Task.of_wire item) items | _ -> []) in
-      { tasks }
-    | _ -> failwith "TaskList.of_wire: expected JSON array"
-end
-
-let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None
-
-module type IMPL = sig
-  val list : Well.rpc_ctx -> ListReq.t -> TaskList.t
-  val get : Well.rpc_ctx -> IdReq.t -> Task.t
-  val create : Well.rpc_ctx -> CreateReq.t -> Task.t
-  val update : Well.rpc_ctx -> UpdateReq.t -> Task.t
-  val delete : Well.rpc_ctx -> IdReq.t -> Ok.t
-end
-
-let make_spec (module I : IMPL) : Well.Service.spec =
-  { name = "TaskAccess"
-  ; rpcs = []
-  ; handler = (fun rpc_name ctx_json payload ->
-      let ctx = Well.rpc_ctx_of_wire ctx_json in
-      match rpc_name with
-      | "list" ->
-          TaskList.to_wire (I.list ctx (ListReq.of_wire payload))
-      | "get" ->
-          Task.to_wire (I.get ctx (IdReq.of_wire payload))
-      | "create" ->
-          Task.to_wire (I.create ctx (CreateReq.of_wire payload))
-      | "update" ->
-          Task.to_wire (I.update ctx (UpdateReq.of_wire payload))
-      | "delete" ->
-          Ok.to_wire (I.delete ctx (IdReq.of_wire payload))
-      | _ -> failwith ("Unknown RPC: " ^ rpc_name))
-  ; set_ref = (fun f -> _service_ref := Some f)
-  }
-
-let list ~ctx ~limit =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = ListReq.to_wire (ListReq.make ~limit ()) in
-  TaskList.of_wire
-    ((match !_service_ref with
-      | Some f -> f "list" ctx_wire wire
-      | None -> failwith "TaskAccess: service not registered"))
-
-let get ~ctx ~id =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = IdReq.to_wire (IdReq.make ~id ()) in
-  Task.of_wire
-    ((match !_service_ref with
-      | Some f -> f "get" ctx_wire wire
-      | None -> failwith "TaskAccess: service not registered"))
-
-let create ~ctx ~title =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = CreateReq.to_wire (CreateReq.make ~title ()) in
-  Task.of_wire
-    ((match !_service_ref with
-      | Some f -> f "create" ctx_wire wire
-      | None -> failwith "TaskAccess: service not registered"))
-
-let update ~ctx ~id ?title ?completed () =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = UpdateReq.to_wire (UpdateReq.make ~id ?title ?completed ()) in
-  Task.of_wire
-    ((match !_service_ref with
-      | Some f -> f "update" ctx_wire wire
-      | None -> failwith "TaskAccess: service not registered"))
-
-let delete ~ctx ~id =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = IdReq.to_wire (IdReq.make ~id ()) in
-  Ok.of_wire
-    ((match !_service_ref with
-      | Some f -> f "delete" ctx_wire wire
-      | None -> failwith "TaskAccess: service not registered"))
-|}
-
-let contract_task_manager_ml =
-  {|[@@@warning "-32"]
-
-module AddReq = struct
-  type t = {
-    title : string;
-  } [@@deriving show, yojson, eq]
-
-  let make ~title () =
-    { title }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `String v.title;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let title = (match (_g 0) with `String s -> s | _ -> "") in
-      { title }
-    | _ -> failwith "AddReq.of_wire: expected JSON array"
-end
-
-module ToggleReq = struct
-  type t = {
-    id : int;
-  } [@@deriving show, yojson, eq]
-
-  let make ~id () =
-    { id }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.id;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
-      { id }
-    | _ -> failwith "ToggleReq.of_wire: expected JSON array"
-end
-
-module DeleteReq = struct
-  type t = {
-    id : int;
-  } [@@deriving show, yojson, eq]
-
-  let make ~id () =
-    { id }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Int v.id;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let id = (match (_g 0) with `Int i -> i | _ -> 0) in
-      { id }
-    | _ -> failwith "DeleteReq.of_wire: expected JSON array"
-end
-
-module TaskListRes = struct
-  type t = {
-    tasks : Task_access.Task.t list;
-  } [@@deriving show, yojson, eq]
-
-  let make ~tasks () =
-    { tasks }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `List (List.map (fun item -> Task_access.Task.to_wire item) v.tasks);
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let tasks = (match (_g 0) with `List items -> List.map (fun item -> Task_access.Task.of_wire item) items | _ -> []) in
-      { tasks }
-    | _ -> failwith "TaskListRes.of_wire: expected JSON array"
-end
-
-module TaskRes = struct
-  type t = {
-    task : Task_access.Task.t;
-  } [@@deriving show, yojson, eq]
-
-  let make ~task () =
-    { task }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      Task_access.Task.to_wire v.task;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let task = Task_access.Task.of_wire (_g 0) in
-      { task }
-    | _ -> failwith "TaskRes.of_wire: expected JSON array"
-end
-
-module StatusRes = struct
-  type t = {
-    ok : bool;
-  } [@@deriving show, yojson, eq]
-
-  let make ~ok () =
-    { ok }
-
-  let to_wire (v : t) : Yojson.Safe.t =
-    `List [
-      `Bool v.ok;
-    ]
-
-  let of_wire (wire : Yojson.Safe.t) : t =
-    match wire with
-    | `List arr ->
-      let a = Array.of_list arr in let _g i = if i < Array.length a then a.(i) else `Null in
-      let ok = (match (_g 0) with `Bool b -> b | _ -> false) in
-      { ok }
-    | _ -> failwith "StatusRes.of_wire: expected JSON array"
-end
-
-let _service_ref : (string -> Yojson.Safe.t -> Yojson.Safe.t -> Yojson.Safe.t) option ref = ref None
-
-module type IMPL = sig
-  val list : Well.rpc_ctx -> Task_access.ListReq.t -> TaskListRes.t
-  val add : Well.rpc_ctx -> AddReq.t -> TaskRes.t
-  val toggle : Well.rpc_ctx -> ToggleReq.t -> TaskRes.t
-  val delete : Well.rpc_ctx -> DeleteReq.t -> StatusRes.t
-end
-
-let make_spec (module I : IMPL) : Well.Service.spec =
-  { name = "TaskManager"
-  ; rpcs = []
-  ; handler = (fun rpc_name ctx_json payload ->
-      let ctx = Well.rpc_ctx_of_wire ctx_json in
-      match rpc_name with
-      | "list" ->
-          TaskListRes.to_wire (I.list ctx (Task_access.ListReq.of_wire payload))
-      | "add" ->
-          TaskRes.to_wire (I.add ctx (AddReq.of_wire payload))
-      | "toggle" ->
-          TaskRes.to_wire (I.toggle ctx (ToggleReq.of_wire payload))
-      | "delete" ->
-          StatusRes.to_wire (I.delete ctx (DeleteReq.of_wire payload))
-      | _ -> failwith ("Unknown RPC: " ^ rpc_name))
-  ; set_ref = (fun f -> _service_ref := Some f)
-  }
-
-let list ~ctx req =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = Task_access.ListReq.to_wire req in
-  TaskListRes.of_wire
-    ((match !_service_ref with
-      | Some f -> f "list" ctx_wire wire
-      | None -> failwith "TaskManager: service not registered"))
-
-let add ~ctx ~title =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = AddReq.to_wire (AddReq.make ~title ()) in
-  TaskRes.of_wire
-    ((match !_service_ref with
-      | Some f -> f "add" ctx_wire wire
-      | None -> failwith "TaskManager: service not registered"))
-
-let toggle ~ctx ~id =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = ToggleReq.to_wire (ToggleReq.make ~id ()) in
-  TaskRes.of_wire
-    ((match !_service_ref with
-      | Some f -> f "toggle" ctx_wire wire
-      | None -> failwith "TaskManager: service not registered"))
-
-let delete ~ctx ~id =
-  let ctx_wire = Well.rpc_ctx_to_wire ctx in
-  let wire = DeleteReq.to_wire (DeleteReq.make ~id ()) in
-  StatusRes.of_wire
-    ((match !_service_ref with
-      | Some f -> f "delete" ctx_wire wire
-      | None -> failwith "TaskManager: service not registered"))
+let contract_task_manager_cyrograf =
+  {|// TaskManager — business-logic contract; references TaskAccess messages
+// across the module boundary.
+
+struct AddReq {
+  title: String
+}
+
+struct ToggleReq {
+  id: Int
+}
+
+struct DeleteReq {
+  id: Int
+}
+
+struct TaskListRes {
+  tasks: List<TaskAccess.Task>
+}
+
+struct TaskRes {
+  task: TaskAccess.Task
+}
+
+struct StatusRes {
+  ok: Bool
+}
+
+rpc list(TaskAccess.ListReq) -> TaskListRes
+rpc add(AddReq) -> TaskRes
+rpc toggle(ToggleReq) -> TaskRes
+rpc delete(DeleteReq) -> StatusRes
 |}
 
 let contract_boundary_dune =
-  {|(include_subdirs no)
-; Contract library lives in build/ocaml/
+  {|; .cyrograf sources for this project. One module per file; legacy TOML is
+; accepted by the Cyrograf frontend, but two definitions of the same module
+; must not coexist in this directory.
+(include_subdirs no)
 |}
 
-let contract_dune_file =
+let contract_gen_dune =
+  {|; Contract generation is a build step. The generator compiles the .cyrograf
+; sources into an intermediate result once; each library directory pins the
+; exact files it owns and promotes them into the source tree. Deleting the
+; generated modules and rebuilding recreates them deterministically.
+(include_subdirs no)
+
+(rule
+ (target (dir gen))
+ (deps
+  (source_tree ../contract))
+ (action
+  (progn
+   (run rm -rf gen)
+   (run %{bin:well} contract build ../contract --targets ocaml,typescript gen))))
+
+(rule
+ (targets manifest.json schema.json)
+ (deps
+  (file gen/manifest.json)
+  (file gen/schema.json))
+ (mode promote)
+ (action
+  (progn
+   (copy gen/manifest.json manifest.json)
+   (copy gen/schema.json schema.json))))
+|}
+
+let contract_data_dune =
+  {|(library
+ (name contract_data)
+ (libraries cyrograf yojson))
+
+(rule
+ (targets
+  drut_runtime.ml
+  note_access.ml
+  note_access.mli
+  task_access.ml
+  task_access.mli
+  task_manager.ml
+  task_manager.mli)
+ (deps
+  (file ../gen/ocaml/drut_runtime.ml)
+  (file ../gen/ocaml/note_access.ml)
+  (file ../gen/ocaml/note_access.mli)
+  (file ../gen/ocaml/task_access.ml)
+  (file ../gen/ocaml/task_access.mli)
+  (file ../gen/ocaml/task_manager.ml)
+  (file ../gen/ocaml/task_manager.mli))
+ (mode promote)
+ (action
+  (progn
+   (copy ../gen/ocaml/drut_runtime.ml drut_runtime.ml)
+   (copy ../gen/ocaml/note_access.ml note_access.ml)
+   (copy ../gen/ocaml/note_access.mli note_access.mli)
+   (copy ../gen/ocaml/task_access.ml task_access.ml)
+   (copy ../gen/ocaml/task_access.mli task_access.mli)
+   (copy ../gen/ocaml/task_manager.ml task_manager.ml)
+   (copy ../gen/ocaml/task_manager.mli task_manager.mli))))
+|}
+
+let contract_data_browser_dune =
+  {|(library
+ (name contract_data_browser)
+ (libraries cyrograf yojson))
+
+(rule
+ (targets
+  drut_runtime.ml
+  note_access.ml
+  note_access.mli
+  task_access.ml
+  task_access.mli
+  task_manager.ml
+  task_manager.mli)
+ (deps
+  (file ../gen/ocaml_js/drut_runtime.ml)
+  (file ../gen/ocaml_js/note_access.ml)
+  (file ../gen/ocaml_js/note_access.mli)
+  (file ../gen/ocaml_js/task_access.ml)
+  (file ../gen/ocaml_js/task_access.mli)
+  (file ../gen/ocaml_js/task_manager.ml)
+  (file ../gen/ocaml_js/task_manager.mli))
+ (mode promote)
+ (action
+  (progn
+   (copy ../gen/ocaml_js/drut_runtime.ml drut_runtime.ml)
+   (copy ../gen/ocaml_js/note_access.ml note_access.ml)
+   (copy ../gen/ocaml_js/note_access.mli note_access.mli)
+   (copy ../gen/ocaml_js/task_access.ml task_access.ml)
+   (copy ../gen/ocaml_js/task_access.mli task_access.mli)
+   (copy ../gen/ocaml_js/task_manager.ml task_manager.ml)
+   (copy ../gen/ocaml_js/task_manager.mli task_manager.mli))))
+|}
+
+let contract_adapters_dune =
   {|(library
  (name contract)
  (wrapped false)
- (libraries well.core yojson)
- (preprocess (pps ppx_deriving.show ppx_deriving_yojson ppx_deriving.eq)))
+ (libraries contract_data well.core cyrograf yojson))
 
 (rule
  (targets note_access.ml task_access.ml task_manager.ml)
  (deps
-  (file ../../NoteAccess.toml)
-  (file ../../TaskAccess.toml)
-  (file ../../TaskManager.toml))
+  (file ../gen/adapters/note_access.ml)
+  (file ../gen/adapters/task_access.ml)
+  (file ../gen/adapters/task_manager.ml))
  (mode promote)
- (action (run %{bin:well} contract build ../../ ..)))
+ (action
+  (progn
+   (copy ../gen/adapters/note_access.ml note_access.ml)
+   (copy ../gen/adapters/task_access.ml task_access.ml)
+   (copy ../gen/adapters/task_manager.ml task_manager.ml))))
+|}
+
+let contract_adapters_browser_dune =
+  {|(library
+ (name contract_browser)
+ (wrapped false)
+ (libraries contract_data_browser cyrograf yojson js_of_ocaml)
+ (preprocess (pps js_of_ocaml-ppx)))
+
+(rule
+ (targets rpc.ml note_access.ml task_access.ml task_manager.ml)
+ (deps
+  (file ../gen/adapters_browser/rpc.ml)
+  (file ../gen/adapters_browser/note_access.ml)
+  (file ../gen/adapters_browser/task_access.ml)
+  (file ../gen/adapters_browser/task_manager.ml))
+ (mode promote)
+ (action
+  (progn
+   (copy ../gen/adapters_browser/rpc.ml rpc.ml)
+   (copy ../gen/adapters_browser/note_access.ml note_access.ml)
+   (copy ../gen/adapters_browser/task_access.ml task_access.ml)
+   (copy ../gen/adapters_browser/task_manager.ml task_manager.ml))))
+|}
+
+let contract_typescript_dune =
+  {|(rule
+ (targets
+  wire.ts
+  noteaccess.ts
+  taskaccess.ts
+  taskmanager.ts
+  proxy_noteaccess.ts
+  proxy_taskaccess.ts
+  proxy_taskmanager.ts)
+ (deps
+  (file ../gen/typescript/wire.ts)
+  (file ../gen/typescript/noteaccess.ts)
+  (file ../gen/typescript/taskaccess.ts)
+  (file ../gen/typescript/taskmanager.ts)
+  (file ../gen/typescript/proxy_noteaccess.ts)
+  (file ../gen/typescript/proxy_taskaccess.ts)
+  (file ../gen/typescript/proxy_taskmanager.ts))
+ (mode promote)
+ (action
+  (progn
+   (copy ../gen/typescript/wire.ts wire.ts)
+   (copy ../gen/typescript/noteaccess.ts noteaccess.ts)
+   (copy ../gen/typescript/taskaccess.ts taskaccess.ts)
+   (copy ../gen/typescript/taskmanager.ts taskmanager.ts)
+   (copy ../gen/typescript/proxy_noteaccess.ts proxy_noteaccess.ts)
+   (copy ../gen/typescript/proxy_taskaccess.ts proxy_taskaccess.ts)
+   (copy ../gen/typescript/proxy_taskmanager.ts proxy_taskmanager.ts))))
 |}
 
 let static_dune =
@@ -2475,7 +2027,10 @@ let static_dune =
  (targets tasks.js)
  (deps
   (source_tree ts)
-  (source_tree ../lib/contract/build/ts))
+  (file ../lib/contract_generated/typescript/wire.ts)
+  (file ../lib/contract_generated/typescript/taskaccess.ts)
+  (file ../lib/contract_generated/typescript/taskmanager.ts)
+  (file ../lib/contract_generated/typescript/proxy_taskmanager.ts))
  (mode promote)
  (action (run bun build ts/tasks.ts --outdir . --minify)))
 
@@ -2508,14 +2063,16 @@ let%query delete_task = "DELETE FROM tasks WHERE id = :id"
 let pool = lazy (Well.Db.create_pool ())
 let with_db f = Well.Db.with_conn (Lazy.force pool) f
 
-let task_of_row (r : All_tasks.row) : Task_access.Task.t =
+module M = Contract_data.Task_access
+
+let task_of_row (r : All_tasks.row) : M.Task.t =
   { id = r.id; title = r.title; completed = r.completed <> 0 }
 
-let task_of_find (r : Find_task.row) : Task_access.Task.t =
+let task_of_find (r : Find_task.row) : M.Task.t =
   { id = r.id; title = r.title; completed = r.completed <> 0 }
 
 module Impl : Task_access.IMPL = struct
-  let list _ctx (req : Task_access.ListReq.t) =
+  let list _ctx (req : M.ListReq.t) =
     with_db @@ fun db ->
     let rows = All_tasks.query db in
     let tasks = List.map task_of_row rows in
@@ -2524,21 +2081,21 @@ module Impl : Task_access.IMPL = struct
         List.filteri (fun i _ -> i < req.limit) tasks
       else tasks
     in
-    Task_access.TaskList.make ~tasks ()
+    M.TaskList.make ~tasks ()
 
-  let get _ctx (req : Task_access.IdReq.t) =
+  let get _ctx (req : M.IdReq.t) =
     with_db @@ fun db ->
     match Find_task.query db ~id:req.id with
     | r :: _ -> task_of_find r
     | [] -> failwith "Task not found"
 
-  let create _ctx (req : Task_access.CreateReq.t) =
+  let create _ctx (req : M.CreateReq.t) =
     with_db @@ fun db ->
     Insert_task.exec db ~title:req.title;
     let id = Int64.to_int (Sqlite3.last_insert_rowid db) in
-    Task_access.Task.make ~id ~title:req.title ~completed:false ()
+    M.Task.make ~id ~title:req.title ~completed:false ()
 
-  let update _ctx (req : Task_access.UpdateReq.t) =
+  let update _ctx (req : M.UpdateReq.t) =
     with_db @@ fun db ->
     (match req.title with
      | Some t -> Update_title.exec db ~title:t ~id:req.id
@@ -2550,10 +2107,10 @@ module Impl : Task_access.IMPL = struct
     | r :: _ -> task_of_find r
     | [] -> failwith "Task not found"
 
-  let delete _ctx (req : Task_access.IdReq.t) =
+  let delete _ctx (req : M.IdReq.t) =
     with_db @@ fun db ->
     Delete_task.exec db ~id:req.id;
-    Task_access.Ok.make ~ok:true ()
+    M.Ok.make ~ok:true ()
 end
 
 let spec = Task_access.make_spec (module Impl)
@@ -2564,24 +2121,35 @@ let task_manager_impl _name =
 (* IDesign: Manager service — delegates to Access *)
 
 module Impl : Task_manager.IMPL = struct
-  let list ctx (req : Task_access.ListReq.t) =
-    let result = Task_access.list ~ctx ~limit:req.limit in
-    Task_manager.TaskListRes.make ~tasks:result.tasks ()
+  let list ctx (req : Contract_data.Task_access.ListReq.t) =
+    let result = Task_access_impl.Impl.list ctx req in
+    Contract_data.Task_manager.TaskListRes.make ~tasks:result.tasks ()
 
-  let add ctx (req : Task_manager.AddReq.t) =
+  let add ctx (req : Contract_data.Task_manager.AddReq.t) =
     if String.trim req.title = "" then failwith "Title cannot be empty";
-    let task = Task_access.create ~ctx ~title:req.title in
-    Task_manager.TaskRes.make ~task ()
+    let task =
+      Task_access_impl.Impl.create ctx
+        (Contract_data.Task_access.CreateReq.make ~title:req.title ())
+    in
+    Contract_data.Task_manager.TaskRes.make ~task ()
 
-  let toggle ctx (req : Task_manager.ToggleReq.t) =
-    let current = Task_access.get ~ctx ~id:req.id in
-    ignore (Task_access.update ~ctx ~id:req.id ~completed:(not current.completed) ());
-    let updated = Task_access.get ~ctx ~id:req.id in
-    Task_manager.TaskRes.make ~task:updated ()
+  let toggle ctx (req : Contract_data.Task_manager.ToggleReq.t) =
+    let get () =
+      Task_access_impl.Impl.get ctx
+        (Contract_data.Task_access.IdReq.make ~id:req.id ())
+    in
+    let current = get () in
+    ignore
+      (Task_access_impl.Impl.update ctx
+         (Contract_data.Task_access.UpdateReq.make ~id:req.id
+            ~completed:(not current.completed) ()));
+    Contract_data.Task_manager.TaskRes.make ~task:(get ()) ()
 
-  let delete ctx (req : Task_manager.DeleteReq.t) =
-    ignore (Task_access.delete ~ctx ~id:req.id);
-    Task_manager.StatusRes.make ~ok:true ()
+  let delete ctx (req : Contract_data.Task_manager.DeleteReq.t) =
+    ignore
+      (Task_access_impl.Impl.delete ctx
+         (Contract_data.Task_access.IdReq.make ~id:req.id ()));
+    Contract_data.Task_manager.StatusRes.make ~ok:true ()
 end
 
 let spec = Task_manager.make_spec (module Impl)
@@ -2604,10 +2172,10 @@ let open Html in
 |}
 
 let tasks_ts =
-  {|// tasks.ts — UI for TaskManager (types + RPC from generated contract)
+  {|// tasks.ts — UI for TaskManager (types + RPC from the generated contract)
 
-import { Proxy, type TaskListRes } from '../../lib/contract/build/ts/TaskManager';
-import type { Task } from '../../lib/contract/build/ts/TaskAccess';
+import { Proxy } from '../../lib/contract_generated/typescript/proxy_taskmanager.ts';
+import type { Task } from '../../lib/contract_generated/typescript/taskaccess.ts';
 
 function escapeHtml(s: string): string {
   return s
@@ -2619,25 +2187,36 @@ function escapeHtml(s: string): string {
 
 let tasks: Task[] = [];
 
-async function loadTasks() {
-  const res: TaskListRes = await Proxy.list({ limit: 100 });
-  tasks = res.tasks;
-  render();
+function loadTasks() {
+  Proxy.list({ limit: 100 }, (r) => {
+    if (r.ok) {
+      tasks = r.value.tasks;
+      render();
+    } else {
+      console.error("tasks.list failed:", r.error);
+    }
+  });
 }
 
-async function addTask(title: string) {
-  await Proxy.add({ title });
-  await loadTasks();
+function addTask(title: string) {
+  Proxy.add({ title }, (r) => {
+    if (r.ok) loadTasks();
+    else console.error("tasks.add failed:", r.error);
+  });
 }
 
-async function toggleTask(id: number) {
-  await Proxy.toggle({ id });
-  await loadTasks();
+function toggleTask(id: number) {
+  Proxy.toggle({ id }, (r) => {
+    if (r.ok) loadTasks();
+    else console.error("tasks.toggle failed:", r.error);
+  });
 }
 
-async function deleteTask(id: number) {
-  await Proxy.delete({ id });
-  await loadTasks();
+function deleteTask(id: number) {
+  Proxy.delete({ id }, (r) => {
+    if (r.ok) loadTasks();
+    else console.error("tasks.delete failed:", r.error);
+  });
 }
 
 function render() {
@@ -2791,356 +2370,8 @@ let tsconfig_json =
     "strict": true,
     "noEmit": true
   },
-  "include": ["static/ts", "lib/contract/build/ts"]
+  "include": ["static/ts", "lib/contract_generated/typescript"]
 }
-|}
-
-let contract_ts_rpc =
-  {|export async function rpc(service: string, method: string, payload: unknown[]): Promise<unknown> {
-  const res = await fetch(`/rpc/${service}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`RPC ${service}.${method}: ${res.status}`);
-  return res.json();
-}
-|}
-
-let contract_ts_note_access =
-  {|import { rpc } from './rpc';
-
-export interface Note {
-  id: number;
-  title: string;
-  body: string;
-}
-
-export function encodeNote(v: Note): unknown[] {
-  return [v.id, v.title, v.body];
-}
-
-export function decodeNote(wire: unknown[]): Note {
-  return {
-    id: wire[0] as number,
-    title: wire[1] as string,
-    body: wire[2] as string,
-  };
-}
-
-export interface ListReq {
-  limit: number;
-}
-
-export function encodeListReq(v: ListReq): unknown[] {
-  return [v.limit];
-}
-
-export interface IdReq {
-  id: number;
-}
-
-export function encodeIdReq(v: IdReq): unknown[] {
-  return [v.id];
-}
-
-export interface CreateReq {
-  title: string;
-  body: string;
-}
-
-export function encodeCreateReq(v: CreateReq): unknown[] {
-  return [v.title, v.body];
-}
-
-export interface NoteList {
-  notes: Note[];
-}
-
-export function decodeNoteList(wire: unknown[]): NoteList {
-  return {
-    notes: (wire[0] as unknown[]).map(v => decodeNote(v as unknown[])),
-  };
-}
-
-export interface Ok {
-  ok: boolean;
-}
-
-export function decodeOk(wire: unknown[]): Ok {
-  return {
-    ok: wire[0] as boolean,
-  };
-}
-
-export interface Impl {
-  list(req: ListReq): Promise<NoteList>;
-  get(req: IdReq): Promise<Note>;
-  create(req: CreateReq): Promise<Note>;
-  delete(req: IdReq): Promise<Ok>;
-}
-
-export const Proxy: Impl = {
-  async list(req) {
-    return decodeNoteList(await rpc("NoteAccess", "list", encodeListReq(req)) as unknown[]);
-  },
-  async get(req) {
-    return decodeNote(await rpc("NoteAccess", "get", encodeIdReq(req)) as unknown[]);
-  },
-  async create(req) {
-    return decodeNote(await rpc("NoteAccess", "create", encodeCreateReq(req)) as unknown[]);
-  },
-  async delete(req) {
-    return decodeOk(await rpc("NoteAccess", "delete", encodeIdReq(req)) as unknown[]);
-  },
-};
-|}
-
-let contract_ts_task_access =
-  {|import { rpc } from './rpc';
-
-export interface Task {
-  id: number;
-  title: string;
-  completed: boolean;
-}
-
-export function encodeTask(v: Task): unknown[] {
-  return [v.id, v.title, v.completed];
-}
-
-export function decodeTask(wire: unknown[]): Task {
-  return {
-    id: wire[0] as number,
-    title: wire[1] as string,
-    completed: wire[2] as boolean,
-  };
-}
-
-export interface ListReq {
-  limit: number;
-}
-
-export function encodeListReq(v: ListReq): unknown[] {
-  return [v.limit];
-}
-
-export function decodeListReq(wire: unknown[]): ListReq {
-  return {
-    limit: wire[0] as number,
-  };
-}
-
-export interface IdReq {
-  id: number;
-}
-
-export function encodeIdReq(v: IdReq): unknown[] {
-  return [v.id];
-}
-
-export function decodeIdReq(wire: unknown[]): IdReq {
-  return {
-    id: wire[0] as number,
-  };
-}
-
-export interface CreateReq {
-  title: string;
-}
-
-export function encodeCreateReq(v: CreateReq): unknown[] {
-  return [v.title];
-}
-
-export function decodeCreateReq(wire: unknown[]): CreateReq {
-  return {
-    title: wire[0] as string,
-  };
-}
-
-export interface UpdateReq {
-  id: number;
-  title: string | null;
-  completed: boolean | null;
-}
-
-export function encodeUpdateReq(v: UpdateReq): unknown[] {
-  return [v.id, v.title !== null ? v.title : null, v.completed !== null ? v.completed : null];
-}
-
-export function decodeUpdateReq(wire: unknown[]): UpdateReq {
-  return {
-    id: wire[0] as number,
-    title: wire[1] === null ? null : (v => v as string)(wire[1]),
-    completed: wire[2] === null ? null : (v => v as boolean)(wire[2]),
-  };
-}
-
-export interface TaskList {
-  tasks: Task[];
-}
-
-export function encodeTaskList(v: TaskList): unknown[] {
-  return [v.tasks.map(v => encodeTask(v))];
-}
-
-export function decodeTaskList(wire: unknown[]): TaskList {
-  return {
-    tasks: (wire[0] as unknown[]).map(v => decodeTask(v as unknown[])),
-  };
-}
-
-export interface Ok {
-  ok: boolean;
-}
-
-export function encodeOk(v: Ok): unknown[] {
-  return [v.ok];
-}
-
-export function decodeOk(wire: unknown[]): Ok {
-  return {
-    ok: wire[0] as boolean,
-  };
-}
-
-export interface Impl {
-  list(req: ListReq): Promise<TaskList>;
-  get(req: IdReq): Promise<Task>;
-  create(req: CreateReq): Promise<Task>;
-  update(req: UpdateReq): Promise<Task>;
-  delete(req: IdReq): Promise<Ok>;
-}
-
-export const Proxy: Impl = {
-  async list(req) {
-    return decodeTaskList(await rpc("TaskAccess", "list", encodeListReq(req)) as unknown[]);
-  },
-  async get(req) {
-    return decodeTask(await rpc("TaskAccess", "get", encodeIdReq(req)) as unknown[]);
-  },
-  async create(req) {
-    return decodeTask(await rpc("TaskAccess", "create", encodeCreateReq(req)) as unknown[]);
-  },
-  async update(req) {
-    return decodeTask(await rpc("TaskAccess", "update", encodeUpdateReq(req)) as unknown[]);
-  },
-  async delete(req) {
-    return decodeOk(await rpc("TaskAccess", "delete", encodeIdReq(req)) as unknown[]);
-  },
-};
-|}
-
-let contract_ts_task_manager =
-  {|import { rpc } from './rpc';
-import * as TaskAccess from './TaskAccess';
-
-export interface AddReq {
-  title: string;
-}
-
-export function encodeAddReq(v: AddReq): unknown[] {
-  return [v.title];
-}
-
-export function decodeAddReq(wire: unknown[]): AddReq {
-  return {
-    title: wire[0] as string,
-  };
-}
-
-export interface ToggleReq {
-  id: number;
-}
-
-export function encodeToggleReq(v: ToggleReq): unknown[] {
-  return [v.id];
-}
-
-export function decodeToggleReq(wire: unknown[]): ToggleReq {
-  return {
-    id: wire[0] as number,
-  };
-}
-
-export interface DeleteReq {
-  id: number;
-}
-
-export function encodeDeleteReq(v: DeleteReq): unknown[] {
-  return [v.id];
-}
-
-export function decodeDeleteReq(wire: unknown[]): DeleteReq {
-  return {
-    id: wire[0] as number,
-  };
-}
-
-export interface TaskListRes {
-  tasks: TaskAccess.Task[];
-}
-
-export function encodeTaskListRes(v: TaskListRes): unknown[] {
-  return [v.tasks.map(v => TaskAccess.encodeTask(v))];
-}
-
-export function decodeTaskListRes(wire: unknown[]): TaskListRes {
-  return {
-    tasks: (wire[0] as unknown[]).map(v => TaskAccess.decodeTask(v as unknown[])),
-  };
-}
-
-export interface TaskRes {
-  task: TaskAccess.Task;
-}
-
-export function encodeTaskRes(v: TaskRes): unknown[] {
-  return [TaskAccess.encodeTask(v.task)];
-}
-
-export function decodeTaskRes(wire: unknown[]): TaskRes {
-  return {
-    task: TaskAccess.decodeTask(wire[0] as unknown[]),
-  };
-}
-
-export interface StatusRes {
-  ok: boolean;
-}
-
-export function encodeStatusRes(v: StatusRes): unknown[] {
-  return [v.ok];
-}
-
-export function decodeStatusRes(wire: unknown[]): StatusRes {
-  return {
-    ok: wire[0] as boolean,
-  };
-}
-
-export interface Impl {
-  list(req: TaskAccess.ListReq): Promise<TaskListRes>;
-  add(req: AddReq): Promise<TaskRes>;
-  toggle(req: ToggleReq): Promise<TaskRes>;
-  delete(req: DeleteReq): Promise<StatusRes>;
-}
-
-export const Proxy: Impl = {
-  async list(req) {
-    return decodeTaskListRes(await rpc("TaskManager", "list", TaskAccess.encodeListReq(req)) as unknown[]);
-  },
-  async add(req) {
-    return decodeTaskRes(await rpc("TaskManager", "add", encodeAddReq(req)) as unknown[]);
-  },
-  async toggle(req) {
-    return decodeTaskRes(await rpc("TaskManager", "toggle", encodeToggleReq(req)) as unknown[]);
-  },
-  async delete(req) {
-    return decodeStatusRes(await rpc("TaskManager", "delete", encodeDeleteReq(req)) as unknown[]);
-  },
-};
 |}
 
 let well_skill =
@@ -3277,7 +2508,8 @@ myapp/
 │   ├── pages/home_page.mlx                  # Pages.Home_page — routes: Well.get "/" ...
 │   ├── live/counter_live.mlx                # Live.Counter_live — LiveView module
 │   ├── services/note_access_impl.ml         # Services.Note_access_impl
-│   └── contract/                            # Service contracts (TOML)
+│   ├── contract/                            # Service contracts (.cyrograf)
+│   └── contract_generated/                  # Generated data + adapters
 ├── static/                                  # CSS, JS, assets
 └── test/myapp_test.ml                       # Tests
 ```
@@ -4418,41 +3650,57 @@ let url = Well.S3.presigned_url s3 ~method_:"GET" ~key:"photos/cat.jpg" ~expires
 
 ---
 
-## Service Contracts (TOML)
+## Service Contracts (.cyrograf)
 
-Define service interfaces in TOML, generate OCaml + TypeScript + Go + Dart.
+Define service interfaces in `.cyrograf` (owned by Cyrograf), then generate
+OCaml + TypeScript + Go + Dart. Plain TOML stays a Cyrograf compatibility
+input, but a module must have exactly one definition in `lib/contract/`.
 
-```toml
-# contract/TaskAccess.toml
-[service.rpc]
-list = "ListReq -> TaskList"
-create = "CreateReq -> Task"
-
-[msg.Task.struct]
-id = "int"
-title = "string"
-completed = "bool"
-
-[msg.ListReq.struct]
-limit = "int"
-
-[msg.CreateReq.struct]
-title = "string"
-
-[msg.TaskList.struct]
-tasks = { type = "list", of = "Task" }
+```
+lib/contract/TaskAccess.cyrograf
+lib/contract_generated/          # output; produced by dune build
+  ocaml/            (contract_data)          ocaml_js/  (contract_data_browser)
+  adapters/         (contract)               adapters_browser/ (contract_browser)
+  typescript/       (wire codecs + Proxy)    manifest.json  schema.json
 ```
 
-Generate: `well contract build .`
+```cyrograf
+// lib/contract/TaskAccess.cyrograf
+struct Task {
+  id: Int
+  title: String
+  completed: Bool
+}
+
+struct ListReq {
+  limit: Int
+}
+
+struct CreateReq {
+  title: String
+}
+
+struct TaskList {
+  tasks: List<Task>
+}
+
+rpc list(ListReq) -> TaskList
+rpc create(CreateReq) -> Task
+```
+
+Build: `dune build` regenerates `lib/contract_generated` (or run
+`well contract build lib/contract lib/contract_generated` explicitly).
+The generated type lives in the data library (`Contract_data.Task_access`),
+while the adapter module owns `IMPL`, `make_spec` and the `~ctx` callers.
 
 Implement:
 ```ocaml
 module Impl : Task_access.IMPL = struct
-  let list _ctx (req : Task_access.ListReq.t) =
-    Task_access.TaskList.make ~tasks ()
+  let list _ctx (_req : Contract_data.Task_access.ListReq.t) =
+    Contract_data.Task_access.TaskList.make ~tasks ()
 
-  let create _ctx (req : Task_access.CreateReq.t) =
-    Task_access.Task.make ~id ~title:req.title ~completed:false ()
+  let create _ctx (req : Contract_data.Task_access.CreateReq.t) =
+    Contract_data.Task_access.Task.make ~id ~title:req.title ~completed:false ()
 end
 
 let spec = Task_access.make_spec (module Impl)
@@ -4460,9 +3708,12 @@ let spec = Task_access.make_spec (module Impl)
 
 Register in `lib/app.ml`:
 ```ocaml
-Well.Service.register Services.Task_access_impl.spec;
+Well.Service.register_drut Services.Task_access_impl.spec;
 Well.Service.expose "TaskAccess";  (* creates /rpc/TaskAccess/* HTTP routes *)
 ```
+
+Public message conversions are only `to_drut`/`from_drut`; do not add another
+codec or parse JSON before the generated decoder.
 
 ### Service Module
 
@@ -4803,7 +4054,7 @@ well build                    # Production build (dune + patchelf + bundle .so �
 well release                  # Build + create .tar.gz archive for deployment
 well test [-w] [-f pat] [--jobs n] [-u]  # Run tests (watch, filter, concurrency, snapshots)
 well docs [--open] [-o dir]   # Generate HTML documentation from (** *) comments
-well contract build [dir]     # Generate code from TOML contracts
+well contract build          # Generate contracts (default lib/contract -> lib/contract_generated)
 well db diff                  # Show pending schema migrations
 well db rollback [path]       # Restore from .bak backup
 well repl [-s socket] [-e expr]  # Interactive service query shell
@@ -4944,7 +4195,7 @@ When adding a new feature, you typically need:
 2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let pool = lazy (Well.Db.create_pool ())`
 3. **LiveView**: Create `lib/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields. Register with `Well.live "/feature" (module Live.Feature_live)` in `lib/app.ml`. Then create a GET page that embeds `<Well.LiveView name="feature" />`. Both steps are required — `Well.live` only registers the WS handler, not the page.
 4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or LiveViews
-5. **Service**: Create TOML contract, run `well contract build`, implement `IMPL` module, register + expose in `lib/app.ml`
+5. **Service**: add a `.cyrograf` contract under `lib/contract/`, run `well contract build` (or `dune build`), implement the `IMPL` module, register with `Well.Service.register_drut` + `expose` in `lib/app.ml`
 6. **Auth-protected**: Add `~middleware:[Well.require_auth ()]` or wrap handler with `Well.Auth.require_grant`
 7. **Tests**: Add to `test/` with `Well.Db.with_test_db` for DB tests or `Well.with_test_server` for integration tests
 |well_skill}
@@ -6662,19 +5913,18 @@ let project_files name =
     { path = "web/dune"; content = lib_web_dune name };
     { path = "web/counter.mlx"; content = web_counter_ml name };
     { path = "web/register.ml"; content = web_register_ml name };
-    (* lib/contract/ — separate dune library *)
+    (* lib/contract/ — .cyrograf sources (single definition per module) *)
     { path = "lib/contract/dune"; content = contract_boundary_dune };
-    { path = "lib/contract/build/ocaml/dune"; content = contract_dune_file };
-    { path = "lib/contract/NoteAccess.toml"; content = contract_note_access_toml };
-    { path = "lib/contract/TaskAccess.toml"; content = contract_task_access_toml };
-    { path = "lib/contract/TaskManager.toml"; content = contract_task_manager_toml };
-    { path = "lib/contract/build/ocaml/note_access.ml"; content = contract_note_access_ml };
-    { path = "lib/contract/build/ocaml/task_access.ml"; content = contract_task_access_ml };
-    { path = "lib/contract/build/ocaml/task_manager.ml"; content = contract_task_manager_ml };
-    { path = "lib/contract/build/ts/rpc.ts"; content = contract_ts_rpc };
-    { path = "lib/contract/build/ts/NoteAccess.ts"; content = contract_ts_note_access };
-    { path = "lib/contract/build/ts/TaskAccess.ts"; content = contract_ts_task_access };
-    { path = "lib/contract/build/ts/TaskManager.ts"; content = contract_ts_task_manager };
+    { path = "lib/contract/NoteAccess.cyrograf"; content = contract_note_access_cyrograf };
+    { path = "lib/contract/TaskAccess.cyrograf"; content = contract_task_access_cyrograf };
+    { path = "lib/contract/TaskManager.cyrograf"; content = contract_task_manager_cyrograf };
+    (* lib/contract_generated/ — generated result, produced by dune build *)
+    { path = "lib/contract_generated/dune"; content = contract_gen_dune };
+    { path = "lib/contract_generated/ocaml/dune"; content = contract_data_dune };
+    { path = "lib/contract_generated/ocaml_js/dune"; content = contract_data_browser_dune };
+    { path = "lib/contract_generated/adapters/dune"; content = contract_adapters_dune };
+    { path = "lib/contract_generated/adapters_browser/dune"; content = contract_adapters_browser_dune };
+    { path = "lib/contract_generated/typescript/dune"; content = contract_typescript_dune };
     (* test/ *)
     { path = "test/dune"; content = test_dune name };
     { path = Printf.sprintf "test/%s_test.ml" name; content = test_main name };

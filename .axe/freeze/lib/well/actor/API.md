@@ -156,7 +156,8 @@ end
 val make : (module IMPL) -> definition
 ```
 
-`inbound` i `outbound` pochodzą z kontraktu TOML. Kodeki stanu są własnością
+`inbound` i `outbound` pochodzą z kontraktu Cyrografu; wiadomości zewnętrzne
+używają `to_drut`/`from_drut` na surowym tekście. Kodeki stanu są własnością
 aktora; kodeki wiadomości są generowane. `state_version` jest dodatnią liczbą.
 Zmiana wymagająca innego odczytu blobu wymaga zwiększenia wersji. Runtime
 nie wywołuje state_of_wire przy niezgodnej wersji i nie zastępuje stanu init.
