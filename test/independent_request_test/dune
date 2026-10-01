@@ -1,0 +1,3 @@
+(test
+ (name independent_request_test)
+ (libraries well well.html str eio eio_main))

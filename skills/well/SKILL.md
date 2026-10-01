@@ -1441,13 +1441,17 @@ Well.on_error : (exn -> request -> response) -> unit  (* custom error handler *)
 Well.run : ?port:int -> ?workers:int -> ?cert:string -> ?key:string
         -> ?domain:string -> ?acme_staging:bool -> ?disable_cap:bool -> unit -> unit
 (* Default: port 4000, listens 0.0.0.0. Blocks forever. *)
+(* ~workers: bounded Eio domain count for request dispatch. Default 0 = one
+   domain per recommended CPU; each connection is dispatched to the pool so a
+   slow synchronous handler does not serialize unrelated requests. *)
 (* ~cert/~key: PEM files for manual TLS *)
 (* ~domain: enables Let's Encrypt auto-TLS (mutually exclusive with cert/key) *)
 (* ~acme_staging: use LE staging for testing *)
 (* ~disable_cap: disable Cap admin panel *)
 
-Well.with_test_server : ?port:int -> ?disable_cap:bool -> (int -> 'a) -> 'a
-(* Starts server on random port, passes port to function *)
+Well.with_test_server : ?port:int -> ?disable_cap:bool -> ?workers:int -> (int -> 'a) -> 'a
+(* Starts server on random port, passes port to function. Same dispatch pool as
+   Well.run; ~workers defaults to the recommended domain count. *)
 ```
 
 ### Auto-TLS (Let's Encrypt)

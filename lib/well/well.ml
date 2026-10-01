@@ -1274,8 +1274,12 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
       | Some h -> h
       | None -> if acme_mode then "0.0.0.0" else "localhost"
     in
-    Log.log "listening on %s://%s:%d%s" scheme host_str port
-      (if workers > 0 then Printf.sprintf " (%d workers)" workers else "");
+    let domain_count =
+      if workers > 0 then workers
+      else max 1 (Domain.recommended_domain_count ())
+    in
+    Log.log "listening on %s://%s:%d (%d workers)" scheme host_str port
+      domain_count;
     let inner_handler =
       match domain with
       | Some _ ->
@@ -1303,33 +1307,21 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
       end
     in
     Eio.Fiber.fork ~sw (fun () ->
-      if workers > 0 then begin
-        let pool =
-          Eio.Executor_pool.create ~sw ~domain_count:workers
-            (Env.domain_mgr ())
-        in
-        let rec accept_loop () =
-          let flow, addr = Eio.Net.accept ~sw socket in
-          ignore (Eio.Executor_pool.submit_fork ~sw pool ~weight:0.1
-            (fun () ->
-              try handler flow addr
-              with exn ->
-                Log.log ~level:"error" "worker error: %s"
-                  (Printexc.to_string exn)));
-          accept_loop ()
-        in
+      let pool =
+        Eio.Executor_pool.create ~sw ~domain_count
+          (Env.domain_mgr ())
+      in
+      let rec accept_loop () =
+        let flow, addr = Eio.Net.accept ~sw socket in
+        ignore (Eio.Executor_pool.submit_fork ~sw pool ~weight:0.1
+          (fun () ->
+            try handler flow addr
+            with exn ->
+              Log.log ~level:"error" "worker error: %s"
+                (Printexc.to_string exn)));
         accept_loop ()
-      end else begin
-        let rec accept_loop () =
-          Eio.Net.accept_fork socket ~sw
-            ~on_error:(fun exn ->
-              Log.log ~level:"error" "accept error: %s"
-                (Printexc.to_string exn))
-            handler;
-          accept_loop ()
-        in
-        accept_loop ()
-      end);
+      in
+      accept_loop ());
     Eio.Promise.await shutdown_p;
     Log.log "shutting down...";
     Env.sleep 0.5;
@@ -1350,9 +1342,14 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
 (* ── Test server ──────────────────────────────────────────────────── *)
 
 (** Start a test server on a random port. Calls [f port] with the actual port number. *)
-let with_test_server ?(port = 0) ?(disable_cap = false) f =
+let with_test_server ?(port = 0) ?(disable_cap = false) ?workers f =
   Random.self_init ();
   let test_port = if port > 0 then port else 40000 + Random.int 20000 in
+  let domain_count =
+    match workers with
+    | Some n when n > 0 -> n
+    | _ -> max 1 (Domain.recommended_domain_count ())
+  in
   Eio_main.run @@ fun env ->
   Env.set env;
   let net = Env.net () in
@@ -1366,10 +1363,15 @@ let with_test_server ?(port = 0) ?(disable_cap = false) f =
     Eio.Net.listen net ~sw ~backlog:128 ~reuse_addr:true addr
   in
   Eio.Fiber.fork ~sw (fun () ->
+    let pool =
+      Eio.Executor_pool.create ~sw ~domain_count (Env.domain_mgr ())
+    in
     let rec accept_loop () =
-      Eio.Net.accept_fork socket ~sw
-        ~on_error:(fun _ -> ())
-        handle_connection;
+      let flow, addr = Eio.Net.accept ~sw socket in
+      ignore (Eio.Executor_pool.submit_fork ~sw pool ~weight:0.1
+        (fun () ->
+          try handle_connection flow addr
+          with _ -> ()));
       accept_loop ()
     in
     accept_loop ());

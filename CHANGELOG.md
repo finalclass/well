@@ -14,6 +14,11 @@
   still passes.
 
 ### Fixes
+- **Request isolation:** `Well.run` (and `Well.with_test_server`) dispatch every
+  accepted connection through the bounded `Eio.Executor_pool` across domains,
+  defaulting to `Domain.recommended_domain_count ()`. Previously the default
+  `workers = 0` handled each connection with `Eio.Net.accept_fork` on one
+  scheduler, so a slow synchronous handler starved unrelated requests.
 - **Auth OTP:** `verify_otp` no longer inserts a `_well_users` row when the
   email is unknown. A valid code for a missing account is consumed and
   returns `Error "Invalid or expired code"`. `initiate_otp` still does not

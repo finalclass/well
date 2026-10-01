@@ -3822,9 +3822,11 @@ Well.run : ?port:int -> ?workers:int -> ?cert:string -> ?key:string
 (* ~domain: enables Let's Encrypt auto-TLS (mutually exclusive with cert/key) *)
 (* ~acme_staging: use LE staging for testing *)
 (* ~disable_cap: disable Cap admin panel *)
+(* ~workers: bounded Eio domain count for request dispatch; 0 = recommended CPU count *)
 
-Well.with_test_server : ?port:int -> ?disable_cap:bool -> (int -> 'a) -> 'a
-(* Starts server on random port, passes port to function *)
+Well.with_test_server : ?port:int -> ?disable_cap:bool -> ?workers:int -> (int -> 'a) -> 'a
+(* Starts server on random port, passes port to function
+   (same dispatch pool as Well.run) *)
 ```
 
 ### Auto-TLS (Let's Encrypt)
