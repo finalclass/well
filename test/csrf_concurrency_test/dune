@@ -1,0 +1,3 @@
+(test
+ (name csrf_concurrency_test)
+ (libraries well eio eio_main))

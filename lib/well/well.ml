@@ -1431,6 +1431,9 @@ module Env = Env
 (** Structured logging with context. *)
 module Log = Log
 
+(** Built-in middleware implementations (CSRF, rate limiting, auth, ...). *)
+module Middleware = Middleware
+
 (** ACME (Let's Encrypt) automatic TLS certificate provisioning. *)
 module Acme = Acme
 

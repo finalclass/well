@@ -130,12 +130,45 @@ let error_handler : middleware = fun next req ->
 
 (* ── CSRF ─────────────────────────────────────────────────────────── *)
 
-let _csrf_tokens : (string, string) Hashtbl.t = Hashtbl.create 64
+module Csrf_store = struct
+  let mutex = Mutex.create ()
+  let tokens : (string, string) Hashtbl.t = Hashtbl.create 64
 
-let migrate_csrf_token old_sid new_sid =
-  match Hashtbl.find_opt _csrf_tokens old_sid with
-  | Some t -> Hashtbl.replace _csrf_tokens new_sid t; Hashtbl.remove _csrf_tokens old_sid
-  | None -> ()
+  let with_lock f =
+    Mutex.lock mutex;
+    Fun.protect ~finally:(fun () -> Mutex.unlock mutex) f
+
+  let find_or_create session_id generate =
+    with_lock (fun () ->
+      match Hashtbl.find_opt tokens session_id with
+      | Some token -> token
+      | None ->
+          let token = generate () in
+          Hashtbl.replace tokens session_id token;
+          token)
+
+  let migrate old_session_id new_session_id =
+    with_lock (fun () ->
+      match Hashtbl.find_opt tokens old_session_id with
+      | Some token ->
+          Hashtbl.replace tokens new_session_id token;
+          Hashtbl.remove tokens old_session_id
+      | None -> ())
+
+  let snapshot () =
+    with_lock (fun () ->
+      Hashtbl.fold
+        (fun session_id token acc -> (session_id, token) :: acc)
+        tokens [])
+
+  let remove_if session_id token =
+    with_lock (fun () ->
+      match Hashtbl.find_opt tokens session_id with
+      | Some current when current == token -> Hashtbl.remove tokens session_id
+      | _ -> ())
+end
+
+let migrate_csrf_token old_sid new_sid = Csrf_store.migrate old_sid new_sid
 
 module Csrf_ctx = Context(struct type t = string let empty = "" end)
 
@@ -205,12 +238,7 @@ let csrf : middleware = fun next req ->
       is registered BEFORE Well.use Well.csrf."
   end;
   let token =
-    match Hashtbl.find_opt _csrf_tokens req.session_id with
-    | Some t -> t
-    | None ->
-        let t = generate_csrf_token () in
-        Hashtbl.replace _csrf_tokens req.session_id t;
-        t
+    Csrf_store.find_or_create req.session_id generate_csrf_token
   in
   let req = Csrf_ctx.set token req in
   let safe_method =
@@ -252,13 +280,11 @@ let csrf : middleware = fun next req ->
 
 (** Prune CSRF tokens for sessions no longer in the store. *)
 let cleanup_csrf_tokens () =
-  let to_remove = ref [] in
-  Hashtbl.iter (fun sid _token ->
+  List.iter (fun (sid, token) ->
     if Session_store.get ~session_id:sid ~key:"__exists" = None
     && Session_store.get_all_with_prefix ~session_id:sid ~prefix:"" = []
-    then to_remove := sid :: !to_remove
-  ) _csrf_tokens;
-  List.iter (Hashtbl.remove _csrf_tokens) !to_remove
+    then Csrf_store.remove_if sid token
+  ) (Csrf_store.snapshot ())
 
 (* ── Rate limiting ────────────────────────────────────────────────── *)
 

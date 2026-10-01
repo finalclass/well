@@ -19,6 +19,10 @@
   defaulting to `Domain.recommended_domain_count ()`. Previously the default
   `workers = 0` handled each connection with `Eio.Net.accept_fork` on one
   scheduler, so a slow synchronous handler starved unrelated requests.
+- **CSRF shared state:** the CSRF token store serializes cross-domain writes,
+  session-ID migration and maintenance pruning under one lock. Pruning
+  snapshots the store under the lock and checks the session store outside it,
+  so a slow maintenance pass never blocks request handling.
 - **Auth OTP:** `verify_otp` no longer inserts a `_well_users` row when the
   email is unknown. A valid code for a missing account is consumed and
   returns `Error "Invalid or expired code"`. `initiate_otp` still does not
