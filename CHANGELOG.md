@@ -14,6 +14,13 @@
   still passes.
 
 ### Fixes
+- **Registry uniqueness and atomic save:** `Well.Registry` enforces field
+  uniqueness in OCaml during a single serialized write boundary on one pooled
+  connection, so concurrent conflicting saves cannot both succeed. Unique
+  fields no longer create database `UNIQUE` indexes; registry-owned legacy
+  indexes are dropped on upgrade without rewriting rows. Blank optional
+  identifiers may repeat, and generated row ids include a process-local
+  sequence so rapid consecutive saves stay distinct.
 - **Request isolation:** `Well.run` (and `Well.with_test_server`) dispatch every
   accepted connection through the bounded `Eio.Executor_pool` across domains,
   defaulting to `Domain.recommended_domain_count ()`. Previously the default

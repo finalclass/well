@@ -168,11 +168,17 @@ let pool =
 
 let with_db f = Db.with_conn (Lazy.force pool) f
 
+let id_sequence = Atomic.make 0
+
 let make_id (registry : t) =
+  let sequence = Atomic.fetch_and_add id_sequence 1 in
   Printf.sprintf
     "%s_%s"
     registry.id
-    (Digestif.SHA1.(digest_string (string_of_float (Unix.gettimeofday ())) |> to_hex)
+    (Digestif.SHA1.(
+       digest_string
+         (Printf.sprintf "%f:%d:%d" (Unix.gettimeofday ()) (Unix.getpid ()) sequence)
+       |> to_hex)
      |> fun s -> String.sub s 0 12)
 
 let sql_select_columns (registry : t) =
@@ -209,23 +215,24 @@ let row_mapper registry (row : Db.row) =
   in
   {id = row.text 0; values}
 
-let ensure_indexes db registry =
+let unique_index_name (registry : t) field =
+  "idx_" ^ registry.table ^ "_" ^ field.name ^ "_unique"
+
+let repair_legacy_indexes db (registry : t) =
   registry.fields
   |> List.iter (fun field ->
        if field.unique
        then
          let sql =
            Printf.sprintf
-             "CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (%s)"
-             (Db.quote_id ("idx_" ^ registry.table ^ "_" ^ field.name ^ "_unique"))
-             (Db.quote_id registry.table)
-             (Db.quote_id field.name)
+             "DROP INDEX IF EXISTS %s"
+             (Db.quote_id (unique_index_name registry field))
          in
          ignore (Sqlite3.exec db sql) )
 
 let list_rows ?(include_archived = false) (registry : t) =
   with_db @@ fun db ->
-  ensure_indexes db registry ;
+  repair_legacy_indexes db registry ;
   let where =
     if registry.soft_delete && not include_archived
     then " WHERE is_archived = 0"
@@ -250,9 +257,7 @@ let list_rows ?(include_archived = false) (registry : t) =
   in
   Db.query db sql [] (row_mapper registry)
 
-let find_row (registry : t) id =
-  with_db @@ fun db ->
-  ensure_indexes db registry ;
+let find_row_on db (registry : t) id =
   let sql =
     Printf.sprintf
       "SELECT %s FROM %s WHERE id = ?%s"
@@ -262,10 +267,13 @@ let find_row (registry : t) id =
   in
   Db.query_one db sql [Db.Text id] (row_mapper registry)
 
-let validate (registry : t) ?id values =
-  let by_name name = Option.value ~default:"" (List.assoc_opt name values) in
+let find_row (registry : t) id =
   with_db @@ fun db ->
-  ensure_indexes db registry ;
+  repair_legacy_indexes db registry ;
+  find_row_on db registry id
+
+let validate_on db (registry : t) ?id values =
+  let by_name name = Option.value ~default:"" (List.assoc_opt name values) in
   registry.fields
   |> List.concat_map (fun field ->
        let value = by_name field.name |> String.trim in
@@ -310,55 +318,69 @@ let validate (registry : t) ?id values =
        in
        required_issue @ int_issue @ unique_issue )
 
-let save (registry : t) ?id values =
-  match validate registry ?id values with
-  | issues when issues <> [] -> Invalid issues
-  | _ ->
-      with_db @@ fun db ->
-      ensure_indexes db registry ;
-      let id = Option.value ~default:(make_id registry) id in
-      let field_names = List.map (fun f -> f.name) registry.fields in
-      let field_values =
-        registry.fields
-        |> List.map (fun field ->
-             let value = Option.value ~default:"" (List.assoc_opt field.name values) in
-             param_of_field field value )
+let validate (registry : t) ?id values =
+  with_db @@ fun db ->
+  repair_legacy_indexes db registry ;
+  validate_on db registry ?id values
+
+let write_mutex = Mutex.create ()
+
+let persist db (registry : t) id values =
+  let field_names = List.map (fun f -> f.name) registry.fields in
+  let field_values =
+    registry.fields
+    |> List.map (fun field ->
+         let value = Option.value ~default:"" (List.assoc_opt field.name values) in
+         param_of_field field value )
+  in
+  match find_row_on db registry id with
+  | Some _ ->
+      let assignments =
+        field_names
+        |> List.map (fun name -> Db.quote_id name ^ " = ?")
+        |> String.concat ", "
       in
-      ( match find_row registry id with
-      | Some _ ->
-          let assignments =
-            field_names
-            |> List.map (fun name -> Db.quote_id name ^ " = ?")
-            |> String.concat ", "
-          in
-          let sql =
-            Printf.sprintf
-              "UPDATE %s SET %s WHERE id = ?"
-              (Db.quote_id registry.table)
-              assignments
-          in
-          ignore (Db.exec db sql (field_values @ [Db.Text id]))
-      | None ->
-          let all_names =
-            "id" :: field_names @ if registry.soft_delete then ["is_archived"] else []
-          in
-          let placeholders =
-            List.map (fun _ -> "?") all_names |> String.concat ", "
-          in
-          let params =
-            [Db.Text id]
-            @ field_values
-            @ if registry.soft_delete then [Db.Int 0] else []
-          in
-          let sql =
-            Printf.sprintf
-              "INSERT INTO %s (%s) VALUES (%s)"
-              (Db.quote_id registry.table)
-              (all_names |> List.map Db.quote_id |> String.concat ", ")
-              placeholders
-          in
-          ignore (Db.exec db sql params) ) ;
-      Saved id
+      let sql =
+        Printf.sprintf
+          "UPDATE %s SET %s WHERE id = ?"
+          (Db.quote_id registry.table)
+          assignments
+      in
+      ignore (Db.exec db sql (field_values @ [Db.Text id]))
+  | None ->
+      let all_names =
+        "id" :: field_names @ if registry.soft_delete then ["is_archived"] else []
+      in
+      let placeholders =
+        List.map (fun _ -> "?") all_names |> String.concat ", "
+      in
+      let params =
+        [Db.Text id]
+        @ field_values
+        @ if registry.soft_delete then [Db.Int 0] else []
+      in
+      let sql =
+        Printf.sprintf
+          "INSERT INTO %s (%s) VALUES (%s)"
+          (Db.quote_id registry.table)
+          (all_names |> List.map Db.quote_id |> String.concat ", ")
+          placeholders
+      in
+      ignore (Db.exec db sql params)
+
+let save (registry : t) ?id values =
+  Mutex.lock write_mutex ;
+  Fun.protect
+    ~finally:(fun () -> Mutex.unlock write_mutex)
+    (fun () ->
+      with_db @@ fun db ->
+      repair_legacy_indexes db registry ;
+      match validate_on db registry ?id values with
+      | issues when issues <> [] -> Invalid issues
+      | _ ->
+          let id = Option.value ~default:(make_id registry) id in
+          persist db registry id values ;
+          Saved id )
 
 let archive (registry : t) id =
   if registry.soft_delete

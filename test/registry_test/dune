@@ -1,0 +1,3 @@
+(test
+ (name registry_test)
+ (libraries well well.test sqlite3))
