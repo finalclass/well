@@ -42,6 +42,7 @@ let () =
         .r_status
     = 200 ) ;
   Well.api_token_auth
+    ~applies_to:(fun req -> req.path <> "/legacy")
     ~verify:(fun token ->
       incr calls ;
       if token = "verifier-failure" then failwith "secret-verifier-message" ;
@@ -52,6 +53,28 @@ let () =
           ; session_data= [("user_id", "spoof"); ("role", "employee")] }
       else None )
     () ;
+  let legacy_request =
+    { (request
+         (authorization "legacy" @ [("x-requested-with", "XMLHttpRequest")]) )
+      with
+      path= "/legacy" }
+  in
+  let before_legacy = !calls in
+  let legacy_response =
+    Well.session_middleware
+      (Well.csrf (fun req ->
+           check
+             "excluded route legacy identity"
+             (user req = Some "legacy-owner") ;
+           check
+             "excluded route has no token marker"
+             (not (Well.api_token_authenticated req)) ;
+           Well.text "legacy" ) )
+      legacy_request
+    |> Well.resolve
+  in
+  check "excluded route remains available" (legacy_response.r_status = 200) ;
+  check "excluded route does not invoke verifier" (!calls = before_legacy) ;
   let observed = ref "" in
   let handler (req : Well.request) =
     observed := req.Well.session_id ;

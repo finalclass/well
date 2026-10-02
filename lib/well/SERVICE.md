@@ -24,6 +24,7 @@ type api_token_identity = {
   session_data : (string * string) list;
 }
 val api_token_auth :
+  ?applies_to:(request -> bool) ->
   verify:(string -> api_token_identity option) -> unit -> unit
 val api_token_authenticated : request -> bool
 ```
@@ -55,6 +56,10 @@ Uwierzytelnij żądanie API
 Jawny Bearer ma pierwszeństwo przed cookie; odrzucenie nigdy nie uruchamia
 uwierzytelniania cookie. Pozostałe schematy Authorization zachowują działanie.
 Bez konfiguracji weryfikatora legacy bearer session ID zachowuje działanie.
+Opcjonalny predykat `applies_to` jawnie ogranicza integrację do wybranych
+żądań aplikacji; domyślnie obejmuje wszystkie. Żądania poza tym zakresem
+zachowują wcześniejszą obsługę sesji i CSRF. Pozwala to aplikacji zachować
+oddzielny istniejący protokół Bearer session ID w wyznaczonym API.
 Wyjątki weryfikatora dają ogólny komunikat 503, bez treści wyjątku.
 
 `Well.rpc_ctx` i `Well.Session.get/get_all` widzą tę samą tożsamość.

@@ -4,9 +4,12 @@ type identity =
   { user_id: string
   ; session_data: (string * string) list }
 
-let verifier : (string -> identity option) option Atomic.t = Atomic.make None
+let verifier : ((string -> identity option) * (request -> bool)) option Atomic.t
+    =
+  Atomic.make None
 
-let configure ~verify () = Atomic.set verifier (Some verify)
+let configure ?(applies_to = fun _ -> true) ~verify () =
+  Atomic.set verifier (Some (verify, applies_to))
 
 let binding : (string * (string * string) list * bool Atomic.t) Eio.Fiber.key =
   Eio.Fiber.create_key ()
