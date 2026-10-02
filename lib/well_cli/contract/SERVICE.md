@@ -245,7 +245,16 @@ Mapowanie na HTTP jest wiążące:
 - dotychczasowa odpowiedź `{"error":"..."}` na 2xx pozostaje interpretowana
   jako błąd przez Proxy (kompatybilność).
 
-CSRF, cookies, źródła tokenu i nagłówki XHR zachowują kontrakt Well.
+Domyślny Proxy zachowuje kontrakt przeglądarkowy CSRF, cookies i XHR.
+TypeScript dodatkowo eksportuje `createProxy(options)` oraz współdzielony
+`well_transport.ts`. Opcje to `baseUrl`, `bearerToken` (sekret lub dostawca
+synchroniczny/asynchroniczny), `fetch` oraz dodatni `timeoutMs`.
+Instancje mają niezależną konfigurację. Bearer używa jawnego Authorization,
+`credentials: omit`, nie wysyła CSRF/XHR i odrzuca przekierowania.
+Błędy HTTP zachowują `status` w nieudanym ProxyResult; diagnostyka transportu
+nie zawiera sekretu ani treści wyjątku. Callback otrzymuje wynik raz.
+Domyślne `Proxy` pozostaje zgodne z istniejącymi wywołaniami.
+Serwer może włączyć [uwierzytelnianie API tokenów](../../well/SERVICE.md).
 
 ### Rozszerzenie Actor
 

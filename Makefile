@@ -9,6 +9,11 @@ INSTALL_DIR := $(HOME)/.local/bin
 	contract-browser contract-clients contract-socket contract-actor \
 	contract-scaffold
 
+.PHONY: api-token-test
+api-token-test: build
+	$(DUNE) exec test/api_token/api_token_test.exe
+	deno run -A test/api_token/run.ts
+
 build:
 	$(DUNE) build
 

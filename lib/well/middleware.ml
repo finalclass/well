@@ -231,6 +231,7 @@ open struct
 end
 
 let csrf : middleware = fun next req ->
+  if Api_token.authenticated req then next req else begin
   if req.session_id = "" && not (Atomic.get _csrf_warned_no_session) then begin
     Atomic.set _csrf_warned_no_session true;
     Log.log ~level:"warn" "CSRF middleware: request has no session_id. \
@@ -277,6 +278,7 @@ let csrf : middleware = fun next req ->
       in
       if ct_equal submitted token then next req
       else `Text "Forbidden — invalid CSRF token" |> status 403
+  end
 
 (** Prune CSRF tokens for sessions no longer in the store. *)
 let cleanup_csrf_tokens () =

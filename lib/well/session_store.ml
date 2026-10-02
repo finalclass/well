@@ -170,3 +170,31 @@ let cleanup ?(max_age_days = 30) () =
 
 let close () =
   _reset_tables ()
+
+let get_persisted = get
+let get_all_persisted = get_all
+let set_persisted = set
+let delete_persisted = delete
+let clear_persisted = clear
+
+let get ~session_id ~key =
+  match Api_token.session_data session_id with
+  | Some data -> List.assoc_opt key data
+  | None -> get_persisted ~session_id ~key
+
+let get_all ~session_id =
+  match Api_token.session_data session_id with
+  | Some data -> data
+  | None -> get_all_persisted ~session_id
+
+let set ~session_id ~key ~value =
+  Api_token.protect_mutation session_id;
+  set_persisted ~session_id ~key ~value
+
+let delete ~session_id ~key =
+  Api_token.protect_mutation session_id;
+  delete_persisted ~session_id ~key
+
+let clear ~session_id =
+  Api_token.protect_mutation session_id;
+  clear_persisted ~session_id

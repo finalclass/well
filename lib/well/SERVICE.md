@@ -3,7 +3,8 @@
 ## Role
 
 Ochrona żądań HTTP zmieniających stan (CSRF) oraz opcjonalne, fail-closed
-zezwolenie przeglądarki na cross-origin (CORS). Aplikacja well jest
+zezwolenie przeglądarki na cross-origin (CORS). Integracja jawnych tokenów API
+ze zweryfikowaną tożsamością aplikacji i kontekstem RPC. Aplikacja well jest
 same-origin; CORS nie jest częścią scaffoldu.
 
 ## Abstraction boundary
@@ -15,6 +16,55 @@ i sposób składania nagłówków odpowiedzi. Aplikacja widzi `Well.csrf`,
 
 ## Contract
 
+### `Well.api_token_auth`
+
+```ocaml
+type api_token_identity = {
+  user_id : string;
+  session_data : (string * string) list;
+}
+val api_token_auth :
+  verify:(string -> api_token_identity option) -> unit -> unit
+val api_token_authenticated : request -> bool
+```
+
+Aplikacja konfiguruje weryfikator przed uruchomieniem serwera. Well przekazuje
+mu sekret z jawnego `Authorization: Bearer`; aplikacja przy każdym wywołaniu
+sprawdza ważność, odwołanie i status właściciela oraz zwraca bieżącą tożsamość.
+Cykl życia i uprawnienia tokenu należą do aplikacji. Well nie zapisuje sekretu.
+
+```use-case
+Uwierzytelnij żądanie API
+
+<weryfikator skonfigurowany i jawny nagłówek Bearer>
+  <nagłówek niepoprawny albo wielokrotny>
+    (END 401 bez wykonania handlera)
+  [Zweryfikuj token przez aplikację]
+  <weryfikacja niedostępna>
+    (END 503 bez wykonania handlera)
+  <token odrzucony albo pusty user_id>
+    (END 401 bez wykonania handlera)
+  [Udostępnij tożsamość tylko w bieżącym fiberze żądania]
+  [Wywołaj handler bez uwierzytelniania cookie]
+  (END odpowiedź bez tworzenia sesji przeglądarkowej)
+<_>
+  [Zastosuj dotychczasową obsługę sesji]
+  (END odpowiedź)
+```
+
+Jawny Bearer ma pierwszeństwo przed cookie; odrzucenie nigdy nie uruchamia
+uwierzytelniania cookie. Pozostałe schematy Authorization zachowują działanie.
+Bez konfiguracji weryfikatora legacy bearer session ID zachowuje działanie.
+Wyjątki weryfikatora dają ogólny komunikat 503, bez treści wyjątku.
+
+`Well.rpc_ctx` i `Well.Session.get/get_all` widzą tę samą tożsamość.
+`user_id` w danych dodatkowych nie zastępuje zweryfikowanego właściciela.
+Identyfikator kontekstu jest losowy, nie jest sekretem API ani trwałą sesją.
+Tożsamość jest izolowana między współbieżnymi fiberami i domenami oraz znika
+po zakończeniu lub wyjątku handlera. Zapis, usunięcie i wyczyszczenie takiej
+tożsamości przez Session jest odrzucane; odwołanie tokenu należy do aplikacji.
+Token API nie tworzy wpisu w magazynie sesji ani nagłówka Set-Cookie.
+
 ### `Well.csrf : middleware`
 
 W scaffoldzie jest włączony. Nie przyjmuje allowlisty originów.
@@ -22,6 +72,8 @@ W scaffoldzie jest włączony. Nie przyjmuje allowlisty originów.
 ```use-case
 CSRF — żądanie
 
+<Well.api_token_authenticated jest true>
+  (END przepuść)
 <metoda GET, HEAD lub OPTIONS>
   (END przepuść)
 <_>
@@ -127,6 +179,22 @@ Lista CORS nie osłabia CSRF: POST z dozwolonej obcej origin i tak dostaje
 ## Verification strategy
 
 Krytyczne (testy HTTP / unit middleware):
+
+API token (`make api-token-test`):
+
+- Poprawny Bearer bez cookie i bez CSRF: handler widzi tego samego właściciela
+  przez RPC i Session; brak Set-Cookie i trwałego wpisu sesji.
+- Poprawny Bearer razem z cookie: właścicielem pozostaje właściciel tokenu.
+- Niepoprawny, pusty lub wielokrotny Bearer razem z prawidłowym cookie:
+  401, WWW-Authenticate Bearer i handler nieuruchomiony.
+- Odwołanie/wygaśnięcie/nieaktywny właściciel symulowane przez weryfikator:
+  kolejne żądanie dostaje 401; każdorazowa weryfikacja.
+- Wyjątek weryfikatora: 503 bez treści wyjątku; brak fallbacku.
+- Równoległe żądania różnych właścicieli z yieldem oraz wyjątek handlera:
+  tożsamości nie przenikają do siebie ani do następnego żądania.
+- Próby zmiany danych tożsamości: odrzucone, właściciel niezmieniony.
+- Sam cookie bez CSRF nadal 403; Basic Authorization i legacy tryb bez
+  skonfigurowanego weryfikatora zachowują dotychczasowe działanie.
 
 CSRF:
 

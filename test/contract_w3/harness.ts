@@ -104,14 +104,14 @@ export async function generate(fixture: string, output: string) {
   );
 }
 
-export async function buildServer() {
+export async function buildServer(serverSource = `${here}/server_main.ml`) {
   await must("rm", ["-rf", `${serverRoot}/app`], repoRoot);
   await must("mkdir", ["-p", `${serverRoot}/app`], repoRoot);
   await must("rm", ["-rf", `${serverRoot}/generated_ocaml`], repoRoot);
   await must("rm", ["-rf", `${serverRoot}/generated_adapters`], repoRoot);
   await must("cp", ["-r", `${generated}/ocaml`, `${serverRoot}/generated_ocaml`], repoRoot);
   await must("cp", ["-r", `${generated}/adapters`, `${serverRoot}/generated_adapters`], repoRoot);
-  await Deno.copyFile(`${here}/server_main.ml`, `${serverRoot}/app/server.ml`);
+  await Deno.copyFile(serverSource, `${serverRoot}/app/server.ml`);
   await Deno.copyFile(`${here}/server_dune`, `${serverRoot}/app/dune`);
   await Deno.writeTextFile(`${serverRoot}/dune-project`, [
     "(lang dune 3.17)",

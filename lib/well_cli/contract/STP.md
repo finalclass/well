@@ -122,6 +122,16 @@ deterministyczny. Build aplikacji nie zależy od plików dewelopera w
 **M13 (W2–W6).** Nazwy po normalizacji (`type'`/`type_`, camelCase) i nazwy
 adapterów Well nie kolidują. Generator zgłasza błąd przed publikacją.
 
+## API-token transport (`make api-token-test`)
+
+Wygenerowany TypeScript Proxy uruchomiony przez Deno woła serwer Well.
+Poprawny token daje tożsamość przez RPC i Session bez cookie/CSRF; zły token
+daje status 401 bez handlera. Dwie instancje Proxy zachowują różne dane
+uwierzytelnienia. Test obejmuje błąd HTTP, 2xx z error, wadliwą odpowiedź,
+timeout, wyjątek fetch bez ujawnienia sekretu i zachowany tryb przeglądarkowy.
+Testy rdzenia według [strategii HTTP](../../well/SERVICE.md) sprawdzają
+przywrócenie kontekstu, współbieżność, niezmienność tożsamości i odwołanie.
+
 ## Odbiór przeglądarkowy
 
 `make contract-browser` używa prawdziwej przeglądarki (nie wyłącznie jsdom),

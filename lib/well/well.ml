@@ -196,7 +196,7 @@ open struct
       List.assoc_opt "x-session-id" headers
 end
 
-let session_middleware : middleware = fun next req ->
+let cookie_session_middleware : middleware = fun next req ->
   let existing =
     match parse_session_id req.headers with
     | Some _ as s -> s
@@ -222,6 +222,21 @@ let session_middleware : middleware = fun next req ->
          session_id max_age secure)
       resp
   else resp
+
+type api_token_identity = Api_token.identity = {
+  user_id : string;
+  session_data : (string * string) list;
+}
+
+let api_token_auth = Api_token.configure
+let api_token_authenticated = Api_token.authenticated
+
+let session_middleware : middleware = fun next req ->
+  match Atomic.get Api_token.verifier, Api_token.bearer req.headers with
+  | Some verify, Some (Ok token) ->
+      Api_token.run ~fresh_session:generate_session_id next req verify token
+  | Some _, Some (Error ()) -> Api_token.reject ()
+  | _ -> cookie_session_middleware next req
 
 (* ── Session API ─────────────────────────────────────────────────── *)
 

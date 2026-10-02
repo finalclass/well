@@ -1,0 +1,4 @@
+(test
+ (name api_token_test)
+ (modules api_token_test)
+ (libraries well eio eio_main))
