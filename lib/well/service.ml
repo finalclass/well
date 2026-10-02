@@ -537,22 +537,19 @@ let start_socket ~sw ~net path =
   Unix.chmod path 0o770;
   Log.log "socket on %s" path;
   Eio.Fiber.fork ~sw (fun () ->
-    Fun.protect ~finally:(fun () ->
-      try Unix.unlink path with Unix.Unix_error _ -> ())
-    (fun () ->
-      let rec accept_loop () =
-        Eio.Net.accept_fork socket ~sw
-          ~on_error:(fun exn ->
-            match exn with
-            | Eio.Cancel.Cancelled _ -> ()
-            | _ ->
-              Log.log ~level:"error" "socket error: %s"
-                (Printexc.to_string exn))
-          handle_socket_client;
-        accept_loop ()
-      in
-      try accept_loop ()
-      with Eio.Cancel.Cancelled _ -> ()))
+    let rec accept_loop () =
+      Eio.Net.accept_fork socket ~sw
+        ~on_error:(fun exn ->
+          match exn with
+          | Eio.Cancel.Cancelled _ -> ()
+          | _ ->
+            Log.log ~level:"error" "socket error: %s"
+              (Printexc.to_string exn))
+        handle_socket_client;
+      accept_loop ()
+    in
+    try accept_loop ()
+    with Eio.Cancel.Cancelled _ -> ())
 
 (* ── Cast (fire-and-forget) ──────────────────────────────────────── *)
 

@@ -205,6 +205,25 @@ let test_legacy_actor ~sw =
   check "supervised actor still running"
     (List.assoc_opt "EchoActorW4" (Well.Actor.health ()) = Some "running")
 
+let test_failure_cleanup ~net dir =
+  let path = Filename.concat dir "cleanup.sock" in
+  let original = Failure "io_uring is not available (ENOMEM)" in
+  let captured =
+    match
+      Eio.Switch.run @@ fun sw ->
+      Well.Service.start_socket ~sw ~net path;
+      Eio.Switch.fail sw original
+    with
+    | () -> None
+    | exception exn -> Some exn
+  in
+  check "failure cleanup preserves the original failure"
+    (match captured with
+     | Some (Failure message) -> message = "io_uring is not available (ENOMEM)"
+     | _ -> false);
+  check "failure cleanup removes the socket path"
+    (not (Sys.file_exists path))
+
 let () =
   test_introspection ();
   Eio_main.run @@ fun env ->
@@ -225,6 +244,7 @@ let () =
       test_socket_system ~sw ~net ~path;
       test_socket_legacy_failure ~sw ~net ~path;
       test_concurrency ~sw ~net ~path;
-      test_legacy_actor ~sw);
+      test_legacy_actor ~sw;
+      test_failure_cleanup ~net dir);
   Printf.printf "\nW4 socket test: %d passed, %d failed\n%!" !pass !fail;
   exit (if !fail > 0 then 1 else 0)
