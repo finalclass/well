@@ -1388,7 +1388,7 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
     in
     let domain_count =
       if workers > 0 then workers
-      else max 1 (Domain.recommended_domain_count ())
+      else max 2 (Domain.recommended_domain_count ())
     in
     Log.log "listening on %s://%s:%d (%d workers)" scheme host_str port
       domain_count;
@@ -1460,7 +1460,7 @@ let with_test_server ?(port = 0) ?(disable_cap = false) ?workers f =
   let domain_count =
     match workers with
     | Some n when n > 0 -> n
-    | _ -> max 1 (Domain.recommended_domain_count ())
+    | _ -> max 2 (Domain.recommended_domain_count ())
   in
   Eio_main.run @@ fun env ->
   Env.set env;

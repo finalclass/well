@@ -23,7 +23,9 @@
   sequence so rapid consecutive saves stay distinct.
 - **Request isolation:** `Well.run` (and `Well.with_test_server`) dispatch every
   accepted connection through the bounded `Eio.Executor_pool` across domains,
-  defaulting to `Domain.recommended_domain_count ()`. Previously the default
+  defaulting to at least two workers, or `Domain.recommended_domain_count ()`
+  when larger. This preserves independent progress when CPU affinity exposes
+  only one CPU. Explicit positive worker counts remain unchanged. Previously the default
   `workers = 0` handled each connection with `Eio.Net.accept_fork` on one
   scheduler, so a slow synchronous handler starved unrelated requests.
 - **CSRF shared state:** the CSRF token store serializes cross-domain writes,
