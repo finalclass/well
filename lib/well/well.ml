@@ -837,11 +837,23 @@ let handle_connection flow _addr =
                  end)
       in
       let pipeline =
-        if is_cap_path then
-          session_middleware (Middleware.csrf base_handler)
-        else
-          session_middleware
-            (apply_middlewares (List.rev !(Router.global_middlewares)) base_handler)
+        let handler =
+          if is_cap_path
+          then Middleware.csrf base_handler
+          else apply_middlewares (List.rev !Router.global_middlewares) base_handler
+        in
+        let handler req =
+          if
+            (req.meth = "GET" || req.meth = "HEAD")
+            && List.mem
+                 (Router.split_path req.path)
+                 [["health"]; ["ready"]; ["metrics"]]
+          then
+            try Auth.require_grant "cap" handler req with
+            | Auth.Auth_denied (code, message) -> `Text message |> status code
+          else handler req
+        in
+        session_middleware handler
       in
       let req_id =
         match List.assoc_opt "x-request-id" hdrs with

@@ -86,9 +86,31 @@ Otaczająca strona pozostaje MPA. Komponenty nie przejmują routingu.
 Wywołania objęte kontraktem korzystają z wygenerowanego Proxy.
 Odłączenie komponentu zatrzymuje jego subskrypcje i cykliczne odczyty.
 
+## Wiadomości CAP
+
+Kanały `cap:*` są zarezerwowane dla komunikacji CAP.
+Serwer wymaga bieżącego grantu `cap` przed dołączeniem do kanału,
+wykonaniem polecenia oraz wysłaniem danych CAP do klienta,
+włącznie ze stanem początkowym i odpowiedziami na polecenia.
+Klasyfikacja wynika z kanału po stronie serwera, nie z deklaracji
+pochodzenia wiadomości przez klienta. Ogólna subskrypcja `*`
+ani wildcard rejestracji aplikacji nie omijają ochrony kanałów CAP.
+Po odebraniu grantu istniejące połączenie nie wykonuje poleceń CAP
+i nie otrzymuje kolejnych danych CAP, także już oczekujących w kolejce.
+Odmowa nie zamyka wspólnego WebSocketu; kanały aplikacji zachowują
+swoje reguły autoryzacji. Dane CAP nie są wysyłane kanałami aplikacji.
+
 ## Założenia
 
 Wszystkie strony poza logowaniem oraz wszystkie endpointy danych
 i operacji sprawdzają bieżące uprawnienie `cap`.
+Ochrona obejmuje również zasoby panelu, w tym `/_cap/app.js`.
+Każda nowo zarejestrowana trasa CAP automatycznie wymaga tego grantu;
+pominięcie kontroli w handlerze nie pozwala ominąć autoryzacji.
+Jedynymi publicznymi trasami CAP są GET i POST `/_cap/login`.
+Odebranie grantu blokuje następne żądanie w istniejącej sesji.
+Odmowa nie wykonuje handlera: strony przekierowują do logowania,
+a endpointy danych, operacji i zasobów zwracają 401.
+
 Zachowana jest istniejąca grafika: CSS, kolory, typografia, ikony
 i układ panelu. Elementy odnoszące się wyłącznie do LiveView są usunięte.

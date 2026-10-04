@@ -745,14 +745,34 @@ let () =
        22. HEALTH / READY / METRICS ENDPOINTS
        ══════════════════════════════════════════════════════════════ *)
 
-    let resp = Well.fetch (url "/health") in
+    let diagnostic_user =
+      match
+        Well.Auth.create_seed_user
+          ~login:"production-cap"
+          ~password:"test-password"
+      with
+      | Ok user -> user
+      | Error _ -> Option.get (Well.Auth.find_user_by_email "production-cap")
+    in
+    Well.Auth.grant ~user_id:diagnostic_user.id "cap" ;
+    let diagnostic_session = Well.generate_session_id () in
+    Well.Session.set
+      ~session_id:diagnostic_session
+      ~key:"user_id"
+      ~value:(string_of_int diagnostic_user.id) ;
+    let diagnostic path =
+      Well.fetch
+        ~headers:[("Cookie", "well_session=" ^ diagnostic_session)]
+        (url path)
+    in
+    let resp = diagnostic "/health" in
     check "health: 200" (resp.status = 200);
 
-    let resp = Well.fetch (url "/ready") in
+    let resp = diagnostic "/ready" in
     check "ready: 200" (resp.status = 200);
     check "ready: has status" (contains_str ~needle:"ready" resp.body);
 
-    let resp = Well.fetch (url "/metrics") in
+    let resp = diagnostic "/metrics" in
     check "metrics: 200" (resp.status = 200);
     check "metrics: has requests_total" (contains_str ~needle:"well_http_requests_total" resp.body);
     check "metrics: has latency" (contains_str ~needle:"well_http_latency_avg_us" resp.body);

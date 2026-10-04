@@ -15,6 +15,17 @@ Testy integracyjne używają izolowanej aplikacji i testowej bazy.
 
 - Strony z tabeli w SERVICE.md zwracają HTML; wejście bez uprawnień
   oraz dostęp do endpointów komponentów nie omijają autoryzacji.
+- Każda trasa CAP poza logowaniem, również `/_cap/app.js`,
+  odrzuca anonimowego klienta i zalogowanego użytkownika bez `cap`.
+  POST używa poprawnego CSRF, żeby sprawdzić odmowę autoryzacji.
+- Odebranie `cap` blokuje kolejne żądanie bez wylogowania.
+- Nowa testowa trasa CAP bez kontroli w handlerze pozostaje chroniona;
+  odmowa nie wykonuje handlera. GET i POST logowania pozostają dostępne.
+- Diagnostyka HTTP realizuje kontrakt z `lib/well/SERVICE.md`:
+  anonimowy klient, użytkownik bez grantu oraz posiadacz `cap`;
+  GET i HEAD, panel włączony i wyłączony, odebranie grantu w sesji.
+  Odmowy nie ujawniają danych diagnostycznych, a uprawniony klient
+  zachowuje dotychczasowe odpowiedzi, także 503 przy braku gotowości.
 - Karta użytkownika działa bez wcześniejszego otwarcia listy;
   nieistniejący użytkownik daje 404.
 - Operacje użytkowników realizują SERVICE.md, odrzucają brak CSRF
@@ -22,6 +33,17 @@ Testy integracyjne używają izolowanej aplikacji i testowej bazy.
 - Filtry i stronicowanie odtwarzają wynik z URL.
 - SQL, edycja komórki, RPC i REPL pokazują wynik albo błąd;
   samo wejście GET nie wykonuje tych operacji.
+
+## Wiadomości CAP
+
+- Anonimowy klient i użytkownik bez `cap` nie dołączają do kanału
+  CAP, nie wykonują jego poleceń i nie otrzymują jego danych.
+- Subskrypcja `*` i wildcard kanału aplikacji nie ujawniają danych CAP.
+- Posiadacz grantu otrzymuje stan początkowy, odpowiedzi i zdarzenia CAP.
+- Odebranie grantu przy otwartym połączeniu blokuje następne polecenie
+  oraz dostarczenie danych CAP, również oczekujących w kolejce.
+- Na tym samym połączeniu kanał aplikacji nadal działa według swojej
+  autoryzacji, także gdy klient nie ma grantu CAP.
 
 ## Odbiór przeglądarkowy
 

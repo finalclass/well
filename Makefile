@@ -141,3 +141,11 @@ cap-test: build
 
 cap-browser-test: build
 	deno run -A test/cap_mpa/browser.ts
+
+.PHONY: cap-access-test cap-http-test
+cap-access-test:
+	$(DUNE) build test/cap_access/server.exe
+	deno run -A test/cap_access/run.ts
+
+cap-http-test:
+	$(DUNE) test --force test/hardening_test test/production_test test/bus_test

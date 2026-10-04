@@ -16,6 +16,15 @@ i sposób składania nagłówków odpowiedzi. Aplikacja widzi `Well.csrf`,
 
 ## Contract
 
+### Diagnostyka HTTP
+
+`GET /health`, `GET /ready` i `GET /metrics` wymagają bieżącego
+grantu `cap`. Ochrona jest wbudowana, niezależna od middleware
+aplikacji i obowiązuje również przy wyłączonym panelu CAP.
+Brak uwierzytelnienia daje 401, a brak grantu daje 403,
+bez wykonania handlera diagnostyki. HEAD podlega tej samej kontroli.
+Uprawniony użytkownik otrzymuje dotychczasowy wynik diagnostyki.
+
 ### `Well.api_token_auth`
 
 ```ocaml

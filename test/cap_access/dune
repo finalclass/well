@@ -1,0 +1,5 @@
+(executable
+ (name server)
+ (modules server)
+ (libraries well well.cap)
+ (link_flags -linkall))

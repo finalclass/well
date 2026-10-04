@@ -288,11 +288,31 @@ let () =
     check "HSTS present" (has_header "Strict-Transport-Security" resp);
 
     (* ── /health ──────────────────────────────────────────────────── *)
-    let resp = Well.fetch (url "/health") in
+    let diagnostic_user =
+      match
+        Well.Auth.create_seed_user
+          ~login:"hardening-cap"
+          ~password:"test-password"
+      with
+      | Ok user -> user
+      | Error _ -> Option.get (Well.Auth.find_user_by_email "hardening-cap")
+    in
+    Well.Auth.grant ~user_id:diagnostic_user.id "cap" ;
+    let diagnostic_session = Well.generate_session_id () in
+    Well.Session.set
+      ~session_id:diagnostic_session
+      ~key:"user_id"
+      ~value:(string_of_int diagnostic_user.id) ;
+    let diagnostic path =
+      Well.fetch
+        ~headers:[("Cookie", "well_session=" ^ diagnostic_session)]
+        (url path)
+    in
+    let resp = diagnostic "/health" in
     check "/health 200" (resp.status = 200);
 
     (* ── /ready ───────────────────────────────────────────────────── *)
-    let resp = Well.fetch (url "/ready") in
+    let resp = diagnostic "/ready" in
     check "/ready 200" (resp.status = 200);
     check "/ready body" (String.length resp.body > 0);
     let json = Yojson.Safe.from_string resp.body in
@@ -300,7 +320,7 @@ let () =
     check "/ready status=ready" (status_val = "ready");
 
     (* ── /metrics ─────────────────────────────────────────────────── *)
-    let resp = Well.fetch (url "/metrics") in
+    let resp = diagnostic "/metrics" in
     check "/metrics 200" (resp.status = 200);
     check "/metrics content-type" (
       match get_header "Content-Type" resp with

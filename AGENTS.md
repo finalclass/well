@@ -93,6 +93,12 @@ Migrację opisuje `lib/well_cli/contract/SERVICE.md`.
   magazynu Actor określają `lib/well/actor/API.md` i `DURABILITY.md`;
   powyższa reguła `init` pozostaje dla dotychczasowych aktorów.
 - **Bez `Co-Authored-By` w commitach.**
+- **Nowe strony i endpointy CAP:** przy każdej zmianie sprawdź zgodność
+  z [kontraktem dostępu CAP](lib/well_cap/SERVICE.md#założenia).
+  Weryfikacja musi obejmować brak grantu `cap`, a nie tylko brak logowania;
+  dotyczy również endpointów danych, operacji, zasobów panelu oraz
+  wiadomości CAP w obu kierunkach. Wspólne połączenie WebSocket nie
+  zastępuje autoryzacji poszczególnych wiadomości CAP.
 
 ## Konwencje frontendu well.web
 

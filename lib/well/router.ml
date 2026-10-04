@@ -101,7 +101,22 @@ let register ?middleware meth path handler =
 
 let register_cap meth path handler =
   let segments = parse_segments (split_path path) in
-  cap_routes := { meth; segments; handler } :: !cap_routes
+  let handler =
+    if path = "/_cap/login" && (meth = "GET" || meth = "POST")
+    then handler
+    else
+      fun req ->
+        try Auth.require_grant "cap" handler req with
+        | Auth.Auth_denied _ ->
+            if
+              meth <> "GET"
+              || String.starts_with ~prefix:"/_cap/api/" path
+              || path = "/_cap/app.js"
+            then
+              `Custom {status= Some 401; headers= []; body= `Text "Unauthorized"}
+            else `Redirect "/_cap/login"
+  in
+  cap_routes := {meth; segments; handler} :: !cap_routes
 
 (** Register a GET route handler. Path supports [:param] segments and [*wildcard]. *)
 let get ?middleware path handler =

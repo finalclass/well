@@ -1,3 +1,42 @@
+# axe sync — dostęp CAP — 2026-10-04
+
+Zatwierdzona delta tego wątku jest zaimplementowana i zweryfikowana:
+AGENTS.md, lib/well/SERVICE.md (Diagnostyka HTTP), lib/well_cap/SERVICE.md
+(Wiadomości CAP i dostęp), lib/well_cap/STP.md (dodane scenariusze dostępu).
+Rzeczywisty układ źródeł: .axe/source-manifest.json; bez tworzenia docs/.
+
+Diagnostyka HTTP wymaga cap przed middleware aplikacji. Rejestracja tras CAP
+wymusza grant z wyjątkiem GET/POST logowania. Wiadomości cap:* są chronione
+przy join, push, stanie początkowym, odpowiedziach i dostarczeniu z kolejki;
+odebranie grantu nie blokuje kanałów aplikacji. Wildcard nie omija ochrony.
+
+## Odbiór
+
+- make check: exit 0; .local/cap-access/check.log
+- make build: exit 0; .local/cap-access/build.log
+- make cap-access-test: exit 0; .local/cap-access/access-test.log
+- make cap-test: exit 0; .local/cap-access/cap-test.log
+- make cap-http-test: exit 0; .local/cap-access/http-test.log
+- git diff --check: exit 0; .local/cap-access/diff-check.log
+- cap-access: 226 asercji (panel włączony i wyłączony, HTTP GET/HEAD,
+  brak logowania/brak grantu/grant, odebranie grantu, brak wykonania
+  handlera, wildcard WS, wspólne połączenie, kolejka oraz błędy po revocation).
+- cap-test: 77; hardening: 101; production: 160; MessageBus: 14; brak porażek.
+- Formatowanie: ocamlformat (zmienione fragmenty istniejących plików,
+  cały channel.ml i nowy server.ml), deno fmt test/cap_access/run.ts: exit 0.
+
+Start: 2026-10-04T14:26:19Z; koniec: 2026-10-04T14:39:55.920Z; czas całkowity: 817 s.
+Dowody i SHA-256 specyfikacji: .local/cap-access/acceptance.json.
+
+## Freeze
+
+Freeze bez zmian: CAP nie ma wcześniejszego snapshotu, a Well SERVICE.md
+zawiera również inną deltę API-token względem freeze. Odbiór dotyczy wyłącznie
+zaakceptowanej ochrony CAP; nie tworzy baseline ani nie certyfikuje cudzej delty.
+Nie zmieniano zaakceptowanej specyfikacji podczas implementacji.
+
+---
+
 # Aktualizacja i instalacja skilli Well — 2026-10-04
 
 Na polecenie użytkownika zaktualizowano well i well-front oraz zainstalowano
