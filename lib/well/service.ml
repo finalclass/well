@@ -106,14 +106,17 @@ let elapsed_us t0 =
   max 0 (int_of_float ((Unix.gettimeofday () -. t0) *. 1_000_000.))
 
 let call_drut spec rpc ctx payload_text =
-  let t0 = Unix.gettimeofday () in
-  let result =
+  let invoke () =
     try spec.dhandler rpc ctx payload_text
     with exn -> Error (Drut_handler_error (Printexc.to_string exn))
   in
-  let ok = match result with Ok _ -> true | Error _ -> false in
-  Metrics.observe_service ~service:spec.dname ~rpc ~us:(elapsed_us t0) ~ok;
-  result
+  if Metrics.service_disabled spec.dname then invoke ()
+  else
+    let t0 = Unix.gettimeofday () in
+    let result = invoke () in
+    let ok = match result with Ok _ -> true | Error _ -> false in
+    Metrics.observe_service ~service:spec.dname ~rpc ~us:(elapsed_us t0) ~ok;
+    result
 
 let result_ok = function
   | `Assoc fields ->
@@ -133,11 +136,13 @@ let result_ok = function
 let dispatch_by_name name rpc ctx payload =
   match Hashtbl.find_opt handlers name with
   | Some entry ->
-      let t0 = Unix.gettimeofday () in
-      let result = entry.dispatch rpc ctx payload in
-      Metrics.observe_service
-        ~service:name ~rpc ~us:(elapsed_us t0) ~ok:(result_ok result);
-      result
+      if Metrics.service_disabled name then entry.dispatch rpc ctx payload
+      else
+        let t0 = Unix.gettimeofday () in
+        let result = entry.dispatch rpc ctx payload in
+        Metrics.observe_service
+          ~service:name ~rpc ~us:(elapsed_us t0) ~ok:(result_ok result);
+        result
   | None ->
     (match Hashtbl.find_opt drut_handlers name with
      | None -> `Assoc [("error", `String (name ^ " is not registered"))]

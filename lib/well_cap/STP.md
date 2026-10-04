@@ -34,6 +34,8 @@ Testy integracyjne używają izolowanej aplikacji i testowej bazy.
   szablonu; JSON nie tworzy przejścia obiegu; plik statyczny i strona
   CAP nie wchodzą do klasy aplikacji; wyciszenie metody zatrzymuje jej
   licznik do podanego terminu, a po terminie licznik znów rośnie;
-  restart procesu zachowuje liczby z okna.
+  restart procesu zachowuje liczby z okna; wyłączenie usługi bez terminu
+  zostawia jej licznik bez wzrostu po restarcie i po czasie dłuższym niż
+  doba, a ponowne włączenie pozwala licznikowi rosnąć.
 - Porównać wygląd przed i po migracji przy identycznym viewport.
 - Potwierdzić brak połączeń LiveView i błędów konsoli.

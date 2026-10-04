@@ -87,7 +87,39 @@ let () =
               let after = Well.Metrics.service_summary ~minutes:60 in
               expect
                 (match find_service "ping" after with Some r -> r.count | None -> 0)
-                |> to_equal_int 2)));
+                |> to_equal_int 2);
+
+          it "leaves a disabled service unmeasured until it is enabled" (fun () ->
+              Well.Metrics._reset ();
+              Well.Service.register_handler "MetricsOff"
+                { dispatch = (fun _ _ _ -> `Assoc [("ok", `Bool true)])
+                ; rpcs = []
+                ; kind = `Service };
+              let count () =
+                match
+                  find_service "ping" (Well.Metrics.service_summary ~minutes:60)
+                with
+                | Some row -> row.count
+                | None -> 0
+              in
+              ignore (Well.Service.dispatch_by_name "MetricsOff" "ping" `Null `Null);
+              expect (count ()) |> to_equal_int 1;
+              Well.Metrics.disable_service ~service:"MetricsOff";
+              ignore (Well.Service.dispatch_by_name "MetricsOff" "ping" `Null `Null);
+              expect (count ()) |> to_equal_int 1;
+              Well.Metrics._forget_cache ();
+              expect (Well.Metrics.service_disabled "MetricsOff") |> to_be_true;
+              ignore (Well.Service.dispatch_by_name "MetricsOff" "ping" `Null `Null);
+              expect (count ()) |> to_equal_int 1;
+              Well.Metrics.observe_http ~class_:"app" ~meth:"GET" ~route:"/still"
+                ~status:200 ~us:100;
+              let http = Well.Metrics.http_summary ~minutes:60 in
+              expect
+                (match find_http "GET" "/still" http with Some row -> row.count | None -> 0)
+                |> to_equal_int 1;
+              Well.Metrics.enable_service ~service:"MetricsOff";
+              ignore (Well.Service.dispatch_by_name "MetricsOff" "ping" `Null `Null);
+              expect (count ()) |> to_equal_int 2)));
 
   let result = run ~source_file:__FILE__ () in
   if result.failed > 0 then exit 1;

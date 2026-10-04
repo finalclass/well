@@ -55,6 +55,12 @@ let gather ~window ~class_ =
   (http, flow, Well.Metrics.service_summary ~minutes, Well.Metrics.active_mutes ())
 
 let mute_form req ~window ~class_ ~service ~rpc =
+  let permanent =
+    if rpc = "" then
+      {|<button class="btn btn-sm" name="action" value="disable" type="submit">Disable</button>
+        <button class="btn btn-sm" name="action" value="enable" type="submit">Enable</button>|}
+    else ""
+  in
   Printf.sprintf
     {|%s%s%s%s<select name="hours" class="input" style="width:auto">
         <option value="1">1 hour</option>
@@ -63,11 +69,13 @@ let mute_form req ~window ~class_ ~service ~rpc =
       </select>
       <button class="btn btn-sm" name="action" value="mute" type="submit">Mute</button>
       <button class="btn btn-sm" name="action" value="unmute" type="submit">Restore</button>
+      %s
     </form>|}
     (form_open req "/_cap/metrics/mute")
     (hidden "window" window)
     (hidden "class" class_)
     (hidden "service" service ^ hidden "rpc" rpc)
+    permanent
 
 let view req ~window ~class_ http flow services mutes =
   let window_tabs =
@@ -146,9 +154,11 @@ let view req ~window ~class_ http flow services mutes =
     let ok = match row with Some r -> string_of_int r.ok | None -> "0" in
     let err = match row with Some r -> string_of_int r.err | None -> "0" in
     let until =
-      match mute_until service rpc with
-      | Some ts -> esc (fmt_until ts)
-      | None -> "on"
+      if Well.Metrics.service_disabled service then "off"
+      else
+        match mute_until service rpc with
+        | Some ts -> esc (fmt_until ts)
+        | None -> "on"
     in
     Printf.sprintf
       {|<tr><td style="font-family:var(--mono)">%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>|}
@@ -212,7 +222,7 @@ let view req ~window ~class_ http flow services mutes =
          %s
          <div class="card">
            <div class="card-title">Service methods</div>
-           <p style="color:var(--text-secondary);margin-bottom:12px">Every registered service and actor method is recorded until it is muted. Mute applies to the whole service when no method is chosen, and ends after the selected time.</p>
+           <p style="color:var(--text-secondary);margin-bottom:12px">Every registered service and actor method is recorded until it is muted or the service is disabled. Mute ends after the selected time. Disable leaves the whole service unmeasured until Enable.</p>
            %s
          </div>|}
        (flash req) window_tabs class_tabs http_rows flow_card service_blocks)
@@ -229,6 +239,20 @@ let apply req ~window ~class_ =
   else if action = "unmute" then begin
     Well.Metrics.unmute ~service ~rpc;
     Well.put_flash req "cap" "Recording restored";
+    back
+  end
+  else if action = "disable" && rpc = "" then begin
+    Well.Metrics.disable_service ~service;
+    Well.put_flash req "cap" "Recording disabled";
+    back
+  end
+  else if action = "enable" && rpc = "" then begin
+    Well.Metrics.enable_service ~service;
+    Well.put_flash req "cap" "Recording enabled";
+    back
+  end
+  else if action = "disable" || action = "enable" then begin
+    Well.put_flash req "cap" "Disable applies to the whole service";
     back
   end
   else

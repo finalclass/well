@@ -179,6 +179,10 @@ let ensure db =
         rpc TEXT NOT NULL,
         until_unix REAL NOT NULL,
         PRIMARY KEY (service, rpc)
+      )|};
+  exec db
+    {|CREATE TABLE IF NOT EXISTS well_metric_service_off (
+        service TEXT PRIMARY KEY
       )|}
 
 let bind_int stmt i n =
@@ -513,9 +517,78 @@ let muted ~service ~rpc =
     Log.log ~level:"error" "metrics mute: %s" (Printexc.to_string exn);
     false
 
+let off_services = Atomic.make (Hashtbl.create 4 : (string, unit) Hashtbl.t)
+let off_loaded = ref false
+let off_mu = Mutex.create ()
+
+let snapshot_off names =
+  let table = Hashtbl.create (max 4 (List.length names * 2)) in
+  List.iter (fun name -> Hashtbl.replace table name ()) names;
+  table
+
+let read_off_names () =
+  Db.with_well_db (fun db ->
+      ensure db;
+      let acc = ref [] in
+      with_stmt db "SELECT service FROM well_metric_service_off" (fun stmt ->
+          let rec loop () =
+            match Sqlite3.step stmt with
+            | Sqlite3.Rc.ROW ->
+                acc := column_text stmt 0 :: !acc;
+                loop ()
+            | _ -> ()
+          in
+          loop ());
+      !acc)
+
+let load_off_unlocked () =
+  if not !off_loaded then begin
+    let names = try read_off_names () with _ -> [] in
+    Atomic.set off_services (snapshot_off names);
+    off_loaded := true
+  end
+
+let load_off () =
+  if !off_loaded then ()
+  else begin
+    Mutex.lock off_mu;
+    Fun.protect ~finally:(fun () -> Mutex.unlock off_mu) load_off_unlocked
+  end
+
+let service_disabled service =
+  try
+    load_off ();
+    Hashtbl.mem (Atomic.get off_services) service
+  with _ -> false
+
+let set_service_off ~service ~off =
+  Mutex.lock off_mu;
+  Fun.protect ~finally:(fun () -> Mutex.unlock off_mu) (fun () ->
+      load_off_unlocked ();
+      Db.with_well_db (fun db ->
+          ensure db;
+          if off then
+            with_stmt db
+              "INSERT OR IGNORE INTO well_metric_service_off (service) VALUES (?)"
+              (fun stmt ->
+                bind_text stmt 1 service;
+                run stmt)
+          else
+            with_stmt db "DELETE FROM well_metric_service_off WHERE service = ?"
+              (fun stmt ->
+                bind_text stmt 1 service;
+                run stmt));
+      let next = Hashtbl.copy (Atomic.get off_services) in
+      if off then Hashtbl.replace next service () else Hashtbl.remove next service;
+      Atomic.set off_services next;
+      off_loaded := true)
+
+let disable_service ~service = set_service_off ~service ~off:true
+let enable_service ~service = set_service_off ~service ~off:false
+
 let observe_service ~service ~rpc ~us ~ok =
   try
-    if muted ~service ~rpc then ()
+    if service_disabled service || muted ~service ~rpc then ()
     else
       let us = max 0 us in
       let minute = minute_of (Unix.gettimeofday ()) in
@@ -722,11 +795,18 @@ let unmute ~service ~rpc =
   mutes_loaded := true;
   Mutex.unlock mu
 
+let forget_off () =
+  Mutex.lock off_mu;
+  off_loaded := false;
+  Atomic.set off_services (Hashtbl.create 4);
+  Mutex.unlock off_mu
+
 let _forget_cache () =
   Mutex.lock mu;
   Hashtbl.clear mutes;
   mutes_loaded := false;
-  Mutex.unlock mu
+  Mutex.unlock mu;
+  forget_off ()
 
 let _reset () =
   Mutex.lock mu;
@@ -738,9 +818,11 @@ let _reset () =
   last_flush := 0.;
   flushing := false;
   Mutex.unlock mu;
+  forget_off ();
   Db.with_well_db (fun db ->
       ensure db;
       exec db "DELETE FROM well_http_minute";
       exec db "DELETE FROM well_http_flow_minute";
       exec db "DELETE FROM well_service_minute";
-      exec db "DELETE FROM well_metric_mute")
+      exec db "DELETE FROM well_metric_mute";
+      exec db "DELETE FROM well_metric_service_off")

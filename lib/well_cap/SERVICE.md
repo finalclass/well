@@ -69,6 +69,11 @@ wywołań, średni czas, przybliżony p95 oraz podział na sukces i błąd
 wykonania. Odmowa zapisana jako zwykły wynik kontraktu jest sukcesem
 wywołania. Operator wycisza całą usługę albo jedną metodę na 1, 6
 albo 24 godziny. Po tym terminie pomiar wraca. Wybór przeżywa restart.
+Operator wyłącza też całą zarejestrowaną usługę albo aktora bez terminu.
+Wyłączenie przeżywa restart i trwa, aż operator włączy pomiar. W tym
+czasie żadna metoda tej usługi nie jest mierzona: wywołanie nie
+aktualizuje liczników i nie wykonuje zapisu agregatu. Dotychczasowe
+liczby w oknie zostają. Czas żądania HTTP pozostaje osobnym pomiarem.
 Wywołanie, które omija rejestr usług, nie ma wiersza.
 Usunięcie ostatniego posiadacza grantu `cap` lub odebranie mu tego grantu
 jest odrzucane.
