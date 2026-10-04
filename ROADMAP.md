@@ -1,5 +1,21 @@
 # Roadmap: Framework fullstackowy z gateway_client_v2
 
+## Obowiązujący model frontendu
+
+Well renderuje strony MPA po stronie serwera. Interaktywne fragmenty
+korzystają wyłącznie z Well.Web (TEA).
+
+Framework nie udostępnia LiveView: silnika, magazynu stanów, publicznego
+API, routingu, klienta przeglądarkowego ani protokołu diffów HTML.
+Usunięte są również helpery HTML przeznaczone wyłącznie dla LiveView.
+Wspólne HTML/VDOM, WebSocket, Channel, MessageBus i Actor zachowują
+swoje niezależne zastosowania.
+
+Scaffold, przykłady i instrukcje generowane przez `well init` korzystają
+z MPA i Well.Web. Historyczne wpisy o LiveView nie definiują bieżącego API.
+Kontrakt panelu: [CAP](lib/well_cap/SERVICE.md).
+Odbiór migracji: [STP](lib/well_cap/STP.md).
+
 ## Status quo
 
 Mamy działający POC: LiveView engine (Elm architecture), JSX rendering, WebSocket diffing, HTTP framework (Blossom), keyed list reconciliation, 3 tryby persystencji, cross-device sync. Obecnie w Reason na EIO.

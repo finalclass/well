@@ -1,0 +1,5 @@
+(executable
+ (name server)
+ (modules server)
+ (libraries well well.cap sqlite3)
+ (link_flags -linkall))

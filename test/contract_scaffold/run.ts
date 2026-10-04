@@ -93,7 +93,7 @@ await must("rm", ["-rf", snapshotDir], repoRoot);
 await must("mkdir", ["-p", snapshotDir], repoRoot);
 await must("bash", ["-c",
   "tar --exclude=_build --exclude=.git --exclude=vendor --exclude=data " +
-  "--exclude=dune.lock --exclude=.axe --exclude=_release " +
+  "--exclude=dune.lock --exclude=.axe --exclude=_release --exclude=.local --exclude=.agents " +
   `-cf - -C '${repoRoot}' . | tar -xf - -C '${snapshotDir}'`], repoRoot);
 await Deno.writeTextFile(`${snapshotDir}/well.opam`, [
   'opam-version: "2.0"',

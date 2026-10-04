@@ -1,3 +1,43 @@
+# Aktualizacja i instalacja skilli Well — 2026-10-04
+
+Na polecenie użytkownika zaktualizowano well i well-front oraz zainstalowano
+je w 37 lokalnych projektach; 102 aliasy zweryfikowane.
+well init osadza kanoniczne pliki skill przez regułę builda CLI.
+Odbiór: make check (0), make build (0), rzeczywiste well init — zgodność
+bajtowa obu skilli i brak LiveView (0), make contract-scaffold (0, 10/10),
+git diff --check (0). Snapshot testowy pomija lokalny stan .local/.agents.
+Raport i kopie: .local/well-skill-rollout/acceptance.md. Freeze bez zmian;
+nie certyfikowano pełnej regresji ani cudzej delty.
+
+---
+
+# Weryfikacja zainstalowanego well init — 2026-10-04
+
+Źródłowy template był zgodny z migracją, ale ~/.local/bin/well nadal zawierał stary scaffold. Po make build (exit 0) zainstalowano bieżącą binarkę CLI (install -m 755; exit 0), zachowując kopię wcześniejszej. Rzeczywiste well init z PATH: 61 plików, zero odniesień LiveView; obecne komponent, rejestracja, build js_of_ocaml, strony SSR z Well.Web i skill well-front. Porównanie installed/build oraz git diff --check: exit 0. Dowody: .local/well-init-verification/{before,after}.json i implementation.md. Freeze bez zmian.
+
+---
+
+# Migracja LiveView → MPA + Well.Web — 2026-10-04
+
+Zakres zatwierdzony przez użytkownika: ROADMAP.md, lib/well_cap/SERVICE.md,
+lib/well_cap/STP.md. Implementacja wykonana na polecenie „wykonaj tę implementacje”.
+Kod i aktywne instrukcje README/AGENTS/skills odzwierciedlają MPA + Well.Web.
+Odbiór: make check (0), make build (0), make cap-test (0, 75/75),
+make cap-browser-test z CHROME_BIN i CAP_SCAFFOLD (0, 44/44),
+make contract-scaffold (0, 10/10), make contract-actor (0, 110/110 + 2/2),
+dune test --force test/contract_socket (0, 21/21 + 3/3), git diff --check (0).
+make test (2): znane bazowe OAuth i prymitywy JS w cmd_effects/props_parse;
+przejściowy timeout Actor D08 w zbiorczym przebiegu rozwiązany ponowieniem Actor.
+Formatowanie nowego OCaml: ocamlformat --inplace; TypeScript: deno fmt.
+Logi i pełny raport: .local/liveview-migration/acceptance.md.
+Czas od rozpoczęcia: 3117 s, koniec 2026-10-04T06:13:54.992Z.
+
+Implementacja i odbiór CAP/scaffoldu są zakończone. Cały sync nie otrzymuje
+statusu verified, ponieważ pełna regresja nie przechodzi. Freeze bez zmian;
+zachowano wcześniejsze nieśledzone wpisy i nie certyfikowano cudzej delty.
+
+---
+
 # Domknięcie publikacji Well → Cyrograf — 2026-09-30
 
 Cyrograf: opublikowana rewizja 0b886ea9e5965448e6c5d1855713220835b573a8.

@@ -468,7 +468,7 @@ body {
 
 .console-content:has(.log-viewer) .page-header { flex-shrink: 0; }
 
-.console-content:has(.log-viewer) live-view {
+.console-content:has(.log-viewer) cap-stream {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -799,7 +799,7 @@ body {
 
 .console-content:has(.repl-wrap) .page-header { flex-shrink: 0; }
 
-.console-content:has(.repl-wrap) live-view {
+.console-content:has(.repl-wrap) cap-repl {
   flex: 1;
   display: flex;
   flex-direction: column;

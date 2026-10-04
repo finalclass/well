@@ -13,11 +13,11 @@ Pełna wizja i stan w `ROADMAP.md`.
 
 Dwie warstwy frontendu:
 
-- **Backend (server-side)** — routing, LiveView (string-diff over WS), SQL,
+- **Backend (server-side)** — routing, strony MPA renderowane na serwerze, SQL,
   usługi. Profil: strony renderowane na serwerze. Skill: `/well`.
 - **well.web (client-side, TEA)** — Web Components kompilowane do JS przez
   js_of_ocaml, The Elm Architecture (init/update/view), stan na kliencie.
-  Docelowo zastępuje LiveView dla interaktywnego UI. Statyczna architektura w
+  Obsługuje interaktywne fragmenty osadzone w stronach MPA. Statyczna architektura w
   `lib/well_web/ARCH.md`, decyzje API w `DESIGN-COMPONENT.md`. Skill: `/well-front`.
 
 ## Build
@@ -139,7 +139,7 @@ lokalne zmiany frameworka na scaffoldzie:
 
 - `/axe` — spec-anchored development workflow (obowiązkowy dla zmian w
   `lib/`/`test/`). `.agents/skills/axe` (symlink).
-- `/well` — referencja backendu frameworka (routing, LiveView, SQL, kontrakty).
+- `/well` — referencja backendu frameworka (routing, MPA, SQL, kontrakty).
   `skills/well/SKILL.md`.
 - `/well-front` — well.web / TEA / Web Components (interaktywny UI klienta).
   `skills/well-front/SKILL.md`.

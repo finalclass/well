@@ -108,7 +108,7 @@ let cmd : Command.t = {
   usage = "docs [--output <dir>] [--open]";
   description =
     "Generate static HTML documentation from source files.\n\
-     Parses (** ... *) doc comments, routes, LiveViews, and models.\n\
+     Parses (** ... *) doc comments, routes and models.\n\
      \n\
      Options:\n\
      \  --output, -o DIR    Output directory (default: _docs/)\n\

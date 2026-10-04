@@ -20,9 +20,7 @@ Open http://localhost:4000. Done.
 |------|----------------|
 | `home_page.mlx` | Routes, HTML rendering, sessions |
 | `notes.ml` + `notes_page.mlx` | Type-safe SQL, CRUD, form handling |
-| `counter_live.mlx` | LiveView (server-side reactive UI) |
-| `activity_log_live.mlx` | Keyed lists, cross-LiveView communication |
-| `dashboard_page.mlx` | Multiple LiveViews on one page |
+| `counter_page.mlx` + `web/counter.mlx` | Server-rendered page with a Well.Web TEA component |
 | `login_page.mlx` | Auth, sessions, middleware |
 | `upload_page.mlx` | File upload, streaming download |
 | `request_id.ml` | Custom middleware, request context |
@@ -43,7 +41,7 @@ The framework ships with a `/well` skill for coding agents. Every scaffolded pro
 # Then ask Claude to build whatever you need
 ```
 
-The skill contains complete reference for routes, LiveView, type-safe SQL, contracts, middleware, sessions, testing — everything. Claude generates correct well code because it has the full context.
+The skill contains complete reference for routes, server-rendered MPA, Well.Web, type-safe SQL, contracts, middleware, sessions, testing — everything. Claude generates correct well code because it has the full context.
 
 This is how you learn a framework in 2026. You don't read documentation that goes stale the moment it's written. You work with an AI that has the real patterns, verified against the real codebase. The scaffold is the working example. The skill is the knowledge. The compiler catches the rest.
 
@@ -51,7 +49,7 @@ This is how you learn a framework in 2026. You don't read documentation that goe
 
 - **OCaml 5 + EIO** — effect-based concurrency, fiber-per-connection
 - **MLX** — JSX syntax for OCaml (`.mlx` files)
-- **LiveView** — server-side reactive UI over WebSocket (like Phoenix LiveView)
+- **MPA + Well.Web** — server-rendered pages with typed TEA Web Components compiled through js_of_ocaml
 - **Type-safe SQL** — write real SQL, compiler validates it (`let%query`, `[@@deriving table]`)
 - **Service contracts** — `.cyrograf` -> OCaml data + adapters + TypeScript/Go/Dart code generation (Cyrograf owns the language; TOML stays a compatibility input)
 - **Registry Forms** — TOML-declared admin CRUD for low-volatility reference tables

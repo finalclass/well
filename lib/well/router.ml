@@ -183,17 +183,13 @@ let match_cap_route meth path =
 (* ── Route introspection ──────────────────────────────────────────── *)
 
 (** List all registered routes as [(method, path, kind)] triples. *)
-let list_routes ?(lv_endpoints = []) () =
+let list_routes () =
   let seg_to_string = function Static s -> s | Param p -> ":" ^ p | Wildcard w -> "*" ^ w in
   let build_path segs = "/" ^ String.concat "/" (List.map seg_to_string segs) in
   let app_routes =
     List.rev_map (fun r ->
       let path = build_path r.segments in
-      let kind =
-        if List.mem ("/live" ^ path) lv_endpoints then "liveview"
-        else "handler"
-      in
-      (r.meth, path, kind)
+      (r.meth, path, "handler")
     ) !routes
   in
   let cap = List.rev_map (fun r ->

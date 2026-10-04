@@ -7,7 +7,6 @@ type item_kind =
   | Type
   | Module
   | Route of route_method * string  (* method, path *)
-  | LiveView of string              (* path *)
   | Value
 
 type doc_item = {
@@ -109,15 +108,6 @@ let parse_route line =
       match try_method "put" with
       | Some _ as r -> r
       | None -> try_method "delete"
-
-(* Check if line registers a LiveView: Well.live "/path" ... *)
-let parse_liveview line =
-  let trimmed = String.trim line in
-  let prefix = "Well.live " in
-  let plen = String.length prefix in
-  if String.length trimmed >= plen && String.sub trimmed 0 plen = prefix then
-    extract_string_literal trimmed plen
-  else None
 
 (* Check for [@@deriving table ~name:"..."] *)
 let parse_deriving_table line =
@@ -322,21 +312,6 @@ let parse_file path =
          } :: !items;
          consumed := true
        | None -> ());
-
-      (* Check for LiveView *)
-      if not !consumed then
-        (match parse_liveview trimmed with
-         | Some path_str ->
-           found_first_decl := true;
-           items := {
-             name = path_str;
-             kind = LiveView path_str;
-             doc = doc_text;
-             signature = trimmed;
-             line = i + 1;
-           } :: !items;
-           consumed := true
-         | None -> ());
 
       (* Check for type *)
       if not !consumed then

@@ -134,3 +134,10 @@ contract-actor: build
 # and deterministic regeneration after deleting only the generated results.
 contract-scaffold: build
 	deno run -A test/contract_scaffold/run.ts
+
+.PHONY: cap-test cap-browser-test
+cap-test: build
+	deno run -A test/cap_mpa/run.ts
+
+cap-browser-test: build
+	deno run -A test/cap_mpa/browser.ts

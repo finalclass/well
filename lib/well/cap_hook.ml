@@ -8,6 +8,7 @@ type cap_response =
   | CRRedirect of string
   | CRJs of string
   | CRJson of string
+  | CRStatus of int * string
 
 (* ── Forward refs (wired by well.ml before init) ─────────────────── *)
 

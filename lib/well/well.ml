@@ -135,8 +135,7 @@ type push_result = Channel.push_result = {
 (** Register a channel with a topic pattern and join authorization callback. *)
 let channel = Channel.channel
 
-(* Wire up LiveView + Channel WS route registration *)
-let () = Liveview._register_ws_route := Router.ws
+
 let () = Channel._register_ws_route := Router.ws
 
 (* ── Session config ───────────────────────────────────────────────── *)
@@ -575,10 +574,6 @@ let ws_max_frame_size n =
   if n < 1 then invalid_arg "Well.ws_max_frame_size: must be positive";
   Websocket._max_frame_size := n
 
-(** Set the maximum LiveView file upload size in bytes. *)
-let max_upload_size n =
-  if n < 0 then invalid_arg "Well.max_upload_size: must be non-negative";
-  Liveview._max_upload_size := n
 
 (* ── Connection limits ────────────────────────────────────────────── *)
 
@@ -807,7 +802,7 @@ let handle_connection flow _addr =
       in
       let pipeline =
         if is_cap_path then
-          session_middleware base_handler
+          session_middleware (Middleware.csrf base_handler)
         else
           session_middleware
             (apply_middlewares (List.rev !(Router.global_middlewares)) base_handler)
@@ -1159,6 +1154,7 @@ open struct
           match handler req with
           | Cap_hook.CRHtml s -> (Html.raw s :> Types.response)
           | Cap_hook.CRRedirect url -> `Redirect url
+          | Cap_hook.CRStatus (code, body) -> `Text body |> status code
           | Cap_hook.CRJson s ->
               `Text s |> header "content-type" "application/json"
           | Cap_hook.CRJs s ->
@@ -1167,8 +1163,10 @@ open struct
         Router.register_cap "POST" path (fun req ->
           match handler req with
           | Cap_hook.CRHtml s -> (Html.raw s :> Types.response)
-          | Cap_hook.CRRedirect url -> `Redirect url
-          | Cap_hook.CRJson _ | Cap_hook.CRJs _ ->
+          | Cap_hook.CRRedirect url -> `Redirect url |> status 303
+          | Cap_hook.CRStatus (code, body) -> `Text body |> status code
+          | Cap_hook.CRJson s -> `Text s |> header "content-type" "application/json"
+          | Cap_hook.CRJs _ ->
               `Text "Method Not Allowed" |> status 405));
       !Cap_hook._cap_init ()
     end
@@ -1182,8 +1180,6 @@ open struct
              max 1 (int_of_float (ceil (!_session_lifetime /. 86400.0)))
            in
            Session_store.cleanup ~max_age_days () with _ -> ());
-        (try Liveview.cleanup_sessions () with _ -> ());
-        (try Liveview.cleanup_uploads () with _ -> ());
         (try Middleware.cleanup_csrf_tokens () with _ -> ());
         cleanup_loop ()
       in
@@ -1392,51 +1388,7 @@ let with_test_server ?(port = 0) ?(disable_cap = false) ?workers f =
     accept_loop ());
   f test_port
 
-(* ── LiveView registration ─────────────────────────────────────────── *)
-
-(** Register a LiveView page at the given path. Handles both HTTP GET and WebSocket connections. *)
-let live path (module View : Liveview.VIEW) =
-  let endpoint = "/live" ^ path in
-  Liveview.register endpoint (module View)
-
-(* ── Wire up LiveView live navigation route resolution ────────────── *)
-
-let () = Liveview._resolve_route := (fun req url ->
-  let path =
-    match String.index_opt url '?' with
-    | Some i -> String.sub url 0 i
-    | None -> url
-  in
-  let query_params =
-    parse_query url
-    |> List.map (fun (k, v) -> (Url.decode k, Url.decode v))
-  in
-  match Router.match_route "GET" path with
-  | Some (route, params) ->
-      let nav_req = { req with meth = "GET"; path; params;
-                       query = query_params } in
-      let pipeline =
-        apply_middlewares (List.rev !(Router.global_middlewares))
-          (fun r -> route.handler { r with params })
-      in
-      let resp = pipeline nav_req in
-      let resolved = resolve resp in
-      if resolved.r_status >= 200 && resolved.r_status < 400 then
-        Some resolved.r_body
-      else None
-  | None -> None
-)
-
-(* ── Route introspection ──────────────────────────────────────────── *)
-
-(** List all registered routes as [(method, path, kind)] triples. *)
-let list_routes () =
-  let lv_endpoints =
-    let acc = ref [] in
-    Hashtbl.iter (fun ep _ -> acc := ep :: !acc) Liveview.view_registry;
-    !acc
-  in
-  Router.list_routes ~lv_endpoints ()
+let list_routes () = Router.list_routes ()
 
 (* ── Re-export submodules ─────────────────────────────────────────── *)
 
@@ -1464,8 +1416,6 @@ module Form = Form
 (** RFC 6455 WebSocket implementation. *)
 module Websocket = Websocket
 
-(** LiveView server-side reactive UI engine. *)
-module LiveView = Liveview
 
 (** Background service registry with health checks and supervision. *)
 module Service = Service

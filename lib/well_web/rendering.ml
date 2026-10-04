@@ -112,13 +112,18 @@ let rec blit_dispatch dispatch (v : 'msg Html.vdom) : ctrl =
 
 let blit (`Html v : 'msg Html.node) : ctrl = blit_dispatch (fun _ -> ()) v
 
+let set_render_attribute node ~name ~value =
+  Bridge.set_attribute node ~name ~value;
+  if name = "value" && Bridge.get_input_value node <> value then
+    Bridge.set_value node value
+
 let sync_attrs node (old_attrs : (string * string) list)
     (new_attrs : (string * string) list) =
   let rec merge a b =
     match a, b with
     | [], rest ->
       List.iter
-        (fun (name, value) -> Bridge.set_attribute node ~name ~value)
+        (fun (name, value) -> set_render_attribute node ~name ~value)
         rest
     | rest, [] ->
       List.iter
@@ -126,13 +131,13 @@ let sync_attrs node (old_attrs : (string * string) list)
         rest
     | (na, va) :: ta, (nb, vb) :: tb ->
       if na = nb then begin
-        if va <> vb then Bridge.set_attribute node ~name:nb ~value:vb;
+        if va <> vb then set_render_attribute node ~name:nb ~value:vb;
         merge ta tb
       end else if na < nb then begin
         Bridge.remove_attribute node ~name:na;
         merge ta b
       end else begin
-        Bridge.set_attribute node ~name:nb ~value:vb;
+        set_render_attribute node ~name:nb ~value:vb;
         merge a tb
       end
   in

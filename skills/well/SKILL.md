@@ -1,13 +1,13 @@
 ---
 name: well
-description: Use when building features, pages, routes, LiveViews, models, or services in a well framework application. Covers MLX syntax, route registration, LiveView patterns, type-safe SQL, contracts, and project conventions.
+description: Use when building features, pages, routes, models, or services in a well framework application. Covers MLX syntax, route registration, MPA pages, Well.Web integration, type-safe SQL, contracts, and project conventions.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
 # Well Framework — Comprehensive Reference
 
-You are generating code for a **well** application — a batteries-included, type-safe, server-first OCaml web framework. Single binary deployment, no JavaScript for business logic. Inspired by Phoenix LiveView, Rails, and the OCaml ecosystem.
+You are generating code for a **well** application — a batteries-included, type-safe, server-first OCaml web framework. Single binary deployment, no JavaScript for business logic. Server-rendered MPA pages use Well.Web TEA components where local interaction is needed.
 
 **Tech stack**: OCaml 5.4 + EIO (fiber-per-connection), MLX for JSX, SQLite (bundled), dune 3.17, bun (frontend assets).
 
@@ -27,7 +27,7 @@ MLX is JSX for OCaml. Children inside JSX tags follow OCaml `simple_expr` gramma
 <div>"literal string"</div>
 <div>variable_name</div>
 <div>(txt "hello")</div>
-<div>(string_of_int count)</div>
+<div>(txt (string_of_int count))</div>
 <div>(if cond then <span>"yes"</span> else <span>"no"</span>)</div>
 <Tag prop="value" prop2=variable />
 
@@ -47,8 +47,8 @@ Rules:
 
 - **No `empty` node** — use `(txt "")` when you need to render nothing (e.g. in else branches)
 - **`textarea` children must be `node`** — use `<textarea>(txt value)</textarea>`, NOT `<textarea>value</textarea>` (bare variable is string, not node) and NOT `<textarea>"default"</textarea>` (literal string is also not node)
-- **All attribute values are strings** — use `attrs=[("value", string_of_int n)]` for numbers
-- **All attributes use `attrs=[...]` and `bool_attrs=[...]`** — no labeled attribute params
+- **Native attributes** — use `class'`, `id`, `href`, `name`, `required`, etc. Use `attrs=[...]` for dynamic lists. Values in string attributes must be strings.
+- **Inline expressions** — parenthesized OCaml expressions work, including `on_change=(fun value -> Set_name value)`. A bare `on_change=fun ...` needs parentheses. Typed `on_*` handlers belong to Well.Web components; server MPA pages use links and native forms.
 
 ---
 
@@ -59,27 +59,27 @@ Module `Html` — `(wrapped false)`, imported directly.
 ### Core Types & Functions
 
 ```ocaml
-type node = [ `Html of string ]  (* coerces to Well.response via :> *)
+type +'msg node = [ `Html of 'msg vdom ]
 
-val txt : string -> node        (* escaped text — safe *)
-val raw : string -> node        (* raw HTML — unescaped, use with care *)
+val txt : string -> 'msg node
+val raw : string -> 'msg node
 val escape_html : string -> string
-val cat : node list -> string   (* concatenate nodes to string *)
-val element_to_string : node -> string
+val cat : 'msg node list -> 'msg node
+val element_to_string : 'msg node -> string
 ```
 
 ### Tag Functions
 
 All tag functions accept two optional attribute parameters:
 
-- `?attrs:(string * string) list` — all string attributes (class, id, href, data-lv-click, etc.)
+- `?attrs:(string * string) list` — all string attributes (class, id, href, data-action, etc.)
 - `?bool_attrs:string list` — all boolean attributes (hidden, disabled, checked, etc.)
 
-Use standard HTML attribute names as strings: `"class"`, `"type"`, `"method"`, `"name"`, `"for"`, `"data-lv-click"`, `"data-lv-submit"`, etc.
+Use standard HTML attribute names as strings: `"class"`, `"type"`, `"method"`, `"name"`, `"for"`, `"data-action"`, `"data-form"`, etc.
 
 ```ocaml
 <button
-  attrs=[("class", "btn"); ("data-lv-click", "close");
+  attrs=[("class", "btn"); ("data-action", "close");
          ("aria-label", "Close"); ("data-tooltip", "Dismiss")]
   bool_attrs=["aria-expanded"]>"X"</button>
 ```
@@ -129,15 +129,15 @@ myapp/
 │   ├── layout.mlx                           # Layout component
 │   ├── request_id.ml                        # Request ID context middleware
 │   ├── pages/home_page.mlx                  # Pages.Home_page — routes: Well.get "/" ...
-│   ├── live/counter_live.mlx                # Live.Counter_live — LiveView module
 │   ├── services/note_access_impl.ml         # Services.Note_access_impl
 │   ├── contract/                            # Service contracts (.cyrograf)
 │   └── contract_generated/                  # Generated data + adapters
+├── web/                                     # Well.Web components and register.ml
 ├── static/                                  # CSS, JS, assets
 └── test/myapp_test.ml                       # Tests
 ```
 
-The app library uses `(include_subdirs qualified)` — subdirectories become submodules (e.g. `Pages.Home_page`, `Live.Counter_live`, `Services.Note_access_impl`).
+The app library uses `(include_subdirs qualified)` — subdirectories become submodules (e.g. `Pages.Home_page`, `Services.Note_access_impl`).
 
 ---
 
@@ -159,7 +159,7 @@ type response = [
   | `Null | `Bool of bool | `Int of int | `Float of float
   | `String of string | `Intlit of string
   | `List of Yojson.Safe.t list | `Assoc of (string * Yojson.Safe.t) list
-  | `Html of string | `Text of string | `Redirect of string
+  | `Html of unit Html.vdom | `Text of string | `Redirect of string
   | `Custom of custom | `Stream of stream_config
 ]
 
@@ -221,7 +221,7 @@ Well.stream_file : ?content_type:string -> ?headers:(string*string) list -> stri
 ```
 
 Response types coerce automatically:
-- `Html.node` — `<div>...</div>` (text/html)
+- `unit Html.node` — `<div>...</div>` (text/html); browser components use `msg Html.node`
 - `` `Text "..." `` or `Well.text "..."` (text/plain)
 - `` `Assoc [...] `` or `Well.json (...)` (application/json)
 - `Well.redirect "/path"` (302)
@@ -299,11 +299,10 @@ let createElement ?title:(page_title = "") ?(children = []) () =
       <meta attrs=[("charset", "utf-8")] />
       <title>(txt page_title)</title>
       <link attrs=[("rel", "stylesheet"); ("href", "/static/app.css")] />
-      (Well.LiveView.live_preconnect_script ())
     </head>
     <body>
       <main>(children |> cat)</main>
-      <script attrs=[("type", "module"); ("src", "/static/well.js")] />
+      <script attrs=[("defer", ""); ("src", "/static/app.js")] />
     </body>
   </html>
 ```
@@ -312,307 +311,37 @@ Use in pages: `<Layout title="My Page"><h1>(txt "Hello")</h1></Layout>`
 
 ---
 
-## LiveView — Server-Side Reactive UI
+## Server-rendered MPA and Well.Web
 
-Elm architecture: model -> update -> view. All state on server, updates via WebSocket.
+Pages and detail views use server-rendered documents. Keep interaction in a
+Well.Web island when it needs client state, such as streaming displays or REPL
+history. Check the application's pinned Well revision before using a new API;
+installing this skill does not migrate application code or its dependency pin.
 
-### VIEW Module Type
+Use ordinary GET routes for pages and links for navigation. Put selection,
+filters and pagination in query parameters. Give each detail view its own URL.
+Use POST forms with `Html.csrf_input (Well.csrf_token req)` for mutations.
+Enable `Well.use Well.csrf`. After successful changes return
+`Well.redirect target |> Well.status 303`. The server returns the complete HTML document.
 
-Every LiveView module must satisfy this interface:
+For local interactive behavior, use Web Components compiled with js_of_ocaml
+and Well.Web. Follow the companion [well-front skill](../well-front/SKILL.md)
+for the typed state/msg/emits interface, Props and Cmd. A component does not
+replace page routing. Embed its custom element in server HTML and load its
+compiled bundle. For contracted RPC calls use the generated browser Proxy.
 
-```ocaml
-module type VIEW = sig
-  type model
-  type msg
-
-  val persistence : persistence      (* Ephemeral | Session | User *)
-
-  val init : request -> Yojson.Safe.t -> model * string list
-    (* Returns (initial_model, subscriptions).
-       Subscriptions are MessageBus channels to auto-subscribe.
-       Dynamic — can depend on init props (e.g. keyed topics). *)
-  val update : request -> model -> msg -> model
-  val handle_params : request -> model -> model  (* URL query param changes *)
-  val view : model -> Html.node
-  val temporary_assigns : model -> model  (* reset data after each render *)
-
-  (* Required — generated by [@@deriving yojson] *)
-  val model_to_yojson : model -> Yojson.Safe.t
-  val model_of_yojson : Yojson.Safe.t -> (model, string) result
-  val msg_of_yojson : Yojson.Safe.t -> (msg, string) result
-end
-```
-
-**Persistence modes**:
-- `Ephemeral` — fresh state per connection
-- `Session` — in-memory per session (survives reconnect, 5 min timeout)
-- `User` — SQLite per user (survives restart, syncs across devices)
-
-### Complete LiveView Example
-
-```ocaml
-(* counter_live.mlx *)
-type model = { count: int } [@@deriving yojson]
-type msg = Increment | Decrement | Reset [@@deriving yojson]
-
-let persistence = Well.LiveView.Ephemeral
-
-let init _req _props = ({ count = 0 }, [])
-(* Returns (model, subscriptions). Empty list = no MessageBus subscriptions. *)
-
-let update _req model = function
-  | Increment -> { count = model.count + 1 }
-  | Decrement -> { count = model.count - 1 }
-  | Reset -> { count = 0 }
-
-let handle_params _req model = model
-let temporary_assigns model = model
-
-let view model =
-  let open Html in
-  <div>
-    <span>(txt (string_of_int model.count))</span>
-    <button attrs=[("data-lv-click", "Increment")]>(txt "+")</button>
-    <button attrs=[("data-lv-click", "Decrement")]>(txt "-")</button>
-  </div>
-```
-
-### Registration & Embedding
-
-**Two steps to create a LiveView page:**
-
-**Step 1.** Register the LiveView module in `lib/app.ml`:
-```ocaml
-Well.live "/counter" (module Live.Counter_live)
-```
-This registers `Live.Counter_live` in the WS view registry under endpoint `"/live/counter"`.
-It does NOT create a GET route — you must create the page yourself.
-
-**Step 2.** Create a GET page that embeds the LiveView using MLX JSX:
-```ocaml
-(* lib/pages/counter_page.mlx *)
+```mlx
 Well.get "/counter" @@ fun _req ->
-  let open Html in
-  <Layout title="Counter">
-    <div>
-      <h1>(txt "Counter")</h1>
-      <Well.LiveView name="counter" />
-    </div>
-  </Layout>
+let open Html in
+<Layout title="Counter">
+  <well-counter></well-counter>
+  <script attrs=[("type", "module"); ("src", "/static/app.js")] />
+</Layout>
 ```
 
-`<Well.LiveView name="counter" />` renders a `<live-view data-liveview="/live/counter">` custom element.
-The `name` becomes the endpoint path: `"/live/" ^ name`.
-
-With props (passed to `init` as `Yojson.Safe.t`):
-```ocaml
-<Well.LiveView name="counter" props=[("initial", "10"); ("step", "5")] />
-```
-
-Multiple LiveViews on one page:
-```ocaml
-<Well.LiveView name="counter" />
-<Well.LiveView name="activity_log" />
-```
-
-**How it works under the hood:**
-1. `Well.live "/counter" (module M)` registers `M` under endpoint `"/live/counter"`
-2. `<Well.LiveView name="counter" />` renders `<live-view data-liveview="/live/counter">`
-3. Client JS discovers `<live-view>` elements on page load
-4. Client connects via WebSocket to `/live` and sends `join` for each endpoint
-5. Server sends initial HTML (`full`), then incremental binary patches on each `msg`
-
-**IMPORTANT**: `Well.live` does NOT create a GET route. You MUST create a page
-with `Well.get` and embed `<Well.LiveView name="..." />` inside it.
-The `name` must match the path from `Well.live` (without leading `/`).
-```
-
-### LiveView Attributes
-
-| Attribute | Description | Wire format |
-|-----------|-------------|-------------|
-| `attrs=[("data-lv-click", "Msg")]` | Click sends msg (no args) | `["Msg"]` |
-| `attrs=[("data-lv-click", {|["Msg","val"]|})]` | Click with payload (JSON array in attr) | `["Msg", "val"]` |
-| `attrs=[("data-lv-submit", "Msg")]` | Form submit (fields as object) | `["Msg", {field: value, ...}]` |
-| `attrs=[("data-lv-change", "Msg")]` | Input change (single value) | `["Msg", input_value]` |
-| `attrs=[("data-lv-debounce", "300")]` | Debounce (ms) | — |
-| `attrs=[("data-lv-throttle", "300")]` | Throttle (ms) | — |
-| `attrs=[("data-lv-navigate", "/path")]` | Live navigation (pushState) | — |
-| `attrs=[("data-lv-patch", "/path?q=x")]` | Update query params only | — |
-| `attrs=[("data-lv-hook", "HookName")]` | Attach JS hook | — |
-
-### Variant encoding (ppx_deriving_yojson)
-
-- `Increment` → `["Increment"]` (JSON array, NOT string)
-- `SetValue of int` → `["SetValue", 42]`
-- `SubmitForm of { name: string; email: string }` → `["SubmitForm", {"name": "...", "email": "..."}]`
-- `` `Incremented (s, n) `` → `["Incremented", "s", 42]`
-
-### Click with payload
-
-`data_lv_click` tries `JSON.parse` on the attribute value. If it parses as an array, it's sent as-is.
-Otherwise the string is wrapped in `["string"]`.
-
-```ocaml
-(* No payload — simple variant *)
-<button attrs=[("data-lv-click", "Increment")]>(txt "+")</button>
-(* sends: ["Increment"] → decoded as: Increment *)
-
-(* With payload — encode JSON array in attribute *)
-<button attrs=[("data-lv-click", Printf.sprintf {|["SetPage", "%s"]|} (Html.escape_html page))]>
-  (txt page)
-</button>
-(* sends: ["SetPage", "cennik.html"] → decoded as: SetPage "cennik.html" *)
-
-(* Static payload — use raw JSON string *)
-<button attrs=[("data-lv-click", {|["SelectTab", "settings"]|})]>(txt "Settings")</button>
-```
-
-### Form submissions (`data_lv_submit`)
-
-The client collects all form inputs into a JSON object and sends `["MsgName", {"field1": "value1", ...}]`.
-Use **inline record variants** for form messages — ppx_deriving_yojson decodes them correctly:
-
-```ocaml
-(* CORRECT — inline record matches form JSON {"author":"...","body":"..."} *)
-type msg =
-  | Increment
-  | SubmitComment of { author: string; body: string }
-[@@deriving yojson]
-
-(* WRONG — tuple variant expects ["SubmitComment", "v1", "v2"] but form sends object *)
-type msg = SubmitComment of string * string [@@deriving yojson]
-```
-
-Input `name` attributes must match record field names:
-```ocaml
-<form attrs=[("data-lv-submit", "SubmitComment")]>
-  <input attrs=[("type", "text"); ("name", "author"); ("placeholder", "Name")] />
-  <textarea attrs=[("name", "body")]>(txt "")</textarea>
-  <button attrs=[("type", "submit")]>(txt "Send")</button>
-</form>
-```
-
-### View Rendering
-
-The `view` function returns HTML that is morphed into the DOM on each update.
-No annotation required — structural changes (if/else, conditional elements) are
-handled automatically by the client-side morphdom algorithm.
-
-```ocaml
-(* Conditional rendering — works fine *)
-let view model =
-  let open Html in
-  <div>
-    (if model.items = [] then
-      <p>(txt "Nothing here")</p>
-    else
-      <div attrs=[("class", "list")]>
-        (each ~id:"items" model.items
-          ~key:(fun item -> string_of_int item.id)
-          (fun item -> ...))
-      </div>)
-  </div>
-```
-
-Tips:
-1. Use `data-lv-key` or `id` on list items for stable element matching
-2. Use `data-lv-ignore` to skip morphing on specific elements
-3. Focused form inputs preserve their value during morphing
-
-### LiveView with Subscriptions (Cross-View Communication)
-
-```ocaml
-(* activity_log_live.mlx — subscribes to events from other LiveViews *)
-type model = { entries: string list } [@@deriving yojson]
-type msg = Events.counter_event [@@deriving yojson]  (* reuse event type *)
-
-(* Subscriptions returned from init — can be dynamic based on props *)
-let init _req _props =
-  ({ entries = [] }, [Well.topic_name Events.counter_event])
-
-let update _req model = function
-  | `Incremented (_, n) -> { entries = (Printf.sprintf "+%d" n) :: model.entries }
-  | `Reset -> { entries = "reset" :: model.entries }
-  | _ -> model
-```
-
-### Server Push to Hooks
-
-```ocaml
-(* Push event from server to a JS hook *)
-Well.LiveView.send_event "topic" "event_name" (`Assoc [("key", `String "val")])
-```
-
-### JS Hooks
-
-```javascript
-// In your JS — hooks run client-side
-Well.hooks.Chart = {
-  mounted() {
-    this.handleEvent("update", (data) => {
-      renderChart(this.el, data);
-    });
-  },
-  updated() { /* DOM was patched */ },
-  destroyed() { /* element removed */ }
-};
-```
-
-### pushLive — Send Messages from External JS
-
-```javascript
-// Send a message to the first LiveView on the page
-well.pushLive(["SetPage", "index.html"]);
-
-// Send to a specific LiveView topic
-well.pushLive(["UpdateFilter", "active"], "/live/dashboard");
-```
-
-### LiveView Uploads
-
-```ocaml
-(* MLX: file input with hook *)
-<input attrs=[("type", "file"); ("data-lv-hook", "FileUpload")] />
-
-(* Server side: consume uploaded file *)
-match Well.LiveView.consume_upload upload_id with
-| Some (filename, content_type, data) ->
-    let oc = open_out_bin ("data/" ^ filename) in output_string oc data; close_out oc
-| None -> ()
-```
-
-### LiveView Search/Filter Example
-
-```ocaml
-(* lib/live/search_live.mlx — the LiveView module *)
-(* Then register: Well.live "/search" (module Search_live) in app.ml *)
-(* And create page: Well.get "/search" with <Well.LiveView name="search" /> *)
-type item = { id: int; name: string } [@@deriving yojson]
-type model = { query: string; results: item list; empty_msg: string } [@@deriving yojson]
-type msg = Search of string [@@deriving yojson]
-
-let persistence = Well.LiveView.Ephemeral
-
-let make_model query =
-  let results = search query in
-  { query; results; empty_msg = if results = [] then "No results" else "" }
-
-let init _req _props = (make_model "", [])
-let update _req _model = function Search q -> make_model q
-let handle_params _req model = model
-let temporary_assigns model = model
-
-let view model =
-  let open Html in
-  <div>
-    <input attrs=[("type", "text"); ("placeholder", "Search..."); ("value", model.query); ("data-lv-change", "Search"); ("data-lv-debounce", "300")] />
-    <p>(txt model.empty_msg)</p>
-    <div>(each ~id:"results" model.results
-      ~key:(fun r -> string_of_int r.id)
-      (fun r -> <div><span>(txt r.name)</span></div>))</div>
-  </div>
-```
+The companion skill defines `web/counter.mlx`, `web/register.ml` and the
+js_of_ocaml build rules. Verify direct URLs, reload and Back/Forward for pages,
+and event handling plus cleanup for the islands.
 
 ---
 
@@ -885,16 +614,6 @@ Well.subscribe_keyed Events.order_cmd (fun kev -> process kev.event.value)
 Well.subscribe ~live_only:true Events.order_event (fun evt ->
   External_api.sync evt.value)
 (* All publish calls during replay are automatically ephemeral *)
-```
-
-### LiveView Subscriptions
-
-```ocaml
-(* In LiveView module — subscriptions returned from init *)
-let init _req _props =
-  (initial_model, [Well.topic_name Events.counter_event])
-type msg = Events.counter_event [@@deriving yojson]
-(* Events arrive as msg in update function *)
 ```
 
 ### Low-Level MessageBus (Untyped)
@@ -1367,7 +1086,7 @@ Register before `Well.run` (like routes). Each task runs in its own EIO fiber.
 
 ## WebSocket (Raw)
 
-For custom WebSocket handlers (not LiveView or Channel).
+For custom WebSocket handlers. Use Channels for authorized topic messaging.
 
 ```ocaml
 Well.ws "/ws/custom" (fun req ws ->
@@ -1714,11 +1433,6 @@ Just run `make build` (`well build`) to rebuild TS. Never raw `dune build`. Add 
  (action (run bun build ts/my-script.ts --outdir . --minify)))
 ```
 
-### LiveView (automatic)
-
-Discovers `<live-view>` elements, manages WebSocket connection on `/live`.
-Event delegation: `data-lv-click`, `data-lv-submit`, `data-lv-change`, etc.
-
 ### Channel API
 
 ```javascript
@@ -1727,27 +1441,6 @@ ch.on("message", (payload) => { /* handle */ });
 ch.push("send", { text: "hello" });
 ch.leave();
 ```
-
-### JS Hooks
-
-```javascript
-Well.hooks.MyHook = {
-  mounted() {
-    // this.el — DOM element
-    // this.pushEvent("event", payload) — send to server
-    // this.handleEvent("event", (data) => { ... }) — receive from server
-  },
-  updated() { /* after DOM patch */ },
-  destroyed() { /* cleanup */ }
-};
-```
-
-### File Upload Hook (built-in)
-
-```html
-<input type="file" data-lv-hook="FileUpload" />
-```
-Automatically uploads via base64 chunks over WebSocket.
 
 ---
 
@@ -1789,7 +1482,7 @@ let everything = Well.all_files req in  (* (string * uploaded_file) list *)
 
 ```ocaml
 Well.list_routes : unit -> (string * string * string) list
-(* Returns [(method, path, kind)] where kind = "handler" | "liveview" | "websocket" | "cap" *)
+(* Returns [(method, path, kind)] where kind = "handler" | "websocket" | "cap" *)
 ```
 
 ---
@@ -1808,7 +1501,7 @@ Features: system stats, request telemetry, log viewer with filtering, route list
 
 When working on this project, use these companion skills for specialized decisions:
 
-- **idesign-architecture**: Use for ALL architectural decisions — decomposing the system into services, deciding where code should live, reviewing layer violations, designing service contracts. Routes/LiveViews (client layer) must NEVER call access layer directly — always go through a manager.
+- **idesign-architecture**: Use for ALL architectural decisions — decomposing the system into services, deciding where code should live, reviewing layer violations, designing service contracts. Pages and components (client layer) must NEVER call access layer directly — always go through a manager.
 - **frontend-design**: Use when building or improving UI — pages, components, layouts, styling. Produces distinctive, production-grade interfaces instead of generic HTML.
 
 Services must hide internal functions using `open struct ... end`. Only the contract-defined interface should be public.
@@ -1821,8 +1514,8 @@ When adding a new feature, you typically need:
 
 1. **Static page**: Create `lib/pages/feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
 2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let pool = lazy (Well.Db.create_pool ())`
-3. **LiveView**: Create `lib/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields. Register with `Well.live "/feature" (module Live.Feature_live)` in `lib/app.ml`. Then create a GET page that embeds `<Well.LiveView name="feature" />`. Both steps are required — `Well.live` only registers the WS handler, not the page.
-4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or LiveViews
+3. **Interactive fragment**: Create a Well.Web component in `web/`, compile with js_of_ocaml, register its custom element and embed it in an SSR page. Follow `/well-front`.
+4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or services
 5. **Service**: add a `.cyrograf` contract under `lib/contract/`, run `well contract build` (or `dune build`), implement the `IMPL` module, register with `Well.Service.register_drut` + `expose` in `lib/app.ml`
 6. **Auth-protected**: Add `~middleware:[Well.require_auth ()]` or wrap handler with `Well.Auth.require_grant`
 7. **Tests**: Add to `test/` with `Well.Db.with_test_db` for DB tests or `Well.with_test_server` for integration tests

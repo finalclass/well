@@ -99,8 +99,8 @@ let () =
       it "renders href on anchor" (fun () ->
         expect (to_str (Html.a ~attrs:[("href", "/home")] ~children:[Html.txt "Home"] ())) |> to_contain {|href="/home"|}
       );
-      it "renders data-lv-click" (fun () ->
-        expect (to_str (Html.button ~attrs:[("data-lv-click", "increment")] ~children:[Html.txt "+"] ())) |> to_contain {|data-lv-click="increment"|}
+      it "renders data-action" (fun () ->
+        expect (to_str (Html.button ~attrs:[("data-action", "increment")] ~children:[Html.txt "+"] ())) |> to_contain {|data-action="increment"|}
       );
       it "renders form with method and action" (fun () ->
         expect (to_str (Html.form ~attrs:[("action", "/submit"); ("method", "POST")] ())) |> to_contain {|action="/submit"|}
@@ -123,7 +123,7 @@ let () =
       );
     );
 
-    describe "LiveView helpers" (fun () ->
+    describe "Form helpers" (fun () ->
       it "field_error renders error span" (fun () ->
         let errors = [("name", "required")] in
         expect (to_str (Html.field_error errors "name")) |> to_contain "required";

@@ -2,3 +2,16 @@
  (name well_cli)
  (public_name well.cli)
  (libraries well unix str cyrograf cyrograf.compiler))
+
+(rule
+ (targets template_skills.ml)
+ (deps ../../skills/well/SKILL.md ../../skills/well-front/SKILL.md)
+ (action
+  (with-stdout-to %{targets}
+   (progn
+    (echo "let well = {well_skill|")
+    (cat ../../skills/well/SKILL.md)
+    (echo "|well_skill}")
+    (echo "let well_front = {well_front|")
+    (cat ../../skills/well-front/SKILL.md)
+    (echo "|well_front}")))))

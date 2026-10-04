@@ -1,6 +1,6 @@
 ---
 name: well-front
-description: Build client-side interactive UI with well.web — The Elm Architecture (TEA) in OCaml compiled to Web Components via js_of_ocaml. Use whenever adding interactive client components, custom elements (<well-*>), or anything needing state/updates on the client (counters, reactive forms, search-as-you-type, live filters, toggles). NOT for server-side LiveView (that's the `well` skill).
+description: Build client-side interactive UI with well.web — The Elm Architecture (TEA) in OCaml compiled to Web Components via js_of_ocaml. Use whenever adding interactive client components, custom elements (<well-*>), or anything needing state/updates on the client (counters, reactive forms, search-as-you-type, live filters, toggles). For server-rendered MPA pages use the `well` skill.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 ---
@@ -9,15 +9,15 @@ allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 
 You are building **client-side interactive UI** for a well app using **well.web**: The Elm Architecture (TEA) in OCaml, compiled to **Web Components** (custom elements) via js_of_ocaml.
 
-State lives **on the client**. The runtime runs **in the browser** — no server round-trip per interaction. This is the modern replacement for the older LiveView system.
+State lives **on the client**. The runtime runs **in the browser** — no server round-trip per interaction. Server-rendered MPA pages embed components where local interaction is needed.
 
 ## When to use which skill
 
 - **well-front** (this) — client-side interactivity: counters, reactive forms, search-as-you-type, live toggles, anything where the DOM updates from local state. Uses well.web / `<well-*>` custom elements.
-- **`well`** — server-rendered pages, routes, LiveView (string-diff-over-WebSocket), models, services, SQL. The default for static and server-side content.
+- **`well`** — server-rendered pages, routes, models, services, SQL. The default for static and server-side content.
 - **frontend-design** — visual aesthetics (typography, color, layout, motion). Pair it with well-front when a component also needs to *look* distinctive.
 
-well.web is the intended long-term successor to LiveView. For new interactive UI, prefer well.web.
+Use well.web for interactive fragments; ordinary page navigation remains MPA.
 
 ## Architecture in one line
 
@@ -67,7 +67,7 @@ module type COMPONENT = sig
   val props  : msg Props.t        (* declared, typed inputs (attributes) *)
   val init   : dispatch:(msg -> unit) -> state * (msg, emits) Cmd.t
   val update : state -> msg -> state * (msg, emits) Cmd.t
-  val view   : state -> (msg -> unit) -> Vdom.t -> Vdom.t
+  val view   : state -> (msg -> unit) -> 'a Html.node -> msg Html.node
                                   (* 3rd arg = projected children from parent *)
 end
 ```
@@ -147,19 +147,21 @@ let on_wheel _ev = Some Scrolled
 `on_input` unless you need live validation). TEA state holds loading/error;
 credentials come from `On_form` on submit. Runtime always `preventDefault`s.
 
-### ⚠ MLX limitation (CRITICAL)
+### Inline OCaml expressions
 
-**Inline `fun` is NOT accepted as an attribute value.** Always name the handler first:
+Parenthesized expressions are supported, including inline functions for
+handlers that expect a function. Bare function literals need parentheses.
+The expected handler type still applies: on_click takes a message, whereas
+on_input/on_change take string -> msg and on_submit takes form_data -> msg.
 
 ```mlx
-(* WRONG — parse error *)
-<button on_click=(fun _ -> Increment)>(txt "+")</button>
-
-(* RIGHT — bare msg value or named handler *)
 <button on_click=Increment>(txt "+")</button>
+<input on_input=(fun value -> Set_name value) />
+<form on_submit=(fun fields -> Submit fields)>
+  <input name="email" type="email" />
+  <button type="submit">(txt "Save")</button>
+</form>
 ```
-
-For `on_keydown`/`on_input` this means you MUST define `let handle_key k = ...` before using `on_keydown=handle_key`.
 
 ### Programmatic API (in `.ml` files without MLX)
 
@@ -192,22 +194,22 @@ module Props : sig
 end
 ```
 
-The string is the HTML attribute name; `~on` is the intended msg when that
-attribute is applied. **Runtime status (today): `Props` is declared on the
-COMPONENT contract but not wired in Client lifecycle** — `on_connect` does
-**not** read host attributes and does **not** dispatch prop msgs. Defaults
-must come from `init` (hardcoded / own logic). No automatic
-`<well-counter step="2">` → `Set_step 2` on connect until Props wiring lands.
+The string is the HTML attribute name; `~on` produces the message carrying
+the parsed value. At connect, the runtime hydrates declared host attributes
+and properties through update before the first render. Scalar defaults apply
+when an input is absent. Attribute changes and property setters dispatch input
+messages through the TEA loop.
 
 ```ocaml
 let props : msg Well_web.Props.t = [
-  Well_web.Props.int "step" ~default:1 ~on:(fun v -> Set_step v);
+  Well_web.Props.int "step" ~default:1 ~on:(fun v -> Set_step v) ();
 ]
-(* Declared for the contract / future wiring — not applied at mount today. *)
 ```
 
-In HTML you may still write attributes for markup/CSS, but they do **not**
-drive component state until Props→dispatch is implemented.
+`<well-counter step="2">` initializes the component with `Set_step 2`.
+Use `Props.list` or `Props.of_eq` for OCaml/JS properties; use
+`Props.attr_or_prop` with explicit string/JS parsers for an input that
+supports both attribute JSON and typed properties.
 
 ## Cmd — effects going out
 
@@ -258,6 +260,12 @@ pattern — use `Cmd.perform`.
 | Use `Cmd.perform` for deferred work | **`dispatch_ref` / stashing `dispatch` in a `ref` as the primary async pattern** |
 
 EffectsManager runs commands; component code only builds them.
+
+For polling, schedule the next timeout from update after a completion message.
+The timeout dispatches a Tick message; update starts the next request. This
+keeps recurring work tied to a mounted loop. A self-recursing timer inside an
+effect can survive unmount. Verify that leaving the page or detaching the
+component stops further reads.
 
 ## Contract RPC from the browser (Proxy)
 
@@ -338,8 +346,8 @@ let update state = function
     (state, Dg_docs_table.send ~addr:"project-docs" Reload)
 ```
 
-Worked example (parent owns two tables; close → reload one):
-`lib/well_web/test_addr_send/addr_send_test.ml`.
+Framework reference for parent commands: `lib/well_web/test_addr_send/addr_send_test.ml`
+in the Well checkout.
 
 ## emits — declared outputs
 
@@ -365,9 +373,9 @@ type msg = Increment | Decrement | Reset | Set_step of int
 type emits = CountChanged of int
 
 let props : msg Well_web.Props.t = [
-  Well_web.Props.int "step" ~default:1 ~on:(fun v -> Set_step v);
+  Well_web.Props.int "step" ~default:1 ~on:(fun v -> Set_step v) ();
 ]
-(* props declared but not applied at connect — step default lives in init *)
+
 
 let init ~dispatch:_ = ({ count = 0; step = 1 }, Well_web.Cmd.none)
 
@@ -403,8 +411,7 @@ Use on a page (`lib/pages/<x>_page.mlx`):
 ```mlx
 Well.get "/counter" @@ fun _req ->
 <Layout title="Counter">
-  <!-- step="2" is markup only today; init still starts at step=1 until Props wired -->
-  <well-counter></well-counter>
+  <well-counter step="2"></well-counter>
   <script attrs=[("type", "module"); ("src", "/static/app.js")] />
 </Layout>
 ```
@@ -415,7 +422,7 @@ Well.get "/counter" @@ fun _req ->
 - **Bare-string children are auto-wrapped** to `Html.txt`. For any other expression, wrap in parens: `(txt x)`, `(string_of_int n |> txt)`.
 - **`(txt "")` for empty output** — there is no `empty` node. Use it in conditional else-branches.
 - **`{...}` is record syntax ONLY** — not interpolation. Use `(expr)` for function calls.
-- **No inline `fun` in attribute values** — name handlers first (see typed handlers above).
+- **Parenthesize inline `fun`** — `on_input=(fun value -> Set_name value)` is valid; `on_click` expects a message value.
 - **`addr=` names a TEA loop**, not a vdom `key` and not an app prop. Desugars to `Html.element ~addr`; HTML wire is `data-well-addr`. Parent commands: `Cmd.send ~addr`.
 
 ## Verification
@@ -428,6 +435,6 @@ Open the page that embeds `<well-*>` and confirm the custom element renders and 
 
 ## Companion skills
 
-- **`well`** — backend: routes, models, services, LiveView (legacy), SQL.
+- **`well`** — backend: routes, models, services, SQL.
 - **`frontend-design`** — visual design quality when a component must look distinctive.
 - **`idesign-architecture`** — decomposition (parent = Manager of state; this component = leaf with declared inputs/outputs).

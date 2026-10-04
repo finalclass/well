@@ -1,0 +1,6 @@
+(executable
+ (name register)
+ (modes js)
+ (modules register cap_http cap_stream cap_repl)
+ (libraries well.web yojson js_of_ocaml)
+ (preprocess (pps js_of_ocaml-ppx)))

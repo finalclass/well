@@ -31,7 +31,9 @@
     "lib/well_cli/contract/STP.md",
     "skills/well/SKILL.md",
     "skills/well-front/SKILL.md",
-    "skills/well-axe/SKILL.md"
+    "skills/well-axe/SKILL.md",
+    "lib/well_cap/SERVICE.md",
+    "lib/well_cap/STP.md"
   ],
   "derived_contracts": [
     "lib/contract/<Service>.toml (projekcja; nie autorowana)",

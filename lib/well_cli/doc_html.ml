@@ -55,7 +55,6 @@ let css = {|:root {
   --tag-post: #d97706;
   --tag-put: #7c3aed;
   --tag-delete: #dc2626;
-  --tag-live: #0891b2;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -163,7 +162,6 @@ pre code { background: none; padding: 0; }
 .tag-post { background: var(--tag-post); }
 .tag-put { background: var(--tag-put); }
 .tag-delete { background: var(--tag-delete); }
-.tag-live { background: var(--tag-live); }
 
 table {
   width: 100%;
@@ -283,16 +281,6 @@ let collect_routes modules =
     ) m.items
   ) modules
 
-(* Collect all LiveViews *)
-let collect_liveviews modules =
-  List.concat_map (fun (m : Doc_parser.module_doc) ->
-    List.filter_map (fun (item : Doc_parser.doc_item) ->
-      match item.kind with
-      | LiveView path -> Some (path, m.name, item.doc)
-      | _ -> None
-    ) m.items
-  ) modules
-
 (* Build sidebar HTML *)
 let sidebar_html ~project_name ~modules ~is_subpage =
   let prefix = if is_subpage then "../" else "" in
@@ -302,8 +290,6 @@ let sidebar_html ~project_name ~modules ~is_subpage =
   Buffer.add_string buf {|<div class="section-label">Overview</div><ul>|};
   Buffer.add_string buf (Printf.sprintf
     {|<li><a href="%sindex.html#routes">Routes</a></li>|} prefix);
-  Buffer.add_string buf (Printf.sprintf
-    {|<li><a href="%sindex.html#liveviews">LiveViews</a></li>|} prefix);
   Buffer.add_string buf (Printf.sprintf
     {|<li><a href="%sindex.html#modules">Modules</a></li>|} prefix);
   Buffer.add_string buf {|</ul>|};
@@ -319,7 +305,6 @@ let sidebar_html ~project_name ~modules ~is_subpage =
 (* Generate index.html *)
 let generate_index ~project_name ~modules =
   let routes = collect_routes modules in
-  let liveviews = collect_liveviews modules in
   let buf = Buffer.create 4096 in
 
   (* Header *)
@@ -344,26 +329,6 @@ let generate_index ~project_name ~modules =
         (method_tag meth) (escape_html path) mod_name (escape_html mod_name)
         (escape_html short_doc))
     ) routes;
-    Buffer.add_string buf {|</tbody></table>|}
-  end;
-
-  (* LiveViews *)
-  Buffer.add_string buf {|<h2 id="liveviews">LiveViews</h2>|};
-  if liveviews = [] then
-    Buffer.add_string buf {|<p class="empty">No LiveViews registered.</p>|}
-  else begin
-    Buffer.add_string buf
-      {|<table><thead><tr><th>Path</th><th>Module</th><th>Description</th></tr></thead><tbody>|};
-    List.iter (fun (path, mod_name, doc) ->
-      let short_doc = match String.index_opt doc '\n' with
-        | Some i -> String.sub doc 0 i
-        | None -> doc
-      in
-      Buffer.add_string buf (Printf.sprintf
-        {|<tr><td><span class="tag tag-live">LIVE</span> <code>%s</code></td><td><a href="modules/%s.html">%s</a></td><td>%s</td></tr>|}
-        (escape_html path) mod_name (escape_html mod_name)
-        (escape_html short_doc))
-    ) liveviews;
     Buffer.add_string buf {|</tbody></table>|}
   end;
 
@@ -409,8 +374,6 @@ let generate_module_page ~project_name ~modules (m : Doc_parser.module_doc) =
     i.kind = Function || i.kind = Value) m.items in
   let routes = List.filter (fun (i : Doc_parser.doc_item) ->
     match i.kind with Route _ -> true | _ -> false) m.items in
-  let liveviews = List.filter (fun (i : Doc_parser.doc_item) ->
-    match i.kind with LiveView _ -> true | _ -> false) m.items in
   let submodules = List.filter (fun (i : Doc_parser.doc_item) -> i.kind = Module) m.items in
 
   (* Routes section *)
@@ -430,20 +393,6 @@ let generate_module_page ~project_name ~modules (m : Doc_parser.module_doc) =
           {|<div class="item-doc">%s</div>|} (doc_to_html item.doc));
       Buffer.add_string buf {|</div>|}
     ) routes
-  end;
-
-  (* LiveViews section *)
-  if liveviews <> [] then begin
-    Buffer.add_string buf {|<h2>LiveViews</h2>|};
-    List.iter (fun (item : Doc_parser.doc_item) ->
-      Buffer.add_string buf (Printf.sprintf
-        {|<div class="item"><div class="item-name"><span class="tag tag-live">LIVE</span> <code>%s</code></div>|}
-        (escape_html item.name));
-      if item.doc <> "" then
-        Buffer.add_string buf (Printf.sprintf
-          {|<div class="item-doc">%s</div>|} (doc_to_html item.doc));
-      Buffer.add_string buf {|</div>|}
-    ) liveviews
   end;
 
   (* Types section *)

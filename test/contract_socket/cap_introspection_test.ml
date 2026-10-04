@@ -46,17 +46,17 @@ let with_spec f =
 
 let test_services_panel () =
   with_spec (fun () ->
-    let model, _ = Well_cap__Services_live.init req `Null in
+    let model, _ = Well_cap__Services_page.init req `Null in
     let model =
-      Well_cap__Services_live.update req model
-        (Well_cap__Services_live.SelectRPC ("CapDemo", "echoInt"))
+      Well_cap__Services_page.update req model
+        (Well_cap__Services_page.SelectRPC ("CapDemo", "echoInt"))
     in
     let model =
-      Well_cap__Services_live.update req model
-        (Well_cap__Services_live.CallRPC {|{"value":7}|})
+      Well_cap__Services_page.update req model
+        (Well_cap__Services_page.CallRPC {|{"value":7}|})
     in
     check "Cap services panel reaches text-Drut service"
-      (let s = model.Well_cap__Services_live.call_result in
+      (let s = model.Well_cap__Services_page.call_result in
        let needle = "7" in
        let n = String.length s and m = String.length needle in
        let rec at i = i + m <= n && (String.sub s i m = needle || at (i + 1)) in
@@ -64,18 +64,16 @@ let test_services_panel () =
 
 let test_web_repl () =
   with_spec (fun () ->
-    let model, _ = Well_cap__Repl_live.init req `Null in
-    let model =
-      Well_cap__Repl_live.update req model
-        (Well_cap__Repl_live.Eval "CapDemo.echoInt value:7")
+    let env : Well_cap__Repl_page.env =
+      { schema = Well_cap__Repl_page.build_schema ();
+        vars = Hashtbl.create 16;
+        ctx = Well.rpc_ctx_to_wire (Well.rpc_ctx req) }
     in
-    check "Cap web REPL produced one entry"
-      (List.length model.Well_cap__Repl_live.history = 1);
-    match model.Well_cap__Repl_live.history with
-    | [ entry ] ->
-      check "Cap web REPL call succeeded"
-        (not entry.Well_cap__Repl_live.is_error)
-    | _ -> check "Cap web REPL history shape" false)
+    let value, type_ = Well_cap__Repl_page.eval env
+      (Well_cap__Repl_page.parse "CapDemo.echoInt value:7") in
+    check "Cap web REPL decoded the response" (value = `Assoc [("value", `Int 7)]);
+    check "Cap web REPL preserves return type"
+      (Well_cap__Repl_page.type_name type_ = "IntEcho"))
 
 let () =
   test_services_panel ();

@@ -68,7 +68,8 @@ dev:
 |}
 
 let readme name =
-  Printf.sprintf {|# %s
+  Printf.sprintf
+    {|# %s
 
 Built with [well](https://github.com/anthropics/well) — full-stack OCaml web framework.
 
@@ -99,7 +100,6 @@ lib/
   client/
     widgets/layout.mlx             # HTML layout
     pages/                         # route pages (home, counter, notes, ...)
-    live/                          # LiveView modules (counter, activity log)
     request_id.ml                  # request ID middleware
   contract/                        # service contracts (.cyrograf sources)
   contract_generated/              # generated data + adapters (dune build)
@@ -113,26 +113,27 @@ data/                              # SQLite databases (gitignored)
 - `.ml` — OCaml (logic, models, queries)
 - `.mlx` — OCaml + JSX (views, components)
 - `.ts` — TypeScript (compiled to JS via bun, wired through dune)
-|} name
+|}
+    name
 
 let agents_md =
   {|# Well Agent Instructions
 
 ## MLX and HTML
 
-- This is a Well project. Use `.mlx` files for pages, layouts, LiveViews and reusable view components.
+- This is a Well project. Use `.mlx` files for pages, layouts, Well.Web and reusable view components.
 - Build HTML with MLX JSX syntax and the Well `Html` module (`txt`, `raw`, `cat`, `element_to_string`, tag helpers). Do not invent alternate HTML DSLs.
 - Do not create HTML views with `Printf.sprintf`, string concatenation, ad-hoc buffers, or hand-written HTML templates. The only acceptable raw string HTML is a small trusted fragment passed through `raw`, or framework internals that deliberately serialize HTML.
 - In `.ml` files that need to produce HTML, use the programmatic `Html` API (`div ~attrs ~children ()`, `txt`, `cat`, etc.) instead of formatting strings.
 - Components should be normal MLX components with `createElement` when they are used as JSX tags. Use `<Layout>...</Layout>` / `<Component ... />` instead of manually calling component internals or assembling their output strings.
-- Prefer native MLX attributes when available: `<div class'="panel" id="main">`, `<button data-lv-click="Save">`, `<input type="text" required />`. Use `attrs=[...]` only for dynamic attribute lists or when it is clearer.
+- Prefer native MLX attributes when available: `<div class'="panel" id="main">`, `<button type="submit">`, `<input type="text" required />`. Use `attrs=[...]` only for dynamic attribute lists or when it is clearer.
 - Event handlers use `on_<event>` attributes. The attribute value's shape depends on the event (a `Well_web.Vdom.handler` variant, desugared by MLX):
   - `on_click=Increment`, `on_blur=Blurred`, `on_focus=Focused`, `on_dblclick=Dbl` — a bare message value. No `Some`/`None` boilerplate.
   - `on_submit=handle_submit` — `form_data -> msg` (named fields from FormData; preventDefault).
   - `on_keydown=handle_key`, `on_keyup=...`, `on_keypress=...` — a named function `string -> msg` receiving `event.key`.
   - `on_input=handle_value`, `on_change=...` — a named function `string -> msg` receiving `event.target.value`.
   - `on_wheel=...`, `on_scroll=...`, any other `on_*` — a named function `Obj.t -> msg option` receiving the whole event (generic fallback).
-  To ignore an event conditionally in the key/value cases, dispatch a `NoOp` msg or use the generic `on_<event>=handler` fallback (which returns `option`). Inline `(fun ...)` is not accepted as an attribute value by MLX — define the handler as a named function (`let handle_key k = ... in <input on_keydown=handle_key />`). `on_*` desugars to `~handlers:[("event", ...)]`, never to `~attrs`.
+  To ignore an event conditionally in the key/value cases, dispatch a `NoOp` msg or use the generic `on_<event>=handler` fallback (which returns `option`). Inline functions work inside parentheses (`on_input=(fun value -> Set_name value)`). Named handlers remain valid. `on_*` desugars to `~handlers:[("event", ...)]`, never to `~attrs`.
 - Bare-string children are escaped automatically (desugar to `Html.txt`); for any other expression child use `(expr)` (e.g. `(txt x)`, `(count_txt)`).
 - All user-controlled or variable text rendered in tags must go through `txt`. Use `raw` only for trusted HTML that is already intentionally HTML.
 - MLX children use OCaml expression syntax, not JavaScript interpolation:
@@ -151,7 +152,8 @@ let agents_md =
 |}
 
 let well_toml name =
-  Printf.sprintf {|[well]
+  Printf.sprintf
+    {|[well]
 port = 4000
 # secret_key = "change-me-in-production"
 
@@ -160,7 +162,8 @@ data_dir = "data"
 
 [app]
 name = "%s"
-|} name
+|}
+    name
 
 let gitignore =
   {|_build/
@@ -184,8 +187,7 @@ let bin_dune _name =
  (libraries app contract well.core well.cap eio_main))
 |}
 
-let bin_main _name =
-  {|let () = App.run ()
+let bin_main _name = {|let () = App.run ()
 |}
 
 let lib_app_dune _name =
@@ -223,7 +225,7 @@ let web_counter_ml _name =
      on_click przyjmuje wartość msg (bez Some/None boilerplate); on_keydown/
      on_input przyjmują nazwaną funkcję string -> msg (wyciągając event.key
      / event.target.value). Wartość atrybutu musi być nazwaną funkcją lub
-     wartością (inline `fun` nie jest akceptowane przez gramatykę MLX). *)
+     wartością; inline `fun` jest akceptowane w nawiasach. *)
 
 type state = { count : int }
 type msg = Increment | Decrement | Reset
@@ -327,8 +329,6 @@ let app_ml _name =
     Well.publish_keyed ~ephemeral:true Events.echo_result
       ~key:kev.key { reply = "Echo: " ^ text }));
 
-  Well.live "/counter" (module Live.Counter_live);
-  Well.live "/activity_log" (module Live.Activity_log_live);
   Well.static "/static" "static";
   Well.run ()
 |}
@@ -358,9 +358,8 @@ in
     <h1>(txt "Welcome to %s")</h1>
     <p>(txt "Edit lib/pages/home_page.mlx to get started.")</p>
     auth_section
-    <p><a attrs=[("href", "/counter")]>(txt "Counter — LiveView demo")</a></p>
+    <p><a attrs=[("href", "/counter")]>(txt "Counter — Well.Web demo")</a></p>
     <p><a attrs=[("href", "/web-counter")]>(txt "Web Counter — well.web TEA + Web Components demo")</a></p>
-    <p><a attrs=[("href", "/dashboard")]>(txt "Dashboard — LiveView communication demo")</a></p>
     <p><a attrs=[("href", "/notes")]>(txt "Notes — SQLite demo (login required)")</a></p>
     <p><a attrs=[("href", "/tasks")]>(txt "Tasks — Contract/RPC demo")</a></p>
     <p><a attrs=[("href", "/upload")]>(txt "Upload — File upload demo")</a></p>
@@ -377,7 +376,8 @@ let result = Well.request ~cmd:Events.echo_cmd ~reply:Events.echo_result
                ~key { text } in
 Well.json (`Assoc [("reply", `String result.reply)])
 |}
-    name name
+    name
+    name
 
 let layout name =
   Printf.sprintf
@@ -389,7 +389,6 @@ let layout name =
       <meta attrs=[("name", "viewport"); ("content", "width=device-width, initial-scale=1.0")] />
       <title>(txt page_title)</title>
       <link attrs=[("rel", "stylesheet"); ("href", "/static/app.css")] />
-      (Well.LiveView.live_preconnect_script ())
     </head>
     <body>
       <main>(children |> cat)</main>
@@ -403,12 +402,10 @@ let layout name =
     name
 
 let test_dune name =
-  Printf.sprintf
-    {|(test
+  Printf.sprintf {|(test
  (name %s_test)
  (libraries app well.test))
-|}
-    name
+|} name
 
 let test_main name =
   Printf.sprintf
@@ -683,7 +680,7 @@ let events _name =
   {|(* Events — typed pub/sub topics for the application *)
 (* Each type defines a message shape; [@@deriving topic] generates a Well.topic value *)
 
-(* ── Domain events (fixed channel, cross-LiveView) ───────────────── *)
+(* ── Domain events (fixed channel) ───────────────── *)
 
 type counter_event =
   [ `Incremented of string * int
@@ -701,778 +698,31 @@ type echo_result = { reply : string }
 [@@deriving yojson, topic ~name:"echo:result"]
 |}
 
-let counter_live _name =
-  {|type model =
-  { count: int
-  ; step: int }
-[@@deriving yojson]
-
-type msg =
-  | Increment
-  | Decrement
-  | Reset
-[@@deriving yojson]
-
-let persistence = Well.LiveView.Ephemeral
-
-let init _req props =
-  let open Yojson.Safe.Util in
-  let get_int key default =
-    try props |> member key |> to_int with
-    | _ -> (
-      try props |> member key |> to_string |> int_of_string with
-      | _ -> default )
-  in
-  ({count= get_int "initial" 0; step= get_int "step" 1}, [])
-
-let update _req model = function
-  | Increment ->
-    let m = {model with count= model.count + model.step} in
-    Well.publish Events.counter_event (`Incremented ("increment", m.count));
-    m
-  | Decrement ->
-    let m = {model with count= model.count - model.step} in
-    Well.publish Events.counter_event (`Decremented ("decrement", m.count));
-    m
-  | Reset ->
-    Well.publish Events.counter_event (`Reset);
-    {model with count= 0}
-
-let handle_params _req model = model
-let temporary_assigns model = model
-
-let view model =
-  let open Html in
-  <div attrs=[("class", "counter")]>
-    <div attrs=[("class", "counter-display")]>
-      (txt (string_of_int model.count))
-    </div>
-    <div attrs=[("class", "counter-controls")]>
-      <button attrs=[("data-lv-click", "Decrement"); ("class", "counter-btn")]>
-        (txt "-")
-      </button>
-      <button attrs=[("data-lv-click", "Increment"); ("class", "counter-btn")]>
-        (txt "+")
-      </button>
-      <button attrs=[("data-lv-click", "Reset"); ("class", "counter-btn secondary")]>
-        (txt "Reset")
-      </button>
-    </div>
-    <div attrs=[("class", "counter-step")]>
-      (txt "Step: ") (txt (string_of_int model.step))
-    </div>
-  </div>
-|}
-
 let counter_page _name =
   {|Well.get "/counter" @@ fun _req ->
 let open Html in
 <Layout title="Counter">
-<div>
-  <h1>(txt "Counter — LiveView Demo")</h1>
-  <p>(txt "Real-time server-side state with WebSocket updates.")</p>
-  <Well.LiveView name="counter" />
-  <p><a attrs=[("href", "/")]>(txt "Back")</a></p>
-</div>
-</Layout>
-|}
-
-let activity_log_live _name =
-  {|type entry =
-  { id: int
-  ; action: string
-  ; value: int }
-[@@deriving yojson]
-
-type model =
-  { entries: entry list
-  ; next_id: int }
-[@@deriving yojson]
-
-type msg = Events.counter_event
-[@@deriving yojson]
-
-let persistence = Well.LiveView.Ephemeral
-
-let init _req _props =
-  ({entries= []; next_id= 1}, [Well.topic_name Events.counter_event])
-
-let update _req model = function
-  | `Incremented (action, value)
-  | `Decremented (action, value) ->
-    let entry = {id= model.next_id; action; value} in
-    let entries = entry :: model.entries in
-    let entries =
-      if List.length entries > 20 then
-        List.filteri (fun i _ -> i < 20) entries
-      else entries
-    in
-    {entries; next_id= model.next_id + 1}
-  | `Reset ->
-    let entry = {id= model.next_id; action= "reset"; value= 0} in
-    {entries= entry :: model.entries; next_id= model.next_id + 1}
-
-let handle_params _req model = model
-let temporary_assigns model = model
-
-let view model =
-  let open Html in
-  <div attrs=[("class", "activity-log")]>
-    <h2>(txt "Activity Log")</h2>
-    <p attrs=[("class", "activity-hint")]>
-      (txt (string_of_int (List.length model.entries)))
-      (txt " events captured")
-    </p>
-    (model.entries
-       |> List.map (fun e ->
-         <li attrs=[("class", "log-entry")]>
-           <span attrs=[("class", "log-action " ^ e.action)]>(txt e.action)</span>
-           (txt " → ")
-           <span attrs=[("class", "log-value")]>(txt (string_of_int e.value))</span>
-         </li>)
-       |> cat)
-  </div>
-|}
-
-let dashboard_page _name =
-  {|Well.get "/dashboard" @@ fun _req ->
-let open Html in
-<Layout title="Dashboard">
-<div>
-  <h1>(txt "Dashboard — LiveView Communication")</h1>
-  <p>(txt "Two LiveViews on one page. Counter publishes events, Activity Log subscribes via Well.MessageBus.")</p>
-  <div attrs=[("class", "dashboard-grid")]>
-    <div attrs=[("class", "dashboard-panel")]>
-      <h2>(txt "Counter")</h2>
-      <Well.LiveView name="counter" />
-    </div>
-    <div attrs=[("class", "dashboard-panel")]>
-      <Well.LiveView name="activity_log" />
-    </div>
-  </div>
-  <p><a attrs=[("href", "/")]>(txt "← Back")</a></p>
-</div>
+  <h1>(txt "Counter — Well.Web")</h1>
+  <well-counter></well-counter>
+  <script attrs=[("defer", ""); ("src", "/static/app.js")] />
 </Layout>
 |}
 
 let static_well_ts =
-  {|// well.ts — Unified client for LiveView + Channels
-// Replaces well-live.js with full TypeScript types
-
-// ── Types ──────────────────────────────────────────────────────────
-
-export interface HookDef {
-  mounted?: (this: HookInstance) => void;
-  updated?: (this: HookInstance) => void;
-  destroyed?: (this: HookInstance) => void;
-}
-
-export interface HookInstance {
-  el: Element;
-  _topic: string | null;
-  _handlers: Record<string, ((payload: unknown) => void)[]>;
-  pushEvent(event: string, payload?: unknown): void;
-  handleEvent(event: string, cb: (payload: unknown) => void): void;
-}
-
-export interface WellChannel {
+  {channels|export interface WellChannel {
   on(event: string, cb: (payload: unknown) => void): WellChannel;
-  push(event: string, payload?: unknown): void;
+  push(event: string, payload?: unknown): Promise<unknown>;
   leave(): void;
 }
 
-// ── Well client ────────────────────────────────────────────────────
-
 export class Well {
-  // ── LiveView state ──
-  private liveWs: WebSocket | null = null;
-  private liveReconnectDelay = 500;
-  private readonly maxReconnectDelay = 10000;
-  private readonly liveViews = new Map<string, { el: Element; endpoint: string; props: Record<string, unknown>; cachedHtml: string }>();
-
-  // ── Channel state ──
   private channelWs: WebSocket | null = null;
   private channelReconnectDelay = 500;
+  private readonly maxReconnectDelay = 10000;
   private readonly channels = new Map<string, ChannelInstance>();
   private channelConnected = false;
-
-  // ── Hooks ──
-  static hooks: Record<string, HookDef> = {};
-  private hookInstances = new Map<Element, HookInstance>();
-
-  // ── Debounce / Throttle ──
-  private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private throttleTimers = new Map<string, number>();
-
-  // ── Options ──
-  private livePath: string;
   private wsPath: string;
-
-  constructor(opts?: { livePath?: string; wsPath?: string }) {
-    this.livePath = opts?.livePath ?? "/live";
-    this.wsPath = opts?.wsPath ?? "/ws";
-  }
-
-  // ── Debounce / Throttle helpers ──────────────────────────────────
-
-  private debouncedSend(key: string, ms: number, fn: () => void) {
-    const prev = this.debounceTimers.get(key);
-    if (prev !== undefined) clearTimeout(prev);
-    this.debounceTimers.set(key, setTimeout(fn, ms));
-  }
-
-  private throttledSend(key: string, ms: number, fn: () => void) {
-    const now = Date.now();
-    if (now - (this.throttleTimers.get(key) ?? 0) >= ms) {
-      this.throttleTimers.set(key, now);
-      fn();
-    }
-  }
-
-  private maybeSend(el: Element, fn: () => void) {
-    const debounce = el.closest("[data-lv-debounce]");
-    const throttle = el.closest("[data-lv-throttle]");
-    if (debounce) {
-      const ms = parseInt(debounce.getAttribute("data-lv-debounce") ?? "300", 10) || 300;
-      const key = debounce.getAttribute("id") ?? debounce.getAttribute("data-lv-change") ?? "d";
-      this.debouncedSend(key, ms, fn);
-    } else if (throttle) {
-      const ms = parseInt(throttle.getAttribute("data-lv-throttle") ?? "300", 10) || 300;
-      const key = throttle.getAttribute("id") ?? throttle.getAttribute("data-lv-click") ?? "t";
-      this.throttledSend(key, ms, fn);
-    } else {
-      fn();
-    }
-  }
-
-  // ── Hooks ────────────────────────────────────────────────────────
-
-  private mountHooks(container: Element) {
-    const els = container.querySelectorAll("[data-lv-hook]");
-    for (let i = 0; i < els.length; i++) {
-      const el = els[i];
-      if (this.hookInstances.has(el)) continue;
-      const name = el.getAttribute("data-lv-hook");
-      if (!name) continue;
-      const hookDef = Well.hooks[name];
-      if (!hookDef) continue;
-      const topic = this.findLiveView(el);
-      const self = this;
-      const instance: HookInstance = {
-        el,
-        _topic: topic,
-        _handlers: {},
-        pushEvent(event: string, payload?: unknown) {
-          if (this._topic) {
-            self.sendLiveMsg(this._topic, ["HookEvent", { event, payload }]);
-          }
-        },
-        handleEvent(event: string, cb: (payload: unknown) => void) {
-          if (!this._handlers[event]) this._handlers[event] = [];
-          this._handlers[event].push(cb);
-        },
-      };
-      this.hookInstances.set(el, instance);
-      if (hookDef.mounted) hookDef.mounted.call(instance);
-    }
-  }
-
-  private updateHooks(container: Element) {
-    this.hookInstances.forEach((instance, el) => {
-      if (!container.contains(el)) {
-        const name = el.getAttribute("data-lv-hook");
-        if (name) {
-          const hookDef = Well.hooks[name];
-          if (hookDef?.destroyed) hookDef.destroyed.call(instance);
-        }
-        this.hookInstances.delete(el);
-      }
-    });
-    this.hookInstances.forEach((instance, el) => {
-      if (container.contains(el)) {
-        const name = el.getAttribute("data-lv-hook");
-        if (name) {
-          const hookDef = Well.hooks[name];
-          if (hookDef?.updated) hookDef.updated.call(instance);
-        }
-      }
-    });
-    this.mountHooks(container);
-  }
-
-  private dispatchHookEvent(topic: string, event: string, payload: unknown) {
-    this.hookInstances.forEach((instance) => {
-      if (instance._topic === topic && instance._handlers[event]) {
-        instance._handlers[event].forEach((cb) => cb(payload));
-      }
-    });
-  }
-
-  // ── Morphdom ───────────────────────────────────────────────────────
-
-  private morph(container: Element, newHtml: string) {
-    const template = document.createElement("template");
-    template.innerHTML = newHtml;
-    const newRoot = template.content;
-    this.morphChildren(container, newRoot);
-  }
-
-  private morphChildren(oldParent: Element | DocumentFragment, newParent: Element | DocumentFragment) {
-    const oldChildren = Array.from(oldParent.childNodes);
-    const newChildren = Array.from(newParent.childNodes);
-
-    const oldKeyed = new Map<string, Element>();
-    for (const child of oldChildren) {
-      if (child.nodeType === Node.ELEMENT_NODE) {
-        const el = child as Element;
-        const key = el.getAttribute("data-lv-key") ?? el.getAttribute("id");
-        if (key) oldKeyed.set(key, el);
-      }
-    }
-
-    let oldIdx = 0;
-    for (let newIdx = 0; newIdx < newChildren.length; newIdx++) {
-      const newChild = newChildren[newIdx];
-
-      if (newChild.nodeType === Node.TEXT_NODE) {
-        if (oldIdx < oldChildren.length && oldChildren[oldIdx].nodeType === Node.TEXT_NODE) {
-          if (oldChildren[oldIdx].textContent !== newChild.textContent) {
-            oldChildren[oldIdx].textContent = newChild.textContent;
-          }
-          oldIdx++;
-        } else {
-          oldParent.insertBefore(document.createTextNode(newChild.textContent ?? ""), oldChildren[oldIdx] ?? null);
-        }
-        continue;
-      }
-
-      if (newChild.nodeType !== Node.ELEMENT_NODE) {
-        oldIdx++;
-        continue;
-      }
-
-      const newEl = newChild as Element;
-      const newKey = newEl.getAttribute("data-lv-key") ?? newEl.getAttribute("id");
-
-      let match: Element | null = null;
-
-      if (newKey && oldKeyed.has(newKey)) {
-        match = oldKeyed.get(newKey)!;
-        oldKeyed.delete(newKey);
-        const ref = oldChildren[oldIdx] ?? null;
-        if (match !== ref) {
-          oldParent.insertBefore(match, ref);
-        } else {
-          oldIdx++;
-        }
-      } else if (oldIdx < oldChildren.length) {
-        const oldChild = oldChildren[oldIdx];
-        if (oldChild.nodeType === Node.ELEMENT_NODE) {
-          const oldEl = oldChild as Element;
-          const oldKey = oldEl.getAttribute("data-lv-key") ?? oldEl.getAttribute("id");
-          if (!oldKey && oldEl.tagName === newEl.tagName) {
-            match = oldEl;
-            oldIdx++;
-          }
-        }
-        if (!match) {
-          oldParent.insertBefore(newEl.cloneNode(true), oldChildren[oldIdx] ?? null);
-          continue;
-        }
-      }
-
-      if (!match) {
-        oldParent.appendChild(newEl.cloneNode(true));
-        continue;
-      }
-
-      if (match.hasAttribute("data-lv-ignore")) continue;
-
-      this.syncAttrs(match, newEl);
-
-      const active = document.activeElement;
-      if (match === active && this.isFormInput(match)) {
-        // Preserve focused input value
-      } else if (this.isFormInput(match) && this.isFormInput(newEl)) {
-        (match as HTMLInputElement).value = (newEl as HTMLInputElement).value;
-      } else {
-        this.morphChildren(match, newEl);
-      }
-    }
-
-    while (oldParent.childNodes.length > newChildren.length) {
-      const last = oldParent.lastChild;
-      if (last) oldParent.removeChild(last);
-      else break;
-    }
-  }
-
-  private syncAttrs(oldEl: Element, newEl: Element) {
-    const oldAttrs = Array.from(oldEl.attributes);
-    for (const attr of oldAttrs) {
-      if (!newEl.hasAttribute(attr.name)) {
-        oldEl.removeAttribute(attr.name);
-      }
-    }
-    const newAttrs = Array.from(newEl.attributes);
-    for (const attr of newAttrs) {
-      if (oldEl.getAttribute(attr.name) !== attr.value) {
-        oldEl.setAttribute(attr.name, attr.value);
-      }
-    }
-  }
-
-  private isFormInput(el: Element): boolean {
-    const tag = el.tagName;
-    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-  }
-
-  // ── LiveView helpers ─────────────────────────────────────────────
-
-  private findLiveView(el: Element): string | null {
-    let node: Element | null = el;
-    while (node) {
-      if (node.tagName === "LIVE-VIEW") {
-        return node.getAttribute("data-topic") ?? node.getAttribute("data-liveview");
-      }
-      node = node.parentElement;
-    }
-    return null;
-  }
-
-  private sendLiveMsg(topic: string, msg: unknown) {
-    if (this.liveWs?.readyState === WebSocket.OPEN) {
-      this.liveWs.send(JSON.stringify({ type: "msg", topic, msg }));
-    }
-  }
-
-  private parseQueryParams(search: string): Record<string, string> {
-    const params: Record<string, string> = {};
-    if (!search || search.length <= 1) return params;
-    const qs = search.charAt(0) === "?" ? search.substring(1) : search;
-    const pairs = qs.split("&");
-    for (const pair of pairs) {
-      const [k, v] = pair.split("=");
-      if (k) params[decodeURIComponent(k)] = v ? decodeURIComponent(v) : "";
-    }
-    return params;
-  }
-
-  // ── LiveView connection ──────────────────────────────────────────
-
-  private connectLive() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = proto + "//" + location.host + this.livePath;
-    this.liveWs = new WebSocket(url);
-
-    this.liveWs.onopen = () => {
-      this.liveReconnectDelay = 500;
-      const queryParams = this.parseQueryParams(location.search);
-      this.liveViews.forEach((lv, topic) => {
-        lv.el.classList.add("lv-loading");
-        const joinProps = { ...lv.props, _query: queryParams };
-        this.liveWs!.send(JSON.stringify({
-          type: "join", topic, endpoint: lv.endpoint, props: joinProps,
-        }));
-      });
-    };
-
-    this.liveWs.onmessage = (event: MessageEvent) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(event.data as string); } catch { return; }
-
-      const topic = msg.topic as string;
-      const lv = this.liveViews.get(topic);
-
-      switch (msg.type) {
-        case "full":
-        case "restored":
-          if (lv) {
-            const html = msg.html as string;
-            lv.cachedHtml = html;
-            lv.el.innerHTML = html;
-            lv.el.classList.remove("lv-loading");
-            this.mountHooks(lv.el);
-          }
-          break;
-
-        case "morph":
-          if (!lv) break;
-          {
-            const patches = msg.patches as [number, number, string][];
-            let html = lv.cachedHtml;
-            for (let i = patches.length - 1; i >= 0; i--) {
-              const [offset, len, content] = patches[i];
-              html = html.substring(0, offset) + content + html.substring(offset + len);
-            }
-            lv.cachedHtml = html;
-            this.morph(lv.el, html);
-            this.updateHooks(lv.el);
-          }
-          break;
-
-        case "patch":
-          if (!lv) break;
-          if (msg.changes) {
-            const changes = msg.changes as Record<string, string>;
-            for (const id of Object.keys(changes)) {
-              const el = lv.el.querySelector('[data-lv="' + id + '"]');
-              if (el) el.textContent = changes[id];
-            }
-          }
-          if (msg.list_ops) {
-            const listOps = msg.list_ops as Record<string, { order?: string[]; inserts?: Record<string, string> }>;
-            for (const listId of Object.keys(listOps)) {
-              const ops = listOps[listId];
-              const container = lv.el.querySelector('[data-lv-each="' + listId + '"]');
-              if (!container) continue;
-              const existing = new Map<string, Element>();
-              for (let j = 0; j < container.children.length; j++) {
-                const key = container.children[j].getAttribute("data-lv-key");
-                if (key) existing.set(key, container.children[j]);
-              }
-              if (ops.inserts) {
-                for (const [ikey, html] of Object.entries(ops.inserts)) {
-                  const tmp = document.createElement("div");
-                  tmp.innerHTML = html;
-                  const newEl = tmp.firstElementChild;
-                  if (newEl) existing.set(ikey, newEl);
-                }
-              }
-              if (ops.order) {
-                while (container.firstChild) container.removeChild(container.firstChild);
-                for (const okey of ops.order) {
-                  const oel = existing.get(okey);
-                  if (oel) container.appendChild(oel);
-                }
-              }
-            }
-          }
-          this.updateHooks(lv.el);
-          break;
-
-        case "event":
-          if (msg.event) {
-            this.dispatchHookEvent(topic, msg.event as string, msg.payload ?? null);
-          }
-          break;
-
-        case "navigate":
-          if (msg.url && msg.html) {
-            history.pushState({ wellNav: true }, "", msg.url as string);
-            this.applyNavigationHtml(msg.html as string);
-          }
-          break;
-      }
-    };
-
-    this.liveWs.onclose = () => {
-      this.liveViews.forEach((lv) => lv.el.classList.add("lv-loading"));
-      setTimeout(() => {
-        this.liveReconnectDelay = Math.min(this.liveReconnectDelay * 2, this.maxReconnectDelay);
-        this.connectLive();
-      }, this.liveReconnectDelay);
-    };
-
-    this.liveWs.onerror = () => this.liveWs?.close();
-  }
-
-  // ── LiveView navigation ──────────────────────────────────────────
-
-  private patchParams(url: string) {
-    if (!this.liveWs || this.liveWs.readyState !== WebSocket.OPEN) {
-      window.location.href = url;
-      return;
-    }
-    history.replaceState({ wellNav: true }, "", url);
-    const qmark = url.indexOf("?");
-    const params = qmark >= 0 ? this.parseQueryParams(url.substring(qmark)) : {};
-    this.liveViews.forEach((_lv, topic) => {
-      this.liveWs!.send(JSON.stringify({ type: "params", topic, params }));
-    });
-  }
-
-  private navigateTo(url: string) {
-    if (!this.liveWs || this.liveWs.readyState !== WebSocket.OPEN) {
-      window.location.href = url;
-      return;
-    }
-    this.liveViews.forEach((_lv, topic) => {
-      this.liveWs!.send(JSON.stringify({ type: "leave", topic }));
-    });
-    this.liveWs.send(JSON.stringify({ type: "navigate", url }));
-  }
-
-  private applyNavigationHtml(html: string) {
-    this.hookInstances.forEach((instance, el) => {
-      const name = el.getAttribute("data-lv-hook");
-      if (name) {
-        const hookDef = Well.hooks[name];
-        if (hookDef?.destroyed) hookDef.destroyed.call(instance);
-      }
-    });
-    this.hookInstances.clear();
-    this.liveViews.clear();
-
-    const tmp = document.createElement("html");
-    tmp.innerHTML = html;
-    const newMain = tmp.querySelector("main");
-    const oldMain = document.querySelector("main");
-    if (newMain && oldMain) {
-      oldMain.innerHTML = newMain.innerHTML;
-      const newTitle = tmp.querySelector("title");
-      if (newTitle) document.title = newTitle.textContent ?? "";
-    } else {
-      const newBody = tmp.querySelector("body");
-      if (newBody) document.body.innerHTML = newBody.innerHTML;
-    }
-    this.discoverAndJoin();
-  }
-
-  private discoverAndJoin() {
-    const elements = document.querySelectorAll("live-view");
-    if (elements.length === 0) return;
-
-    elements.forEach((el) => {
-      const endpoint = el.getAttribute("data-liveview") ?? "";
-      const topic = el.getAttribute("data-topic") ?? endpoint;
-      let props: Record<string, unknown> = {};
-      try { props = JSON.parse(el.getAttribute("data-props") ?? "{}"); } catch { /* ignore */ }
-      this.liveViews.set(topic, { el, endpoint, props, cachedHtml: "" });
-    });
-
-    if (this.liveWs?.readyState === WebSocket.OPEN) {
-      const queryParams = this.parseQueryParams(location.search);
-      this.liveViews.forEach((lv, topic) => {
-        lv.el.classList.add("lv-loading");
-        const joinProps = { ...lv.props, _query: queryParams };
-        this.liveWs!.send(JSON.stringify({
-          type: "join", topic, endpoint: lv.endpoint, props: joinProps,
-        }));
-      });
-    }
-  }
-
-  // ── File Upload ──────────────────────────────────────────────────
-
-  private uploadFile(topic: string, file: File) {
-    const CHUNK_SIZE = 64 * 1024;
-    const uploadId = Math.random().toString(36).substring(2) + Date.now().toString(36);
-    const chunkCount = Math.ceil(file.size / CHUNK_SIZE);
-    let chunkIndex = 0;
-
-    const sendChunk = () => {
-      if (chunkIndex >= chunkCount) return;
-      const start = chunkIndex * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const slice = file.slice(start, end);
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1] ?? "";
-        if (this.liveWs?.readyState === WebSocket.OPEN) {
-          this.liveWs.send(JSON.stringify({
-            type: "upload", topic, upload_id: uploadId,
-            filename: file.name, content_type: file.type || "application/octet-stream",
-            size: file.size, chunk_index: chunkIndex, chunk_count: chunkCount,
-            chunk_data: base64,
-          }));
-        }
-        chunkIndex++;
-        sendChunk();
-      };
-      reader.readAsDataURL(slice);
-    };
-    sendChunk();
-  }
-
-  // ── Event delegation ─────────────────────────────────────────────
-
-  private setupEventDelegation() {
-    document.addEventListener("click", (e: MouseEvent) => {
-      const target = e.target as Element;
-
-      // Live navigation
-      const navTarget = target.closest("[data-lv-navigate]");
-      if (navTarget) {
-        e.preventDefault();
-        const url = navTarget.getAttribute("href") ?? navTarget.getAttribute("data-lv-navigate") ?? "";
-        if (url) this.navigateTo(url);
-        return;
-      }
-
-      // Patch navigation
-      const patchTarget = target.closest("[data-lv-patch]");
-      if (patchTarget) {
-        e.preventDefault();
-        const patchUrl = patchTarget.getAttribute("href") ?? patchTarget.getAttribute("data-lv-patch") ?? "";
-        if (patchUrl) this.patchParams(patchUrl);
-        return;
-      }
-
-      // Click action
-      const clickTarget = target.closest("[data-lv-click]");
-      if (!clickTarget) return;
-      const action = clickTarget.getAttribute("data-lv-click");
-      const topic = this.findLiveView(clickTarget);
-      if (topic && action) {
-        this.maybeSend(clickTarget, () => this.sendLiveMsg(topic, [action]));
-      }
-    });
-
-    document.addEventListener("submit", (e: SubmitEvent) => {
-      const form = (e.target as Element).closest("[data-lv-submit]") as HTMLFormElement | null;
-      if (!form) return;
-      e.preventDefault();
-      const action = form.getAttribute("data-lv-submit");
-      const topic = this.findLiveView(form);
-      if (!topic || !action) return;
-
-      const formData = new FormData(form);
-      const data: Record<string, unknown> = {};
-      formData.forEach((value, key) => { data[key] = value; });
-
-      this.maybeSend(form, () => this.sendLiveMsg(topic, [action, data]));
-
-      form.querySelectorAll('input:not([type="hidden"]):not([type="submit"])').forEach((input) => {
-        (input as HTMLInputElement).value = "";
-      });
-    });
-
-    document.addEventListener("input", (e: Event) => {
-      const target = (e.target as Element).closest("[data-lv-change]");
-      if (!target) return;
-      const action = target.getAttribute("data-lv-change");
-      const topic = this.findLiveView(target);
-      if (topic && action) {
-        this.maybeSend(e.target as Element, () => {
-          this.sendLiveMsg(topic, [action, (e.target as HTMLInputElement).value]);
-        });
-      }
-    });
-
-    // Browser back/forward
-    window.addEventListener("popstate", () => {
-      if (this.liveWs?.readyState === WebSocket.OPEN) {
-        this.liveViews.forEach((_lv, topic) => {
-          this.liveWs!.send(JSON.stringify({ type: "leave", topic }));
-        });
-        this.liveWs.send(JSON.stringify({ type: "navigate", url: location.pathname + location.search }));
-      } else {
-        window.location.reload();
-      }
-    });
-  }
-
-  // ── Public LiveView API ─────────────────────────────────────────
-
-  /** Send a message to a LiveView from external JS. */
-  pushLive(msg: unknown, topic?: string) {
-    const t = topic ?? this.liveViews.keys().next().value;
-    if (t) this.sendLiveMsg(t, msg);
-  }
-
-  // ── Channel API ──────────────────────────────────────────────────
-
+  constructor(opts?: { wsPath?: string }) { this.wsPath = opts?.wsPath ?? "/ws"; }
   channel(topic: string): WellChannel {
     if (!this.channelWs || this.channelWs.readyState !== WebSocket.OPEN) {
       this.connectChannel();
@@ -1483,14 +733,14 @@ export class Well {
     return ch;
   }
 
-  /** @internal */
+
   _sendChannel(data: unknown) {
     if (this.channelWs?.readyState === WebSocket.OPEN) {
       this.channelWs.send(JSON.stringify(data));
     }
   }
 
-  /** @internal */
+
   _removeChannel(topic: string) {
     this.channels.delete(topic);
   }
@@ -1499,7 +749,7 @@ export class Well {
     if (this.channelWs && this.channelWs.readyState <= WebSocket.OPEN) return;
 
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = proto + "//" + location.host + this.wsPath;
+    const url = `${proto}//${location.host}${this.wsPath}`;
     this.channelWs = new WebSocket(url);
 
     this.channelWs.onopen = () => {
@@ -1519,6 +769,14 @@ export class Well {
       if (type === "event" && channel) {
         const eventName = (msg.event as string) ?? "message";
         channel._dispatch(eventName, msg.payload);
+      } else if (type === "join_ok" && channel) {
+        channel._dispatch("join_ok", msg.state);
+      } else if (type === "reply" && channel) {
+        const eventName = (msg.event as string) ?? "";
+        channel._resolveReply(eventName, msg.payload);
+      } else if (type === "error" && channel) {
+        const eventName = (msg.event as string) ?? "";
+        channel._rejectReply(eventName, msg.reason as string);
       }
     };
 
@@ -1535,49 +793,12 @@ export class Well {
     this.channelWs.onerror = () => this.channelWs?.close();
   }
 
-  // ── Connect (entry point) ────────────────────────────────────────
-
-  connect() {
-    this.setupEventDelegation();
-
-    // Built-in FileUpload hook
-    const self = this;
-    Well.hooks.FileUpload = {
-      mounted(this: HookInstance) {
-        const input = this.el.querySelector('input[type="file"]') ?? this.el;
-        if ((input as HTMLElement).tagName !== "INPUT") return;
-        const hookTopic = this._topic;
-        input.addEventListener("change", (e: Event) => {
-          const files = (e.target as HTMLInputElement).files;
-          if (!files || !hookTopic) return;
-          for (let i = 0; i < files.length; i++) {
-            self.uploadFile(hookTopic, files[i]);
-          }
-        });
-      },
-    };
-
-    // Discover LiveViews and connect
-    document.addEventListener("DOMContentLoaded", () => {
-      const elements = document.querySelectorAll("live-view");
-      if (elements.length === 0) return;
-      elements.forEach((el) => {
-        const endpoint = el.getAttribute("data-liveview") ?? "";
-        const topic = el.getAttribute("data-topic") ?? endpoint;
-        let props: Record<string, unknown> = {};
-        try { props = JSON.parse(el.getAttribute("data-props") ?? "{}"); } catch { /* ignore */ }
-        this.liveViews.set(topic, { el, endpoint, props, cachedHtml: "" });
-      });
-      this.connectLive();
-    });
-  }
 }
-
-// ── Channel instance ─────────────────────────────────────────────
 
 class ChannelInstance implements WellChannel {
   private listeners = new Map<string, ((payload: unknown) => void)[]>();
   private joined = false;
+  private pendingReplies = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
   constructor(
     private topic: string,
@@ -1591,8 +812,11 @@ class ChannelInstance implements WellChannel {
     return this;
   }
 
-  push(event: string, payload?: unknown) {
+  push(event: string, payload?: unknown): Promise<unknown> {
     this.well._sendChannel({ type: "push", channel: this.topic, event, payload: payload ?? null });
+    return new Promise((resolve, reject) => {
+      this.pendingReplies.set(event, { resolve, reject });
+    });
   }
 
   leave() {
@@ -1601,33 +825,44 @@ class ChannelInstance implements WellChannel {
     this.joined = false;
   }
 
-  /** @internal */
+
   _join() {
     if (this.joined) return;
     this.joined = true;
     this.well._sendChannel({ type: "join", channel: this.topic });
   }
 
-  /** @internal */
+
   _dispatch(event: string, payload: unknown) {
     const cbs = this.listeners.get(event);
     if (cbs) cbs.forEach((cb) => cb(payload));
-    // Also dispatch to "*" wildcard listeners
     const wildcardCbs = this.listeners.get("*");
     if (wildcardCbs) wildcardCbs.forEach((cb) => cb(payload));
   }
+
+
+  _resolveReply(event: string, payload: unknown) {
+    const pending = this.pendingReplies.get(event);
+    if (pending) {
+      this.pendingReplies.delete(event);
+      pending.resolve(payload);
+    }
+  }
+
+
+  _rejectReply(event: string, reason: string) {
+    const pending = this.pendingReplies.get(event);
+    if (pending) {
+      this.pendingReplies.delete(event);
+      pending.reject(new Error(reason));
+    }
+  }
 }
 
-// ── Auto-initialize ────────────────────────────────────────────────
-// For script tag usage: automatically connect LiveViews
-
 const well = new Well();
-well.connect();
-
-// Expose globally for hooks and channels
 (window as unknown as Record<string, unknown>).Well = Well;
 (window as unknown as Record<string, unknown>).well = well;
-|}
+|channels}
 
 let notes_css =
   {|
@@ -1642,7 +877,7 @@ let notes_css =
 
 let counter_css =
   {|
-/* LiveView Counter */
+/* Counter */
 .counter { text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; color: white; margin: 1.5rem 0; }
 .counter-display { font-size: 4rem; font-weight: bold; margin: 1rem 0; }
 .counter-controls { display: flex; gap: 1rem; justify-content: center; margin: 1rem 0; }
@@ -1651,12 +886,6 @@ let counter_css =
 .counter-btn.secondary { background: transparent; font-size: 1rem; padding: 0.5rem 1rem; }
 .counter-step { font-size: 0.9rem; opacity: 0.8; }
 
-/* LiveView indicator */
-live-view { display: block; position: relative; }
-live-view::before { content: ''; display: block; height: 3px; background: #28a745; margin-bottom: 1rem; border-radius: 2px; }
-live-view.lv-loading { pointer-events: none; opacity: 0.5; }
-live-view.lv-loading::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: #007bff; border-radius: 2px; animation: lv-loading-bar 1s ease-in-out infinite; }
-@keyframes lv-loading-bar { 0% { transform: scaleX(0); transform-origin: left; } 50% { transform: scaleX(1); transform-origin: left; } 50.1% { transform-origin: right; } 100% { transform: scaleX(0); transform-origin: right; } }
 |}
 
 let dashboard_css =
@@ -1991,6 +1220,7 @@ let contract_typescript_dune =
   noteaccess.ts
   taskaccess.ts
   taskmanager.ts
+  well_transport.ts
   proxy_noteaccess.ts
   proxy_taskaccess.ts
   proxy_taskmanager.ts)
@@ -1999,6 +1229,7 @@ let contract_typescript_dune =
   (file ../gen/typescript/noteaccess.ts)
   (file ../gen/typescript/taskaccess.ts)
   (file ../gen/typescript/taskmanager.ts)
+  (file ../gen/typescript/well_transport.ts)
   (file ../gen/typescript/proxy_noteaccess.ts)
   (file ../gen/typescript/proxy_taskaccess.ts)
   (file ../gen/typescript/proxy_taskmanager.ts))
@@ -2009,6 +1240,7 @@ let contract_typescript_dune =
    (copy ../gen/typescript/noteaccess.ts noteaccess.ts)
    (copy ../gen/typescript/taskaccess.ts taskaccess.ts)
    (copy ../gen/typescript/taskmanager.ts taskmanager.ts)
+   (copy ../gen/typescript/well_transport.ts well_transport.ts)
    (copy ../gen/typescript/proxy_noteaccess.ts proxy_noteaccess.ts)
    (copy ../gen/typescript/proxy_taskaccess.ts proxy_taskaccess.ts)
    (copy ../gen/typescript/proxy_taskmanager.ts proxy_taskmanager.ts))))
@@ -2030,7 +1262,8 @@ let static_dune =
   (file ../lib/contract_generated/typescript/wire.ts)
   (file ../lib/contract_generated/typescript/taskaccess.ts)
   (file ../lib/contract_generated/typescript/taskmanager.ts)
-  (file ../lib/contract_generated/typescript/proxy_taskmanager.ts))
+  (file ../lib/contract_generated/typescript/proxy_taskmanager.ts)
+  (file ../lib/contract_generated/typescript/well_transport.ts))
  (mode promote)
  (action (run bun build ts/tasks.ts --outdir . --minify)))
 
@@ -2374,1835 +1607,10 @@ let tsconfig_json =
 }
 |}
 
-let well_skill =
-  {well_skill|---
-name: well
-description: Use when building features, pages, routes, LiveViews, models, or services in a well framework application. Covers MLX syntax, route registration, LiveView patterns, type-safe SQL, contracts, and project conventions.
-user-invocable: true
-allowed-tools: Read, Edit, Write, Bash, Glob, Grep
----
+let well_skill = Template_skills.well
 
-# Well Framework — Comprehensive Reference
-
-You are generating code for a **well** application — a batteries-included, type-safe, server-first OCaml web framework. Single binary deployment, no JavaScript for business logic. Inspired by Phoenix LiveView, Rails, and the OCaml ecosystem.
-
-**Tech stack**: OCaml 5.4 + EIO (fiber-per-connection), MLX for JSX, SQLite (bundled), dune 3.17, bun (frontend assets).
-
-## File Extensions
-
-- `.ml` — pure OCaml (models, queries, logic, services)
-- `.mlx` — OCaml + JSX (pages, components, layouts)
-
----
-
-## MLX Syntax (CRITICAL)
-
-MLX is JSX for OCaml. Children inside JSX tags follow OCaml `simple_expr` grammar:
-
-```ocaml
-(* CORRECT *)
-<div>"literal string"</div>
-<div>variable_name</div>
-<div>(txt "hello")</div>
-<div>(string_of_int count)</div>
-<div>(if cond then <span>"yes"</span> else <span>"no"</span>)</div>
-<Tag prop="value" prop2=variable />
-
-(* WRONG — these are ALL syntax errors *)
-<div>{txt "hello"}</div>     (* {..} is record syntax only! *)
-<div>{string_of_int x}</div> (* use parentheses instead *)
-<div>{42}</div>              (* not expression interpolation *)
-```
-
-Rules:
-- `"string"` — literal string child
-- `identifier` — bare variable
-- `(expr)` — parenthesized expression for function calls, operators, anything complex
-- `{...}` — record expression ONLY (e.g. `{name; age}`) — NOT for interpolation
-
-### MLX Common Pitfalls
-
-- **No `empty` node** — use `(txt "")` when you need to render nothing (e.g. in else branches)
-- **`textarea` children must be `node`** — use `<textarea>(txt value)</textarea>`, NOT `<textarea>value</textarea>` (bare variable is string, not node) and NOT `<textarea>"default"</textarea>` (literal string is also not node)
-- **All attribute values are strings** — use `attrs=[("value", string_of_int n)]` for numbers
-- **All attributes use `attrs=[...]` and `bool_attrs=[...]`** — no labeled attribute params
-
----
-
-## HTML Library (well.html)
-
-Module `Html` — `(wrapped false)`, imported directly.
-
-### Core Types & Functions
-
-```ocaml
-type node = [ `Html of string ]  (* coerces to Well.response via :> *)
-
-val txt : string -> node        (* escaped text — safe *)
-val raw : string -> node        (* raw HTML — unescaped, use with care *)
-val escape_html : string -> string
-val cat : node list -> string   (* concatenate nodes to string *)
-val element_to_string : node -> string
-```
-
-### Tag Functions
-
-All tag functions accept two optional attribute parameters:
-
-- `?attrs:(string * string) list` — all string attributes (class, id, href, data-lv-click, etc.)
-- `?bool_attrs:string list` — all boolean attributes (hidden, disabled, checked, etc.)
-
-Use standard HTML attribute names as strings: `"class"`, `"type"`, `"method"`, `"name"`, `"for"`, `"data-lv-click"`, `"data-lv-submit"`, etc.
-
-```ocaml
-<button
-  attrs=[("class", "btn"); ("data-lv-click", "close");
-         ("aria-label", "Close"); ("data-tooltip", "Dismiss")]
-  bool_attrs=["aria-expanded"]>"X"</button>
-```
-
-**All tags** (full HTML5 coverage):
-- **Document**: `html`, `head`, `title`, `body`, `base`
-- **Sections**: `main`, `header`, `footer`, `nav`, `section`, `article`, `aside`, `address`
-- **Headings**: `h1`–`h6`
-- **Grouping**: `div`, `p`, `pre`, `blockquote`, `figure`, `figcaption`, `hr`, `br`, `wbr`
-- **Lists**: `ul`, `ol`, `li`, `dl`, `dt`, `dd`
-- **Inline**: `span`, `a`, `strong`, `em`, `b`, `i`, `u`, `s`, `small`, `mark`, `del`, `ins`, `sub`, `sup`, `abbr`, `time`, `cite`, `q`, `dfn`, `var`, `samp`, `kbd`, `code`, `data`, `ruby`, `rt`, `rp`, `bdi`, `bdo`
-- **Tables**: `table`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`, `caption`, `colgroup`, `col`
-- **Forms**: `form`, `button`, `input`, `label`, `textarea`, `select`, `option`, `optgroup`, `fieldset`, `legend`, `datalist`, `output`, `progress`, `meter`
-- **Interactive**: `details`, `summary`, `dialog`
-- **Media**: `img`, `video`, `audio`, `source`, `track`, `canvas`, `picture`, `iframe`, `embed`, `object_`, `map`, `area`
-- **Metadata**: `meta`, `link`, `script`, `noscript`, `template`, `slot`
-
-**Void elements** (self-closing): `input`, `img`, `br`, `hr`, `meta`, `link`, `source`, `track`, `embed`, `col`, `area`, `wbr`, `base`
-
-### Form Helpers
-
-```ocaml
-val csrf_input : string -> node
-(* Generates: <input type="hidden" name="_csrf_token" value="token" /> *)
-
-val field_error : (string * string) list -> string -> node
-(* Renders error message for a form field if present in errors list *)
-```
-
-### List Rendering
-
-```ocaml
-(* Render a list of nodes via cat (fragment node): *)
-items |> List.map render_item |> cat
-```
-
----
-
-## Project Structure
-
-```
-myapp/
-├── bin/main.ml                              # Entry point → App.run ()
-├── lib/
-│   ├── app.ml                               # Middleware, services, routes, Well.run ()
-│   ├── events.ml                            # Typed pub/sub topics
-│   ├── layout.mlx                           # Layout component
-│   ├── request_id.ml                        # Request ID context middleware
-│   ├── pages/home_page.mlx                  # Pages.Home_page — routes: Well.get "/" ...
-│   ├── live/counter_live.mlx                # Live.Counter_live — LiveView module
-│   ├── services/note_access_impl.ml         # Services.Note_access_impl
-│   ├── contract/                            # Service contracts (.cyrograf)
-│   └── contract_generated/                  # Generated data + adapters
-├── static/                                  # CSS, JS, assets
-└── test/myapp_test.ml                       # Tests
-```
-
-The app library uses `(include_subdirs qualified)` — subdirectories become submodules (e.g. `Pages.Home_page`, `Live.Counter_live`, `Services.Note_access_impl`).
-
----
-
-## Core Types
-
-```ocaml
-type request = {
-  meth : string;
-  path : string;
-  headers : (string * string) list;
-  body : string;
-  params : (string * string) list;  (* path params *)
-  query : (string * string) list;   (* query string *)
-  session_id : string;
-  _context : (int * Obj.t) list;    (* typed context storage *)
-}
-
-type response = [
-  | `Null | `Bool of bool | `Int of int | `Float of float
-  | `String of string | `Intlit of string
-  | `List of Yojson.Safe.t list | `Assoc of (string * Yojson.Safe.t) list
-  | `Html of string | `Text of string | `Redirect of string
-  | `Custom of custom | `Stream of stream_config
-]
-
-type handler = request -> response
-type middleware = handler -> handler
-
-type uploaded_file = { filename: string; content_type: string; size: int; data: string }
-type fetch_response = { status: int; headers: (string * string) list; body: string }
-```
-
----
-
-## Routing
-
-### Route Registration
-
-```ocaml
-Well.get  : ?middleware:middleware list -> string -> (request -> [< response]) -> unit
-Well.post : ?middleware:middleware list -> string -> (request -> [< response]) -> unit
-Well.put  : ?middleware:middleware list -> string -> (request -> [< response]) -> unit
-Well.delete : ?middleware:middleware list -> string -> (request -> [< response]) -> unit
-Well.ws   : string -> (request -> Websocket.t -> unit) -> unit
-```
-
-Path params via `:param` segments: `"/users/:id"`.
-Wildcard `*name` as last segment catches the rest of the URL:
-`"/files/*path"` → `Well.param req "path"` = `"a/b/c"`.
-`*` must be the last segment (e.g. `"/api/*rest/foo"` is invalid).
-Routes matched in registration order. No match → 404. Handler exception → 500.
-
-### Route Scoping
-
-```ocaml
-Well.scope : ?middleware:middleware list -> string -> (unit -> unit) -> unit
-
-(* Groups routes under a prefix with shared middleware *)
-Well.scope ~middleware:[Well.require_auth ()] "/admin" (fun () ->
-  Well.get "/dashboard" @@ fun req -> (* /admin/dashboard *) ...;
-  Well.get "/users" @@ fun req -> (* /admin/users *) ...
-)
-```
-
-### Response Constructors & Transformers
-
-```ocaml
-Well.html : string -> response
-Well.text : string -> response
-Well.json : Yojson.Safe.t -> response
-Well.redirect : string -> response
-Well.stream : ?content_type:string -> ?status:int -> ?headers:(string*string) list
-           -> ((string -> unit) -> unit) -> response
-
-(* Pipeable transformers — wrap in `Custom *)
-Well.status : int -> response -> response
-Well.header : string -> string -> response -> response
-
-(* Stream a file with chunked transfer *)
-Well.stream_file : ?content_type:string -> ?headers:(string*string) list -> string -> response
-```
-
-Response types coerce automatically:
-- `Html.node` — `<div>...</div>` (text/html)
-- `` `Text "..." `` or `Well.text "..."` (text/plain)
-- `` `Assoc [...] `` or `Well.json (...)` (application/json)
-- `Well.redirect "/path"` (302)
-- Pipeline: `<div/> |> Well.status 201 |> Well.header "X-Custom" "val"`
-
-### Request Helpers
-
-```ocaml
-Well.param : request -> string -> string option      (* path param *)
-Well.query : request -> string -> string option      (* query param *)
-Well.form  : request -> string -> string option      (* form field *)
-Well.form_params : request -> (string * string) list (* all form fields *)
-Well.file  : request -> string -> uploaded_file option (* single file upload *)
-Well.files : request -> string -> uploaded_file list   (* multiple files *)
-Well.all_files : request -> (string * uploaded_file) list
-Well.request_id : request -> string                  (* unique request ID *)
-Well.csrf_token : request -> string                  (* CSRF token for forms *)
-Well.current_user : request -> string option         (* user_id from session *)
-```
-
-### Static Files
-
-```ocaml
-Well.static "/static" "static"
-(* Serves files from "static/" dir at /static/* URL prefix *)
-(* Auto-detects MIME type from extension *)
-```
-
-### Examples
-
-```ocaml
-(* Simple page *)
-Well.get "/about" @@ fun _req ->
-let open Html in
-<Layout title="About">
-  <h1>(txt "About")</h1>
-</Layout>
-
-(* JSON API with path params *)
-Well.get "/users/:id" @@ fun req ->
-let id = Option.value ~default:"" (Well.param req "id") in
-Well.json (`Assoc [("id", `String id)])
-
-(* Form handling *)
-Well.post "/items" @@ fun req ->
-let name = Option.value ~default:"" (Well.form req "name") in
-(* ... process ... *)
-Well.redirect "/items"
-
-(* Wildcard catch-all *)
-Well.get "/files/*path" @@ fun req ->
-let path = Option.value ~default:"" (Well.param req "path") in  (* "docs/readme.txt" *)
-serve_file path
-
-(* Per-route middleware *)
-Well.get ~middleware:[Well.require_auth ()] "/admin" @@ fun req -> ...
-
-(* Streaming response *)
-Well.get "/export" @@ fun _req ->
-Well.stream ~content_type:"text/csv" (fun write ->
-  write "id,name\n";
-  List.iter (fun row -> write (format_csv row)) rows)
-```
-
----
-
-## Layout Component
-
-```ocaml
-(* layout.mlx *)
-let createElement ?title:(page_title = "") ?(children = []) () =
-  let open Html in
-  <html attrs=[("lang", "en")]>
-    <head>
-      <meta attrs=[("charset", "utf-8")] />
-      <title>(txt page_title)</title>
-      <link attrs=[("rel", "stylesheet"); ("href", "/static/app.css")] />
-      (Well.LiveView.live_preconnect_script ())
-    </head>
-    <body>
-      <main>(children |> cat)</main>
-      <script attrs=[("type", "module"); ("src", "/static/well.js")] />
-    </body>
-  </html>
-```
-
-Use in pages: `<Layout title="My Page"><h1>(txt "Hello")</h1></Layout>`
-
----
-
-## LiveView — Server-Side Reactive UI
-
-Elm architecture: model -> update -> view. All state on server, updates via WebSocket.
-
-### VIEW Module Type
-
-Every LiveView module must satisfy this interface:
-
-```ocaml
-module type VIEW = sig
-  type model
-  type msg
-
-  val persistence : persistence      (* Ephemeral | Session | User *)
-
-  val init : request -> Yojson.Safe.t -> model * string list
-    (* Returns (initial_model, subscriptions).
-       Subscriptions are MessageBus channels to auto-subscribe.
-       Dynamic — can depend on init props (e.g. keyed topics). *)
-  val update : request -> model -> msg -> model
-  val handle_params : request -> model -> model  (* URL query param changes *)
-  val view : model -> Html.node
-  val temporary_assigns : model -> model  (* reset data after each render *)
-
-  (* Required — generated by [@@deriving yojson] *)
-  val model_to_yojson : model -> Yojson.Safe.t
-  val model_of_yojson : Yojson.Safe.t -> (model, string) result
-  val msg_of_yojson : Yojson.Safe.t -> (msg, string) result
-end
-```
-
-**Persistence modes**:
-- `Ephemeral` — fresh state per connection
-- `Session` — in-memory per session (survives reconnect, 5 min timeout)
-- `User` — SQLite per user (survives restart, syncs across devices)
-
-### Complete LiveView Example
-
-```ocaml
-(* counter_live.mlx *)
-type model = { count: int } [@@deriving yojson]
-type msg = Increment | Decrement | Reset [@@deriving yojson]
-
-let persistence = Well.LiveView.Ephemeral
-
-let init _req _props = ({ count = 0 }, [])
-(* Returns (model, subscriptions). Empty list = no MessageBus subscriptions. *)
-
-let update _req model = function
-  | Increment -> { count = model.count + 1 }
-  | Decrement -> { count = model.count - 1 }
-  | Reset -> { count = 0 }
-
-let handle_params _req model = model
-let temporary_assigns model = model
-
-let view model =
-  let open Html in
-  <div>
-    <span>(txt (string_of_int model.count))</span>
-    <button attrs=[("data-lv-click", "Increment")]>(txt "+")</button>
-    <button attrs=[("data-lv-click", "Decrement")]>(txt "-")</button>
-  </div>
-```
-
-### Registration & Embedding
-
-**Two steps to create a LiveView page:**
-
-**Step 1.** Register the LiveView module in `lib/app.ml`:
-```ocaml
-Well.live "/counter" (module Live.Counter_live)
-```
-This registers `Live.Counter_live` in the WS view registry under endpoint `"/live/counter"`.
-It does NOT create a GET route — you must create the page yourself.
-
-**Step 2.** Create a GET page that embeds the LiveView using MLX JSX:
-```ocaml
-(* lib/pages/counter_page.mlx *)
-Well.get "/counter" @@ fun _req ->
-  let open Html in
-  <Layout title="Counter">
-    <div>
-      <h1>(txt "Counter")</h1>
-      <Well.LiveView name="counter" />
-    </div>
-  </Layout>
-```
-
-`<Well.LiveView name="counter" />` renders a `<live-view data-liveview="/live/counter">` custom element.
-The `name` becomes the endpoint path: `"/live/" ^ name`.
-
-With props (passed to `init` as `Yojson.Safe.t`):
-```ocaml
-<Well.LiveView name="counter" props=[("initial", "10"); ("step", "5")] />
-```
-
-Multiple LiveViews on one page:
-```ocaml
-<Well.LiveView name="counter" />
-<Well.LiveView name="activity_log" />
-```
-
-**How it works under the hood:**
-1. `Well.live "/counter" (module M)` registers `M` under endpoint `"/live/counter"`
-2. `<Well.LiveView name="counter" />` renders `<live-view data-liveview="/live/counter">`
-3. Client JS discovers `<live-view>` elements on page load
-4. Client connects via WebSocket to `/live` and sends `join` for each endpoint
-5. Server sends initial HTML (`full`), then incremental binary patches on each `msg`
-
-**IMPORTANT**: `Well.live` does NOT create a GET route. You MUST create a page
-with `Well.get` and embed `<Well.LiveView name="..." />` inside it.
-The `name` must match the path from `Well.live` (without leading `/`).
-```
-
-### LiveView Attributes
-
-| Attribute | Description | Wire format |
-|-----------|-------------|-------------|
-| `attrs=[("data-lv-click", "Msg")]` | Click sends msg (no args) | `["Msg"]` |
-| `attrs=[("data-lv-click", {|["Msg","val"]|})]` | Click with payload (JSON array in attr) | `["Msg", "val"]` |
-| `attrs=[("data-lv-submit", "Msg")]` | Form submit (fields as object) | `["Msg", {field: value, ...}]` |
-| `attrs=[("data-lv-change", "Msg")]` | Input change (single value) | `["Msg", input_value]` |
-| `attrs=[("data-lv-debounce", "300")]` | Debounce (ms) | — |
-| `attrs=[("data-lv-throttle", "300")]` | Throttle (ms) | — |
-| `attrs=[("data-lv-navigate", "/path")]` | Live navigation (pushState) | — |
-| `attrs=[("data-lv-patch", "/path?q=x")]` | Update query params only | — |
-| `attrs=[("data-lv-hook", "HookName")]` | Attach JS hook | — |
-
-### Variant encoding (ppx_deriving_yojson)
-
-- `Increment` → `["Increment"]` (JSON array, NOT string)
-- `SetValue of int` → `["SetValue", 42]`
-- `SubmitForm of { name: string; email: string }` → `["SubmitForm", {"name": "...", "email": "..."}]`
-- `` `Incremented (s, n) `` → `["Incremented", "s", 42]`
-
-### Click with payload
-
-`data_lv_click` tries `JSON.parse` on the attribute value. If it parses as an array, it's sent as-is.
-Otherwise the string is wrapped in `["string"]`.
-
-```ocaml
-(* No payload — simple variant *)
-<button attrs=[("data-lv-click", "Increment")]>(txt "+")</button>
-(* sends: ["Increment"] → decoded as: Increment *)
-
-(* With payload — encode JSON array in attribute *)
-<button attrs=[("data-lv-click", Printf.sprintf {|["SetPage", "%s"]|} (Html.escape_html page))]>
-  (txt page)
-</button>
-(* sends: ["SetPage", "cennik.html"] → decoded as: SetPage "cennik.html" *)
-
-(* Static payload — use raw JSON string *)
-<button attrs=[("data-lv-click", {|["SelectTab", "settings"]|})]>(txt "Settings")</button>
-```
-
-### Form submissions (`data_lv_submit`)
-
-The client collects all form inputs into a JSON object and sends `["MsgName", {"field1": "value1", ...}]`.
-Use **inline record variants** for form messages — ppx_deriving_yojson decodes them correctly:
-
-```ocaml
-(* CORRECT — inline record matches form JSON {"author":"...","body":"..."} *)
-type msg =
-  | Increment
-  | SubmitComment of { author: string; body: string }
-[@@deriving yojson]
-
-(* WRONG — tuple variant expects ["SubmitComment", "v1", "v2"] but form sends object *)
-type msg = SubmitComment of string * string [@@deriving yojson]
-```
-
-Input `name` attributes must match record field names:
-```ocaml
-<form attrs=[("data-lv-submit", "SubmitComment")]>
-  <input attrs=[("type", "text"); ("name", "author"); ("placeholder", "Name")] />
-  <textarea attrs=[("name", "body")]>(txt "")</textarea>
-  <button attrs=[("type", "submit")]>(txt "Send")</button>
-</form>
-```
-
-### View Rendering
-
-The `view` function returns HTML that is morphed into the DOM on each update.
-No annotation required — structural changes (if/else, conditional elements) are
-handled automatically by the client-side morphdom algorithm.
-
-```ocaml
-(* Conditional rendering — works fine *)
-let view model =
-  let open Html in
-  <div>
-    (if model.items = [] then
-      <p>(txt "Nothing here")</p>
-    else
-      <div attrs=[("class", "list")]>
-        (each ~id:"items" model.items
-          ~key:(fun item -> string_of_int item.id)
-          (fun item -> ...))
-      </div>)
-  </div>
-```
-
-Tips:
-1. Use `data-lv-key` or `id` on list items for stable element matching
-2. Use `data-lv-ignore` to skip morphing on specific elements
-3. Focused form inputs preserve their value during morphing
-
-### LiveView with Subscriptions (Cross-View Communication)
-
-```ocaml
-(* activity_log_live.mlx — subscribes to events from other LiveViews *)
-type model = { entries: string list } [@@deriving yojson]
-type msg = Events.counter_event [@@deriving yojson]  (* reuse event type *)
-
-(* Subscriptions returned from init — can be dynamic based on props *)
-let init _req _props =
-  ({ entries = [] }, [Well.topic_name Events.counter_event])
-
-let update _req model = function
-  | `Incremented (_, n) -> { entries = (Printf.sprintf "+%d" n) :: model.entries }
-  | `Reset -> { entries = "reset" :: model.entries }
-  | _ -> model
-```
-
-### Server Push to Hooks
-
-```ocaml
-(* Push event from server to a JS hook *)
-Well.LiveView.send_event "topic" "event_name" (`Assoc [("key", `String "val")])
-```
-
-### JS Hooks
-
-```javascript
-// In your JS — hooks run client-side
-Well.hooks.Chart = {
-  mounted() {
-    this.handleEvent("update", (data) => {
-      renderChart(this.el, data);
-    });
-  },
-  updated() { /* DOM was patched */ },
-  destroyed() { /* element removed */ }
-};
-```
-
-### pushLive — Send Messages from External JS
-
-```javascript
-// Send a message to the first LiveView on the page
-well.pushLive(["SetPage", "index.html"]);
-
-// Send to a specific LiveView topic
-well.pushLive(["UpdateFilter", "active"], "/live/dashboard");
-```
-
-### LiveView Uploads
-
-```ocaml
-(* MLX: file input with hook *)
-<input attrs=[("type", "file"); ("data-lv-hook", "FileUpload")] />
-
-(* Server side: consume uploaded file *)
-match Well.LiveView.consume_upload upload_id with
-| Some (filename, content_type, data) ->
-    let oc = open_out_bin ("data/" ^ filename) in output_string oc data; close_out oc
-| None -> ()
-```
-
-### LiveView Search/Filter Example
-
-```ocaml
-(* lib/live/search_live.mlx — the LiveView module *)
-(* Then register: Well.live "/search" (module Search_live) in app.ml *)
-(* And create page: Well.get "/search" with <Well.LiveView name="search" /> *)
-type item = { id: int; name: string } [@@deriving yojson]
-type model = { query: string; results: item list; empty_msg: string } [@@deriving yojson]
-type msg = Search of string [@@deriving yojson]
-
-let persistence = Well.LiveView.Ephemeral
-
-let make_model query =
-  let results = search query in
-  { query; results; empty_msg = if results = [] then "No results" else "" }
-
-let init _req _props = (make_model "", [])
-let update _req _model = function Search q -> make_model q
-let handle_params _req model = model
-let temporary_assigns model = model
-
-let view model =
-  let open Html in
-  <div>
-    <input attrs=[("type", "text"); ("placeholder", "Search..."); ("value", model.query); ("data-lv-change", "Search"); ("data-lv-debounce", "300")] />
-    <p>(txt model.empty_msg)</p>
-    <div>(each ~id:"results" model.results
-      ~key:(fun r -> string_of_int r.id)
-      (fun r -> <div><span>(txt r.name)</span></div>))</div>
-  </div>
-```
-
----
-
-## Type-Safe SQL (well.ppx)
-
-Write normal SQL. Compiler validates it at build time using registered table schemas. No database connection needed at compile time.
-
-### Define Models
-
-```ocaml
-type note = {
-  id : int;
-  title : string;
-  body : string;
-  active : bool;
-  score : float option;  (* nullable column *)
-} [@@deriving table ~name:"notes"]
-```
-
-`[@@deriving table]` generates:
-- `CREATE TABLE IF NOT EXISTS` SQL
-- Schema registration for compile-time validation
-- Auto-migration: `Well.Db.create_pool ()` creates tables + adds new columns
-
-Type mapping: `int`→INTEGER, `float`→REAL, `string`→TEXT, `bool`→INTEGER, `'a option`→nullable
-
-### Define Queries
-
-```ocaml
-let%query all_notes = "SELECT id, title, body FROM notes ORDER BY id DESC"
-let%query insert_note = "INSERT INTO notes (title, body) VALUES (:title, :body)"
-let%query find_note = "SELECT id, title, body FROM notes WHERE id = :id"
-let%query delete_note = "DELETE FROM notes WHERE id = :id"
-let%query search_notes = "SELECT id, title FROM notes WHERE title LIKE :q"
-let%query update_note = "UPDATE notes SET title = :title, body = :body WHERE id = :id"
-
-(* IN (:list) — list parameter, expands to ?,?,? at runtime *)
-let%query notes_by_ids = "SELECT id, title FROM notes WHERE id IN (:ids)"
-(* → Notes_by_ids.query : Sqlite3.db -> ids:int list -> row list *)
-
-(* :param? — optional parameter, binds NULL when None *)
-let%query update_score = "UPDATE notes SET score = :score? WHERE id = :id"
-(* → Update_score.exec : Sqlite3.db -> score:float option -> id:int -> unit *)
-
-(* Mixed: list + optional *)
-let%query filtered = "SELECT id, title FROM notes WHERE id IN (:ids) AND title = :title?"
-```
-
-**Parameter kinds**:
-- `:param` — required, type inferred from column (e.g. `:id` → `int` from `id INTEGER`)
-- `:param?` — optional, binds NULL when None (e.g. `:score?` → `float option`)
-- `IN (:param)` — list, expands to `?,?,?` at runtime (e.g. `IN (:ids)` → `int list`)
-  - Type inferred from comparison column: `id IN (:ids)` → `int list` (from `id INTEGER`)
-  - Empty list → `IN (SELECT NULL WHERE 0)` (matches nothing)
-
-**Generated code**:
-
-For SELECT → module with `type row` + `query`:
-```ocaml
-module All_notes : sig
-  type row = { id: int; title: string; body: string }
-  val sql : string
-  val query : Sqlite3.db -> row list
-end
-
-module Find_note : sig
-  type row = { id: int; title: string; body: string }
-  val sql : string
-  val query : Sqlite3.db -> id:string -> row list  (* :param → ~param labeled arg *)
-end
-```
-
-For INSERT/UPDATE/DELETE → module with `exec`:
-```ocaml
-module Insert_note : sig
-  val sql : string
-  val exec : Sqlite3.db -> title:string -> body:string -> unit
-end
-```
-
-### Database Access Pattern
-
-```ocaml
-(* notes.ml — standard pattern *)
-type note = { id: int; title: string; body: string } [@@deriving table ~name:"notes"]
-let%query all = "SELECT id, title, body FROM notes ORDER BY id DESC"
-let%query insert = "INSERT INTO notes (title, body) VALUES (:title, :body)"
-
-let pool = lazy (Well.Db.create_pool ())
-let with_db f = Well.Db.with_conn (Lazy.force pool) f
-```
-
-Usage:
-```ocaml
-Notes.with_db (fun db ->
-  let notes = Notes.All.query db in
-  Notes.Insert.exec db ~title:"Hello" ~body:"World";
-  ...)
-```
-
-### Well.Db Module
-
-```ocaml
-(* Connection pool — use for concurrent access *)
-Well.Db.create_pool : ?size:int -> ?filename:string -> unit -> Well.Db.pool
-(* Creates pool of N SQLite connections (default 8). Auto-migrates on first use. *)
-
-Well.Db.with_conn : Well.Db.pool -> (Sqlite3.db -> 'a) -> 'a
-(* Borrows a connection from pool, runs f, returns connection *)
-
-Well.Db.close_pool : Well.Db.pool -> unit
-(* Closes all connections in pool *)
-
-(* Single connection — for simple scripts or backward compat *)
-Well.Db.open_db : ?filename:string -> unit -> Sqlite3.db
-
-Well.Db.with_test_db : (Sqlite3.db -> 'a) -> 'a
-(* Opens :memory: SQLite, runs auto_migrate, perfect for tests *)
-
-Well.Db.transaction : Sqlite3.db -> (Sqlite3.db -> 'a) -> 'a
-Well.Db.transaction_result : Sqlite3.db -> (Sqlite3.db -> ('a, string) result) -> ('a, string) result
-
-Well.Db.table_exists : Sqlite3.db -> string -> bool
-Well.Db.diff : Sqlite3.db -> diff_entry list  (* pending migrations *)
-Well.Db.auto_migrate : Sqlite3.db -> unit      (* run manually if needed *)
-Well.Db.backup : string -> unit                (* backup db file *)
-Well.Db.rollback : string -> unit              (* restore from .bak *)
-
-Well.Db.data_dir : string ref  (* default "data", set before create_pool *)
-```
-
-### Dynamic SQL Helpers
-
-When `let%query` PPX can't be used (dynamic WHERE, conditional ORDER BY, etc.),
-use these helpers instead of raw Sqlite3:
-
-```ocaml
-(* Params: Null | Int n | Float f | Text s | Blob s *)
-
-(* SELECT → list with mapper *)
-Well.Db.query db "SELECT id, name FROM users WHERE age > ?"
-  [Int 25]
-  (fun r -> (r.int 0, r.text 1))
-(* : (int * string) list *)
-
-(* SELECT → option (0 or 1 row) *)
-Well.Db.query_one db "SELECT id, name FROM users WHERE id = ?"
-  [Int user_id]
-  (fun r -> (r.int 0, r.text 1))
-(* : (int * string) option *)
-
-(* INSERT/UPDATE/DELETE → affected rows *)
-Well.Db.exec db "DELETE FROM users WHERE active = ?" [Int 0]
-(* : int *)
-
-(* SELECT → Yojson.Safe.t list (works with [@@deriving yojson]) *)
-Well.Db.fetch_yojson db "SELECT id, name FROM users" []
-(* : Yojson.Safe.t list — each row is `Assoc [("id", `Int ...); ...] *)
-```
-
-Row accessors: `r.int`, `r.float`, `r.text`, `r.bool` — and nullable variants
-`r.int_opt`, `r.float_opt`, `r.text_opt`, `r.bool_opt`.
-
-Dynamic query example:
-```ocaml
-let search ?status ~order db =
-  let where, params = match status with
-    | Some s -> "WHERE status = ?", [Well.Db.Text s]
-    | None -> "", []
-  in
-  let sql = Printf.sprintf "SELECT id, title FROM tasks %s ORDER BY %s" where order in
-  Well.Db.query db sql params (fun r -> (r.int 0, r.text 1))
-```
-
----
-
-## Typed Pub/Sub (Well.MessageBus)
-
-Single unified pub/sub system. SQLite-backed (persistent by default), in-memory (ephemeral).
-
-### Typed Topics
-
-```ocaml
-(* types *)
-type 'a topic = { t_channel: string; to_yojson: ...; of_yojson: ... }
-type 'a event = { id: int; value: 'a; created_at: float }
-type 'a keyed_event = { key: string; event: 'a event }
-```
-
-### Define Topics with PPX
-
-```ocaml
-(* events.ml *)
-type counter_event = [`Incremented of string * int | `Decremented of string * int | `Reset]
-[@@deriving yojson, topic]
-(* Generates: val counter_event : counter_event topic *)
-(* Channel name defaults to type name: "counter_event" *)
-
-type echo_cmd = { text: string } [@@deriving yojson, topic ~name:"echo:cmd"]
-(* Custom channel name: "echo:cmd" *)
-```
-
-**Requires** `[@@deriving yojson]` on same type (explicit, not auto-added).
-
-### Core Pub/Sub API
-
-```ocaml
-Well.topic : string -> ('a -> Yojson.Safe.t) -> (Yojson.Safe.t -> ('a, string) result) -> 'a topic
-Well.topic_name : 'a topic -> string
-
-Well.publish : ?ephemeral:bool -> 'a topic -> 'a -> unit
-(* Default: persistent (stored in SQLite). ephemeral: in-memory only *)
-
-Well.subscribe : ?live_only:bool -> 'a topic -> ('a event -> unit) -> int
-(* Returns subscription id. live_only: skipped during replay *)
-
-Well.replay : ?since_id:int -> 'a topic -> ('a event -> unit) -> unit
-(* Replays stored events from SQLite *)
-
-Well.is_replaying : unit -> bool
-Well.prune : int -> unit  (* delete old events *)
-```
-
-### Keyed Topics (channel:key)
-
-For dynamic channels with UUIDs (e.g. command sourcing):
-
-```ocaml
-Well.publish_keyed : ?ephemeral:bool -> 'a topic -> key:string -> 'a -> unit
-(* Publishes to "channel:key" *)
-
-Well.subscribe_keyed : ?live_only:bool -> 'a topic -> ('a keyed_event -> unit) -> int
-(* Subscribes to "channel:*", callback receives { key; event } *)
-```
-
-### Request/Reply Pattern
-
-```ocaml
-Well.request : cmd:'a topic -> reply:'b topic -> key:string -> ?timeout:float -> 'a -> 'b
-(* Blocks fiber (not thread), default timeout 5s, raises Well.Request_timeout *)
-```
-
-Example:
-```ocaml
-(* events.ml *)
-type order_cmd = { items: string list } [@@deriving yojson, topic ~name:"order:cmd"]
-type order_result = { order_id: string } [@@deriving yojson, topic ~name:"order:result"]
-
-(* Manager subscribes to all commands *)
-Well.subscribe_keyed Events.order_cmd (fun kev ->
-  let cmd = kev.event.value in
-  let result = process cmd in
-  Well.publish_keyed ~ephemeral:true Events.order_result ~key:kev.key result)
-
-(* HTTP endpoint sends command, awaits response *)
-Well.post "/orders" @@ fun req ->
-let key = generate_uuid () in
-let result = Well.request ~cmd:Events.order_cmd ~reply:Events.order_result
-               ~key { items = ["x"] } in
-Well.json (order_result_to_yojson result)
-```
-
-### Replay Safety
-
-```ocaml
-(* Always runs — cross-Manager state update *)
-Well.subscribe_keyed Events.order_cmd (fun kev -> process kev.event.value)
-
-(* Only runs live — external side effect (skipped during replay) *)
-Well.subscribe ~live_only:true Events.order_event (fun evt ->
-  External_api.sync evt.value)
-(* All publish calls during replay are automatically ephemeral *)
-```
-
-### LiveView Subscriptions
-
-```ocaml
-(* In LiveView module — subscriptions returned from init *)
-let init _req _props =
-  (initial_model, [Well.topic_name Events.counter_event])
-type msg = Events.counter_event [@@deriving yojson]
-(* Events arrive as msg in update function *)
-```
-
-### Low-Level MessageBus (Untyped)
-
-```ocaml
-Well.MessageBus.publish : ?ephemeral:bool -> string -> Yojson.Safe.t -> int
-Well.MessageBus.subscribe : ?live_only:bool -> string -> (event -> unit) -> int
-(* Supports wildcard: "orders/*" matches "orders/new", "orders/cancel" *)
-Well.MessageBus.unsubscribe : int -> unit
-Well.MessageBus.once : string -> (event -> unit) -> int  (* auto-unsubscribe after first *)
-Well.MessageBus.replay : ?since_id:int -> string -> (event -> unit) -> unit
-```
-
----
-
-## Channels — Authorized WS Gateway
-
-Client-facing WebSocket pub/sub with authorization. Runs on `/ws`.
-
-```ocaml
-Well.Channel.channel : string -> (request -> string -> (join_result, string) result) -> unit
-
-(* Example: authorize room access *)
-Well.Channel.channel "room:*" (fun req topic ->
-  match Well.current_user req with
-  | Some _ -> Ok { subscribe = [topic] }
-  | None -> Error "unauthorized")
-```
-
-Client-side (TypeScript):
-```javascript
-const ch = well.channel("room:general");
-ch.on("message", (payload) => console.log(payload));
-ch.push("send", { text: "hello" });
-ch.leave();
-```
-
-WS protocol: `join/leave/push` (C→S), `ok/error/event` (S→C).
-
----
-
-## Middleware
-
-### Built-in Middleware
-
-```ocaml
-Well.use : middleware -> unit  (* register global middleware *)
-
-(* Available middleware *)
-Well.error_handler : middleware    (* catches exceptions, returns 500 *)
-Well.logger : middleware           (* request logging *)
-Well.csrf : middleware             (* CSRF token validation *)
-Well.session_middleware : middleware (* session cookie management — auto-registered *)
-
-Well.rate_limit : max_requests:int -> window_ms:int -> unit -> middleware
-Well.cors : origins:string list -> ?methods:string list -> ?headers:string list
-         -> ?max_age:int -> unit -> middleware
-Well.require_auth : ?login_path:string -> unit -> middleware  (* redirects to login *)
-Well.basic_auth : check:(string -> string -> bool) -> ?realm:string -> unit -> middleware
-Well.allowed_hosts : hosts:string list -> unit -> middleware
-Well.secure_headers : ?csp:string -> ?frame_options:string -> ?content_type_options:string
-                   -> ?referrer_policy:string -> ?hsts:string -> unit -> middleware
-```
-
-### Custom Middleware
-
-```ocaml
-Well.use (fun next req ->
-  (* before handler *)
-  let resp = next req in
-  (* after handler *)
-  resp)
-```
-
-### Per-Route and Scoped Middleware
-
-```ocaml
-(* Per-route *)
-Well.get ~middleware:[Well.require_auth ()] "/admin" @@ fun req -> ...
-
-(* Scoped *)
-Well.scope ~middleware:[Well.require_auth ()] "/admin" (fun () ->
-  Well.get "/dashboard" @@ fun req -> ...;
-  Well.get "/settings" @@ fun req -> ...
-)
-```
-
----
-
-## Sessions
-
-SQLite-backed, thread-safe session store.
-
-```ocaml
-Well.Session.get : session_id:string -> key:string -> string option
-Well.Session.set : session_id:string -> key:string -> value:string -> unit
-Well.Session.delete : session_id:string -> key:string -> unit
-Well.Session.clear : session_id:string -> unit
-Well.session_regenerate : request -> (request * (response -> response))
-(* Returns new request + response transformer that sets new cookie *)
-```
-
-### Flash Messages
-
-```ocaml
-Well.put_flash : request -> string -> string -> unit
-Well.get_flash : request -> string -> string option
-
-(* Usage *)
-Well.put_flash req "success" "Item created!";
-let msg = Well.get_flash req "success"  (* string option *)
-```
-
----
-
-## Request Context (Well.Context)
-
-Type-safe, per-request context via functor. Each context type gets a unique slot.
-
-```ocaml
-module type CONTEXT = sig
-  type t
-  val empty : t
-end
-
-module Ctx = Well.Context(struct
-  type t = string
-  let empty = ""
-end)
-
-(* In middleware: set *)
-let middleware : Well.middleware = fun next req ->
-  next (Ctx.set "value" req)
-
-(* In handler: get *)
-let value = Ctx.get req
-```
-
----
-
-## Auth (Well.Auth) — Password-Based Authentication
-
-PBKDF2-SHA256, 100k iterations. Stored in `data/well.sqlite`.
-
-```ocaml
-type user = {
-  id: int; email: string; first_name: string; last_name: string;
-  language: string; phone_number: string; is_archived: bool; created_at: string
-}
-
-(* User management *)
-Well.Auth.register : email:string -> password:string -> ?first_name:string -> ?last_name:string -> unit -> (user, string) result
-Well.Auth.login : email:string -> password:string -> ?ip:string -> unit -> (user, string) result
-Well.Auth.get_user : int -> user option
-Well.Auth.edit_profile : id:int -> ?first_name:string -> ?last_name:string -> ?language:string -> ?phone_number:string -> unit -> (unit, string) result
-Well.Auth.archive_user : id:int -> is_archived:bool -> unit -> unit
-Well.Auth.find_users : ?current:int -> ?ids:int list -> ?email:string -> ?include_archived:bool -> unit -> user list
-
-(* Session integration *)
-Well.Auth.login_and_set_session : request -> email:string -> password:string -> (user, string) result
-Well.Auth.logout : request -> unit
-
-(* OTP *)
-Well.Auth.initiate_otp : email:string -> unit -> (string, string) result  (* returns code; does not check user exists *)
-Well.Auth.verify_otp : email:string -> code:string -> ?ip:string -> unit -> (user, string) result  (* existing user only *)
-
-(* User settings — JSON blob per user *)
-Well.Auth.get_settings : user_id:int -> unit -> Yojson.Safe.t option
-Well.Auth.set_settings : user_id:int -> settings:Yojson.Safe.t -> unit -> unit
-
-(* Brute-force protection *)
-Well.Auth.reset_attempts : email:string -> unit -> unit
-Well.Auth.configure : ?login_failures_limit:int -> ?login_failure_window_seconds:int -> ?otp_lifetime_seconds:int -> ... -> unit -> unit
-
-(* Grants — flat permission system *)
-Well.Auth.grant : user_id:int -> string -> unit
-Well.Auth.revoke : user_id:int -> string -> unit
-Well.Auth.has_grant : user_id:int -> string -> bool
-Well.Auth.user_grants : user_id:int -> string list
-
-(* Handler wrapper — checks grant, raises Auth_denied *)
-Well.Auth.require_grant : string -> (request -> 'a) -> (request -> 'a)
-```
-
-Example:
-```ocaml
-(* Login page *)
-Well.post "/login" @@ fun req ->
-let email = Option.value ~default:"" (Well.form req "email") in
-let password = Option.value ~default:"" (Well.form req "password") in
-match Well.Auth.login_and_set_session req ~email ~password with
-| Ok _user -> Well.redirect "/"
-| Error msg -> render_login_page ~error:msg
-
-(* Logout *)
-Well.post "/logout" @@ fun req ->
-  Well.Auth.logout req;
-  Well.redirect "/login"
-
-(* Protected route with grant check *)
-Well.get "/admin" @@ Well.Auth.require_grant "admin" (fun req -> ...)
-
-(* Check current user in handler *)
-let user_id = Well.current_user req  (* reads "user_id" from session *)
-```
-
----
-
-## OAuth (Well.OAuth) — Social Login
-
-OAuth 2.0 with PKCE for Google, GitHub, Microsoft, Facebook. Stored in `data/well.sqlite` (_well_oauth_identities table).
-
-```ocaml
-type provider_config
-
-(* Pre-configured providers *)
-Well.OAuth.google    : client_id:string -> client_secret:string -> provider_config
-Well.OAuth.github    : client_id:string -> client_secret:string -> provider_config
-Well.OAuth.microsoft : client_id:string -> client_secret:string -> provider_config
-Well.OAuth.facebook  : client_id:string -> client_secret:string -> provider_config
-
-(* Setup — registers /auth/:provider and /auth/:provider/callback routes *)
-Well.OAuth.setup : base_url:string -> provider_config list -> unit
-
-(* Query configured providers (for rendering login buttons) *)
-Well.OAuth.configured_providers : unit -> string list
-
-(* Get linked identities for a user *)
-Well.OAuth.user_identities : user_id:int -> (string * string) list
-```
-
-Setup in `lib/app.ml` (reads from env vars):
-```ocaml
-let oauth_providers = List.filter_map Fun.id [
-  (match Sys.getenv_opt "GOOGLE_CLIENT_ID", Sys.getenv_opt "GOOGLE_CLIENT_SECRET" with
-   | Some id, Some secret -> Some (Well.OAuth.google ~client_id:id ~client_secret:secret)
-   | _ -> None);
-  (* same for GITHUB_, MICROSOFT_, FACEBOOK_ *)
-] in
-if oauth_providers <> [] then
-  Well.OAuth.setup ~base_url:"https://myapp.com" oauth_providers;
-```
-
-Env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`,
-`MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `FACEBOOK_CLIENT_ID`, `FACEBOOK_CLIENT_SECRET`, `BASE_URL`.
-
-Security: PKCE S256 on all providers, state bound to session (single-use, 10-min expiry, constant-time compare), session regeneration after login, verified-email-only account linking.
-
----
-
-## Form Validation (Well.Form)
-
-Applicative form validation with chainable validators.
-
-```ocaml
-type 'a t = { field: string; value: 'a option; errors: (string * string) list }
-
-Well.Form.get : (string * string) list -> string -> string t
-Well.Form.trim : string t -> string t
-Well.Form.required : 'a t -> 'a t
-Well.Form.min_length : int -> string t -> string t
-Well.Form.max_length : int -> string t -> string t
-Well.Form.format_ : string -> string t -> string t  (* regex pattern *)
-Well.Form.number : string t -> int t
-Well.Form.decimal : string t -> float t
-Well.Form.custom : ('a -> string option) -> 'a t -> 'a t
-Well.Form.validate : 'a t -> ('a, (string * string) list) result
-
-(* Applicative operators *)
-val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
-val ( and+ ) : 'a t -> 'b t -> ('a * 'b) t
-```
-
-Example:
-```ocaml
-let open Well.Form in
-let params = Well.form_params req in
-let result =
-  let+ title = get params "title" |> trim |> required |> min_length 3
-  and+ email = get params "email" |> trim |> required |> format_ ".*@.*\\..*"
-  and+ age = get params "age" |> required |> number in
-  (title, email, age)
-  |> validate
-in
-match result with
-| Ok (title, email, age) -> (* process *)
-| Error errors ->
-  (* errors: (string * string) list — [(field_name, error_message); ...] *)
-  (* Use Html.field_error errors "title" to render error messages *)
-```
-
----
-
-## Mailer (Well.Mailer)
-
-Multi-adapter email system.
-
-```ocaml
-type adapter =
-  | Log                                              (* prints to stdout *)
-  | SMTP of { host: string; port: int; username: string; password: string }
-  | Resend of { api_key: string }
-  | Zeptomail of { api_url: string; token: string }
-  | SES of { region: string; access_key_id: string; secret_access_key: string }
-
-type mail = { to_: (string * string) list; subject: string; html: string; text: string }
-
-Well.Mailer.setup : { from_email: string; from_name: string; adapter: adapter } -> unit
-Well.Mailer.send : mail -> (unit, string) result
-```
-
-Example:
-```ocaml
-Well.Mailer.setup { from_email = "noreply@example.com"; from_name = "MyApp"; adapter = Log };
-
-match Well.Mailer.send {
-  to_ = [("User", "user@example.com")];
-  subject = "Welcome!";
-  html = "<h1>Hello</h1>";
-  text = "Hello";
-} with
-| Ok () -> ()
-| Error msg -> Well.log ~level:"error" "Mail error: %s" msg
-```
-
----
-
-## HTTP Client (Well.fetch)
-
-```ocaml
-Well.fetch : ?method_:string -> ?headers:(string*string) list -> ?body:string
-          -> string -> fetch_response
-
-(* fetch_response = { status: int; headers: (string * string) list; body: string } *)
-
-(* GET *)
-let resp = Well.fetch "https://api.example.com/data" in
-Printf.printf "Status: %d\n" resp.status
-
-(* POST with JSON body *)
-let resp = Well.fetch ~method_:"POST"
-  ~headers:[("Content-Type", "application/json")]
-  ~body:{|{"key":"value"}|}
-  "https://api.example.com/data" in
-```
-
----
-
-## S3 Storage (Well.S3)
-
-AWS S3 client with Signature V4 authentication.
-
-```ocaml
-Well.S3.connect : ?endpoint_url:string -> ?region:string -> ?access_key_id:string
-               -> ?secret_access_key:string -> ?bucket:string -> unit -> S3.t
-(* Reads from env: AWS_ENDPOINT_URL, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET *)
-
-Well.S3.put : S3.t -> key:string -> data:string -> (unit, string) result
-Well.S3.get : S3.t -> key:string -> (string, string) result
-Well.S3.delete : S3.t -> key:string -> (unit, string) result
-Well.S3.list : S3.t -> prefix:string -> (string list, string) result
-Well.S3.head : S3.t -> key:string -> (int, string) result  (* returns size *)
-Well.S3.presigned_url : S3.t -> method_:string -> key:string -> ?expires_in_secs:int -> unit -> string
-Well.S3.create_bucket : S3.t -> (unit, string) result
-```
-
-Example:
-```ocaml
-let s3 = Well.S3.connect ~bucket:"my-bucket" () in
-match Well.S3.put s3 ~key:"photos/cat.jpg" ~data:image_data with
-| Ok () -> ()
-| Error msg -> failwith msg;
-
-let url = Well.S3.presigned_url s3 ~method_:"GET" ~key:"photos/cat.jpg" ~expires_in_secs:3600 ()
-```
-
----
-
-## Service Contracts (.cyrograf)
-
-Define service interfaces in `.cyrograf` (owned by Cyrograf), then generate
-OCaml + TypeScript + Go + Dart. Plain TOML stays a Cyrograf compatibility
-input, but a module must have exactly one definition in `lib/contract/`.
-
-```
-lib/contract/TaskAccess.cyrograf
-lib/contract_generated/          # output; produced by dune build
-  ocaml/            (contract_data)          ocaml_js/  (contract_data_browser)
-  adapters/         (contract)               adapters_browser/ (contract_browser)
-  typescript/       (wire codecs + Proxy)    manifest.json  schema.json
-```
-
-```cyrograf
-// lib/contract/TaskAccess.cyrograf
-struct Task {
-  id: Int
-  title: String
-  completed: Bool
-}
-
-struct ListReq {
-  limit: Int
-}
-
-struct CreateReq {
-  title: String
-}
-
-struct TaskList {
-  tasks: List<Task>
-}
-
-rpc list(ListReq) -> TaskList
-rpc create(CreateReq) -> Task
-```
-
-Build: `dune build` regenerates `lib/contract_generated` (or run
-`well contract build lib/contract lib/contract_generated` explicitly).
-The generated type lives in the data library (`Contract_data.Task_access`),
-while the adapter module owns `IMPL`, `make_spec` and the `~ctx` callers.
-
-Implement:
-```ocaml
-module Impl : Task_access.IMPL = struct
-  let list _ctx (_req : Contract_data.Task_access.ListReq.t) =
-    Contract_data.Task_access.TaskList.make ~tasks ()
-
-  let create _ctx (req : Contract_data.Task_access.CreateReq.t) =
-    Contract_data.Task_access.Task.make ~id ~title:req.title ~completed:false ()
-end
-
-let spec = Task_access.make_spec (module Impl)
-```
-
-Register in `lib/app.ml`:
-```ocaml
-Well.Service.register_drut Services.Task_access_impl.spec;
-Well.Service.expose "TaskAccess";  (* creates /rpc/TaskAccess/* HTTP routes *)
-```
-
-Public message conversions are only `to_drut`/`from_drut`; do not add another
-codec or parse JSON before the generated decoder.
-
-### Service Module
-
-```ocaml
-Well.Service.register : spec -> unit  (* concurrent, stateless *)
-Well.Actor.register : ?restart:restart -> spec -> unit  (* sequential, stateful *)
-(* restart: Permanent (always restart) | Transient (restart on error) | Temporary (no restart) *)
-
-Well.Service.expose : string -> unit  (* expose as HTTP RPC *)
-Well.Service.list_services : unit -> (string * string list) list
-Well.Service.full_health : unit -> (string * string) list
-Well.Service.cast : (unit -> unit) -> unit  (* fire-and-forget async *)
-```
-
-### Periodic Background Tasks
-
-```ocaml
-Well.every ~name:"kicker" ~sleep:5.0 (fun () ->
-  (* runs in loop: execute → sleep 5s → execute → ... *)
-  (* crashes are logged, loop continues *)
-  (* cancelled automatically on shutdown *)
-)
-```
-
-Register before `Well.run` (like routes). Each task runs in its own EIO fiber.
-
----
-
-## WebSocket (Raw)
-
-For custom WebSocket handlers (not LiveView or Channel).
-
-```ocaml
-Well.ws "/ws/custom" (fun req ws ->
-  (* ws : Websocket.t *)
-  match Websocket.receive ws with
-  | Some msg ->
-    Websocket.send ws ("echo: " ^ msg);
-    Websocket.send_json ws (`Assoc [("type", `String "ack")])
-  | None -> ()  (* connection closed *)
-)
-```
-
-```ocaml
-Websocket.receive : t -> string option
-Websocket.receive_json : t -> Yojson.Safe.t option
-Websocket.send : t -> string -> unit
-Websocket.send_json : t -> Yojson.Safe.t -> unit
-Websocket.close : t -> unit
-Websocket.is_open : t -> bool
-```
-
----
-
-## File I/O
-
-Use standard OCaml / EIO for file operations:
-
-```ocaml
-Sys.file_exists : string -> bool
-Sys.readdir : string -> string array
-Sys.mkdir : string -> int -> unit
-(* For writing: open_out_bin / output_string / close_out *)
-(* For reading: open_in_bin / really_input_string / close_in *)
-Well.ext_to_mime : string -> string  (* "jpg" → "image/jpeg" *)
-```
-
----
-
-## Logging
-
-```ocaml
-Well.log : ?level:string -> ?ctx:(string*string) list -> ('a, unit, string) format -> 'a
-
-Well.log "Server started on port %d" port;
-Well.log ~level:"error" "Failed: %s" msg;
-Well.log ~level:"debug" ~ctx:[("user_id", uid)] "Action performed";
-```
-
-Levels: `debug`, `info` (default), `warn`, `error`. Logs to stdout + `data/well.log` with rotation (10MB, 5 files).
-
----
-
-## Configuration
-
-```ocaml
-Well.max_body_size : int -> unit       (* max request body *)
-Well.keep_alive_timeout : float -> unit
-Well.request_timeout : float -> unit
-Well.ws_rate_limit : float -> unit
-Well.ws_max_frame_size : int -> unit   (* default 10MB *)
-Well.max_upload_size : int -> unit
-Well.dev_mode : bool -> unit           (* enables dev error pages *)
-Well.on_error : (exn -> request -> response) -> unit  (* custom error handler *)
-```
-
----
-
-## Server
-
-```ocaml
-Well.run : ?port:int -> ?workers:int -> ?cert:string -> ?key:string
-        -> ?domain:string -> ?acme_staging:bool -> ?disable_cap:bool -> unit -> unit
-(* Default: port 4000, listens 0.0.0.0. Blocks forever. *)
-(* ~cert/~key: PEM files for manual TLS *)
-(* ~domain: enables Let's Encrypt auto-TLS (mutually exclusive with cert/key) *)
-(* ~acme_staging: use LE staging for testing *)
-(* ~disable_cap: disable Cap admin panel *)
-(* ~workers: bounded Eio domain count for request dispatch; 0 = recommended CPU count *)
-
-Well.with_test_server : ?port:int -> ?disable_cap:bool -> ?workers:int -> (int -> 'a) -> 'a
-(* Starts server on random port, passes port to function
-   (same dispatch pool as Well.run) *)
-```
-
-### Auto-TLS (Let's Encrypt)
-
-```ocaml
-Well.run ~domain:"myapp.example.com" ~port:443 ()
-(* Automatically provisions certificate via HTTP-01 challenge *)
-(* Stores certs in data/certs/ *)
-```
-
-### Well.Env — EIO Environment Access
-
-```ocaml
-Well.env : unit -> Eio_unix.Stdenv.base  (* full EIO env, set by Well.run *)
-Well.net : unit -> _ Eio.Net.t           (* network *)
-Well.clock : unit -> float Eio.Time.clock (* monotonic clock *)
-Well.cwd : unit -> _ Eio.Path.t          (* working directory *)
-Well.fs : unit -> _ Eio.Path.t           (* filesystem root *)
-
-Well.Env.sleep : float -> unit                    (* sleep seconds *)
-Well.Env.with_timeout : float -> (unit -> 'a) -> 'a  (* timeout in seconds *)
-Well.Env.domain_mgr : unit -> _ Eio.Domain_manager.t
-```
-
-Available inside `Well.run` (and route handlers, services, actors). Avoids passing `env` through every function.
-
----
-
-## Testing
-
-### Test Framework (Well_test)
-
-```ocaml
-open Well_test
-
-describe : ?timeout:float -> string -> (unit -> unit) -> unit
-it : ?timeout:float -> string -> (unit -> unit) -> unit   (* alias: test *)
-skip : string -> (unit -> unit) -> unit
-default_timeout : float -> unit   (* global default, initially 5s *)
-
-before_each : (unit -> unit) -> unit
-after_each : (unit -> unit) -> unit
-before_all : (unit -> unit) -> unit
-after_all : (unit -> unit) -> unit
-
-expect : 'a -> expectation
-not_ : expectation -> expectation
-
-(* Matchers *)
-to_equal_string : string -> expectation -> unit
-to_equal_int : int -> expectation -> unit
-to_equal_float : ?epsilon:float -> float -> expectation -> unit
-to_equal_bool : bool -> expectation -> unit
-to_be_true / to_be_false : expectation -> unit
-to_be_some / to_be_none : expectation -> unit
-to_be_greater_than / to_be_less_than : int -> expectation -> unit
-to_contain : string -> expectation -> unit       (* substring *)
-to_match : string -> expectation -> unit         (* regex *)
-to_have_length : int -> expectation -> unit      (* list *)
-to_raise : expectation -> unit
-to_raise_with : string -> expectation -> unit
-to_match_snapshot : expectation -> unit          (* snapshot testing *)
-
-run : ?filter:string option -> ?ci_mode:bool -> ?source_file:string -> unit -> run_result
-exit_with_result : run_result -> unit
-```
-
-### Database Tests
-
-```ocaml
-it "creates a note" (fun () ->
-  Well.Db.with_test_db (fun db ->
-    Notes.Insert.exec db ~title:"Test" ~body:"Body";
-    let notes = Notes.All.query db in
-    expect (List.length notes) |> to_equal_int 1
-  )
-);
-```
-
-### Integration Tests
-
-```ocaml
-it "serves homepage" (fun () ->
-  Well.with_test_server (fun port ->
-    let url = Printf.sprintf "http://localhost:%d/" port in
-    let resp = Well.fetch url in
-    expect resp.body |> to_contain "Welcome"
-  )
-);
-```
-
-### Snapshot Testing
-
-```ocaml
-it "renders correctly" (fun () ->
-  let html = element_to_string (render_page ()) in
-  expect html |> to_match_snapshot
-);
-(* Snapshots stored in __snapshots__/*.snap alongside test file *)
-(* Update: WELL_UPDATE_SNAPSHOTS=1 or well test -u *)
-(* IMPORTANT: run ~source_file:__FILE__ () — needed for snapshot location *)
-```
-
-### Timeouts
-
-Default: 5 seconds per test. Cascade: `it ~timeout` > `describe ~timeout` > global default.
-
-```ocaml
-(* Override global default *)
-let () = default_timeout 30.0
-
-(* Suite-level — all tests in this describe get 10s *)
-describe ~timeout:10.0 "database" (fun () ->
-  it "migrates" (fun () -> ...);              (* 10s from describe *)
-  it ~timeout:60.0 "imports CSV" (fun () -> ...);  (* 60s override *)
-);
-```
-
-On timeout: test fails with `"Timeout: test exceeded 5.0s limit"`.
-
----
-
-## RPC Context
-
-For service-to-service calls with user context:
-
-```ocaml
-type rpc_ctx = {
-  session_id: string; request_id: string;
-  user_id: string option; user_name: string option; locale: string
-}
-
-Well.rpc_ctx : request -> rpc_ctx
-Well.rpc_ctx_to_wire : rpc_ctx -> Yojson.Safe.t  (* JSON array format *)
-Well.rpc_ctx_of_wire : Yojson.Safe.t -> rpc_ctx
-```
-
----
-
-## Telemetry (Well.Telemetry)
-
-```ocaml
-Well.Telemetry.snapshot_counters : unit -> counter_snapshot
-(* { total_requests; errors_5xx; avg_latency_us; ws_messages; bus_events } *)
-
-Well.Telemetry.requests_per_sec : unit -> float
-Well.Telemetry.cpu_percent : unit -> float
-Well.Telemetry.rss_kb : unit -> int
-Well.Telemetry.system_snapshot : unit -> system_snapshot
-```
-
----
-
-## URL Encoding
-
-```ocaml
-Well.url_encode : string -> string  (* "hello world" → "hello%20world" *)
-Well.url_decode : string -> string
-```
-
----
-
-## Deployment
-
-Well apps are single-binary deployments. The scaffold generates a `.service` file for systemd.
-
-### `well build` — Production build with bundled libraries
-
-```bash
-well build    # requires: patchelf (pacman -S patchelf / apt install patchelf)
-```
-
-1. Runs `dune build` (app agents must call this via `well build` / `make build`, never raw `dune build`)
-2. Auto-discovers all shared libraries via `ldd`
-3. Copies binary + all `.so` to `_release/`
-4. Runs `patchelf` — sets interpreter to `bin/lib/ld-linux-*.so` and rpath to `$ORIGIN/lib`
-5. Copies `static/` if present, creates `data/` directory
-
-Output:
-```
-_release/
-  bin/myapp          # relocatable binary (patchelf'd)
-  bin/lib/           # all bundled .so (libc, libsqlite3, libgmp, libz, ...)
-  static/            # CSS, JS, assets
-  data/              # runtime databases (created empty)
-```
-
-Run locally: `cd _release && ./bin/myapp`
-
-### `well release` — Create deployable archive
-
-```bash
-well release    # runs well build, then creates .tar.gz
-```
-
-Creates `myapp.tar.gz` — a single archive ready to deploy:
-```bash
-scp myapp.tar.gz server:/srv/myapp/
-ssh server "cd /srv/myapp && tar xzf myapp.tar.gz && ./bin/myapp"
-```
-
-### Server setup
-
-**Directory structure on server:**
-```
-/srv/myapp/
-  bin/myapp              # relocatable binary (patchelf'd)
-  bin/lib/               # bundled .so
-  data/                  # SQLite databases (app.sqlite, well.sqlite)
-  data/certs/            # auto-TLS certificates (managed by Well)
-  static/                # CSS, JS, assets
-```
-
-The generated `.service` file uses `WorkingDirectory=/srv/myapp` and `ReadWritePaths=/srv/myapp/data`.
-
-**HTTPS**: Use `Well.run ~domain:"myapp.example.com" ~port:443 ()` — auto-provisions Let's Encrypt
-certificate via HTTP-01 challenge, stores certs in `data/certs/`, auto-renews. No nginx/reverse proxy needed.
-The server also listens on port 80 for ACME challenges and HTTP→HTTPS redirects.
-
----
-
-## CLI Commands
-
-```bash
-well init <name>              # Scaffold new project
-well build                    # Production build (dune + patchelf + bundle .so → _release/)
-well release                  # Build + create .tar.gz archive for deployment
-well test [-w] [-f pat] [--jobs n] [-u]  # Run tests (watch, filter, concurrency, snapshots)
-well docs [--open] [-o dir]   # Generate HTML documentation from (** *) comments
-well contract build          # Generate contracts (default lib/contract -> lib/contract_generated)
-well db diff                  # Show pending schema migrations
-well db rollback [path]       # Restore from .bak backup
-well repl [-s socket] [-e expr]  # Interactive service query shell
-```
-
-### REPL Syntax
-
-```
-Service.method param:value      # Call RPC
-let x = Service.method ...      # Bind result
-x.field                         # Field access
-expr | map .field               # Pipeline: map, filter, count, first, sort
-"hello {x.name}"                # String interpolation
-```
-
----
-
-## Client-Side TypeScript (well.ts)
-
-Compiled by bun to `well.js`. Auto-initializes as `window.well`.
-
-**Build**: `static/dune` has rules that run `bun build` with `(mode promote)` — output JS lands in source tree.
-Just run `make build` (`well build`) to rebuild TS. Never raw `dune build`. Add new `.ts` files by adding a `(rule ...)` to `static/dune`:
-```lisp
-(rule
- (targets my-script.js)
- (deps (source_tree ts))       ; if importing from ts/ subdirectory
- (mode promote)
- (action (run bun build ts/my-script.ts --outdir . --minify)))
-```
-
-### LiveView (automatic)
-
-Discovers `<live-view>` elements, manages WebSocket connection on `/live`.
-Event delegation: `data-lv-click`, `data-lv-submit`, `data-lv-change`, etc.
-
-### Channel API
-
-```javascript
-const ch = well.channel("room:general");
-ch.on("message", (payload) => { /* handle */ });
-ch.push("send", { text: "hello" });
-ch.leave();
-```
-
-### JS Hooks
-
-```javascript
-Well.hooks.MyHook = {
-  mounted() {
-    // this.el — DOM element
-    // this.pushEvent("event", payload) — send to server
-    // this.handleEvent("event", (data) => { ... }) — receive from server
-  },
-  updated() { /* after DOM patch */ },
-  destroyed() { /* cleanup */ }
-};
-```
-
-### File Upload Hook (built-in)
-
-```html
-<input type="file" data-lv-hook="FileUpload" />
-```
-Automatically uploads via base64 chunks over WebSocket.
-
----
-
-## Forms & File Upload
-
-```ocaml
-(* URL-encoded form data *)
-let title = Option.value ~default:"" (Well.form req "title") in
-let all_params = Well.form_params req in
-
-(* CSRF token in forms — REQUIRED for POST *)
-<form attrs=[("action", "/submit"); ("method", "POST")]>
-  (csrf_input (Well.csrf_token req))
-  <input attrs=[("type", "text"); ("name", "title")] />
-  <button attrs=[("type", "submit")]>(txt "Submit")</button>
-</form>
-
-(* Textarea — children must be node, not bare string *)
-<textarea attrs=[("name", "body")]>(txt "")</textarea>
-<textarea attrs=[("name", "body")]>(txt some_variable)</textarea>
-
-(* File upload — multipart *)
-Well.post "/upload" @@ fun req ->
-match Well.file req "file" with
-| None -> Well.redirect "/upload"
-| Some f ->
-    let oc = open_out_bin ("data/uploads/" ^ f.filename) in
-    output_string oc f.data; close_out oc;
-    Well.redirect "/upload"
-
-(* Multiple files *)
-let all = Well.files req "files" in  (* uploaded_file list *)
-let everything = Well.all_files req in  (* (string * uploaded_file) list *)
-```
-
----
-
-## Route Introspection
-
-```ocaml
-Well.list_routes : unit -> (string * string * string) list
-(* Returns [(method, path, kind)] where kind = "handler" | "liveview" | "websocket" | "cap" *)
-```
-
----
-
-## Cap Admin Panel
-
-Built-in admin dashboard at `/_cap/`. Default login: `cap` / `admin`.
-
-Disable with `Well.run ~disable_cap:true ()`.
-
-Features: system stats, request telemetry, log viewer with filtering, route list, WebSocket connections, user management.
-
----
-
-## Companion Skills
-
-When working on this project, use these companion skills for specialized decisions:
-
-- **idesign-architecture**: Use for ALL architectural decisions — decomposing the system into services, deciding where code should live, reviewing layer violations, designing service contracts. Routes/LiveViews (client layer) must NEVER call access layer directly — always go through a manager.
-- **frontend-design**: Use when building or improving UI — pages, components, layouts, styling. Produces distinctive, production-grade interfaces instead of generic HTML.
-
-Services must hide internal functions using `open struct ... end`. Only the contract-defined interface should be public.
-
----
-
-## Common Patterns Checklist
-
-When adding a new feature, you typically need:
-
-1. **Static page**: Create `lib/pages/feature_page.mlx` with `Well.get "/path" @@ fun req -> ...`
-2. **With data**: Create model file with `[@@deriving table]` + `let%query` + `let pool = lazy (Well.Db.create_pool ())`
-3. **LiveView**: Create `lib/live/feature_live.mlx` with `model`/`msg` types + `[@@deriving yojson]` + all VIEW fields. Register with `Well.live "/feature" (module Live.Feature_live)` in `lib/app.ml`. Then create a GET page that embeds `<Well.LiveView name="feature" />`. Both steps are required — `Well.live` only registers the WS handler, not the page.
-4. **Pub/Sub**: Define event types in `events.ml` with `[@@deriving yojson, topic]`, publish/subscribe in handlers or LiveViews
-5. **Service**: add a `.cyrograf` contract under `lib/contract/`, run `well contract build` (or `dune build`), implement the `IMPL` module, register with `Well.Service.register_drut` + `expose` in `lib/app.ml`
-6. **Auth-protected**: Add `~middleware:[Well.require_auth ()]` or wrap handler with `Well.Auth.require_grant`
-7. **Tests**: Add to `test/` with `Well.Db.with_test_db` for DB tests or `Well.with_test_server` for integration tests
-|well_skill}
-
-let idesign_skill_md = {idesign|---
+let idesign_skill_md =
+  {idesign|---
 name: idesign-architecture
 description: >
   IDesign Method for system architecture based on Juval Lowy's "Righting Software".
@@ -4476,7 +1884,8 @@ This chain (Vision -> Objectives -> Mission -> Architecture) reverses typical dy
 - [Design Example](references/design-example.md) -- TradeMe case study demonstrating the full method
 |idesign}
 
-let idesign_ref_decomposition = {idesign|# Decomposition (Ch. 2)
+let idesign_ref_decomposition =
+  {idesign|# Decomposition (Ch. 2)
 
 ## Core Premise: Architecture = Decomposition
 
@@ -4636,7 +2045,8 @@ Identifying areas of volatility is an **acquired skill**. Hardly any architect i
 12. Cross-cutting concern changes (notifications, storage) requiring changes to all services
 |idesign}
 
-let idesign_ref_structure = {idesign|# Structure (Ch. 3)
+let idesign_ref_structure =
+  {idesign|# Structure (Ch. 3)
 
 ## Layers and Services
 
@@ -4847,7 +2257,8 @@ A Manager can queue a call to another Manager (the queue listener is effectively
 - Symmetry is so fundamental you should see the same call patterns across Managers
 |idesign}
 
-let idesign_ref_composition = {idesign|# Composition (Ch. 4)
+let idesign_ref_composition =
+  {idesign|# Composition (Ch. 4)
 
 ## Requirements and Changes
 
@@ -4973,7 +2384,8 @@ When a change happens to the Manager, you salvage and reuse ALL the effort that 
 **This is the essence of agility.**
 |idesign}
 
-let idesign_ref_design_donts = {idesign|# Design "Don'ts" (Ch. 3 - Structure)
+let idesign_ref_design_donts =
+  {idesign|# Design "Don'ts" (Ch. 3 - Structure)
 
 Red flags indicating functional decomposition or architectural violations. If you do any of these, treat it as a warning sign and investigate what you are missing.
 
@@ -5044,7 +2456,8 @@ Red flags indicating functional decomposition or architectural violations. If yo
 - The Client may inform a user about the event, and the Manager may execute some back-end behavior
 |idesign}
 
-let idesign_ref_design_standard = {idesign|# Design Standard (Appendix C) -- System Design & Service Contract Parts
+let idesign_ref_design_standard =
+  {idesign|# Design Standard (Appendix C) -- System Design & Service Contract Parts
 
 A consolidated checklist of all directives and guidelines from the book. A **directive** is a rule you should never violate -- doing so is certain to cause failure. A **guideline** is advice you should follow unless you have a strong and unusual justification for going against it. Violating a single guideline alone is not certain to cause failure, but too many violations will.
 
@@ -5131,7 +2544,8 @@ i. Engines, ResourceAccess, and Resources do not subscribe to events.
 6. Have only the architect or competent senior developers design the contracts.
 |idesign}
 
-let idesign_ref_contract_design = {idesign|# Service Contract Design (Appendix B)
+let idesign_ref_contract_design =
+  {idesign|# Service Contract Design (Appendix B)
 
 ## Modularity and Cost
 
@@ -5243,7 +2657,8 @@ Metrics are **evaluation tools, not validation tools**. Complying does not guara
 - Make contract design part of each service life cycle
 |idesign}
 
-let idesign_ref_design_example = {idesign|# System Design Example: TradeMe (Ch. 5)
+let idesign_ref_design_example =
+  {idesign|# System Design Example: TradeMe (Ch. 5)
 
 A complete case study demonstrating The Method applied to a real system. Focus on the **thought process and rationale**, not on copying the specific outcome -- every system is different.
 
@@ -5494,309 +2909,10 @@ Validate the architecture BEFORE work commences by showing the call chain for ea
 10. The design is open-ended -- extend by adding more services or workflows, never by modifying existing ones
 |idesign}
 
-let well_front_skill = {well_front|---
-name: well-front
-description: Build client-side interactive UI with well.web — The Elm Architecture (TEA) in OCaml compiled to Web Components via js_of_ocaml. Use whenever adding interactive client components, custom elements (<well-*>), or anything needing state/updates on the client (counters, reactive forms, search-as-you-type, live filters, toggles). NOT for server-side LiveView (that's the `well` skill).
-user-invocable: true
-allowed-tools: Read, Edit, Write, Bash, Glob, Grep
----
+let well_front_skill = Template_skills.well_front
 
-# Well.Web — Client-Side Components (TEA)
-
-You are building **client-side interactive UI** for a well app using **well.web**: The Elm Architecture (TEA) in OCaml, compiled to **Web Components** (custom elements) via js_of_ocaml.
-
-State lives **on the client**. The runtime runs **in the browser** — no server round-trip per interaction. This is the modern replacement for the older LiveView system.
-
-## When to use which skill
-
-- **well-front** (this) — client-side interactivity: counters, reactive forms, search-as-you-type, live toggles, anything where the DOM updates from local state. Uses well.web / `<well-*>` custom elements.
-- **`well`** — server-rendered pages, routes, LiveView (string-diff-over-WebSocket), models, services, SQL. The default for static and server-side content.
-- **frontend-design** — visual aesthetics (typography, color, layout, motion). Pair it with well-front when a component also needs to *look* distinctive.
-
-well.web is the intended long-term successor to LiveView. For new interactive UI, prefer well.web.
-
-## Architecture in one line
-
-```
-DOM click → handler (dispatch msg) → update → new state → view → vdom → DOM
-```
-
-- **Model**: `state` record (immutable)
-- **View**: pure function `state -> vdom`
-- **Update**: pure function `state -> msg -> state * cmd`
-
-All logic is OCaml, type-checked at compile time. The component ships as a custom element (e.g. `<well-counter>`), usable from any HTML page including server-rendered MLX.
-
-## Project layout & build
-
-```
-myapp/
-├── web/
-│   ├── dune                    # (executable (name register) (modes js) ...)
-│   ├── <feature>.mlx           # one component per file (the module IS the component)
-│   └── register.ml             # entry: Well_web.component calls + app.js bundle root
-└── static/
-    └── dune                    # rule copies ../web/register.bc.js → static/app.js
-```
-
-- `web/dune` compiles `register.ml` (and the listed component modules) to `register.bc.js` via **js_of_ocaml**.
-- `static/dune` copies that to `/static/app.js` (single bundle).
-- Load it on any page: `<script type="module" src="/static/app.js" />`.
-
-### Adding a new component
-
-1. Create `web/<feature>.mlx` (a `COMPONENT` module — see contract below).
-2. In `web/register.ml`, add `Well_web.component ~module_:(module <Feature>) ~tag_name:"well-<feature>" ()`.
-3. In `web/dune`, add the module name to `(modules register <feature> ...)`.
-4. Rebuild. Use `<well-<feature>></well-<feature>>` on any page.
-
-## The COMPONENT contract
-
-Every component is a module (the file) implementing:
-
-```ocaml
-module type COMPONENT = sig
-  type state                      (* immutable record; [@@deriving js] recommended *)
-  type msg                        (* internal messages *)
-  type emits                      (* declared outputs to parent *)
-
-  val props  : msg Props.t        (* declared, typed inputs (attributes) *)
-  val init   : dispatch:(msg -> unit) -> state * (msg, emits) Cmd.t
-  val update : state -> msg -> state * (msg, emits) Cmd.t
-  val view   : state -> (msg -> unit) -> Vdom.t -> Vdom.t
-                                  (* 3rd arg = projected children from parent *)
-end
-```
-
-Register it:
-```ocaml
-(* register.ml *)
-let () =
-  Well_web.component
-    ~module_:(module Counter)
-    ~tag_name:"well-counter"
-    ?shadow_dom            (* optional, default false = light DOM (global CSS applies) *)
-    ()
-```
-
-`Vdom` is the `Html` module re-exported — the same type used by server-rendered MLX, generic over `'msg` so handlers carry the component's message type.
-
-### Structural rules (non-negotiable)
-
-1. **File = module.** Do NOT nest `module Counter = struct ... end` inside the file. The file's top-level declarations ARE the component.
-2. **Registration = top-level statement.** Use `let () = Well_web.component ...` in `register.ml`, not `let component = ...`.
-3. **`module_` label has a trailing underscore** — `module` is an OCaml keyword.
-4. **`view` takes 3 args:** `state`, `dispatch`, and `projected_children` (children passed in from the parent's HTML). If your component ignores projected children, name it `_children`.
-5. **`state`/`msg`/`emits` are types declared at the top of the file**; OCaml infers them from `init`/`update`/`view`.
-
-## Typed event handlers (Elm-style)
-
-Handlers come from the `Html` module (re-exported as `Well_web.Vdom`):
-
-```ocaml
-type form_data = (string * string) list
-
-type +'msg handler =
-  | Msg of 'msg                        (* dispatch msg, ignore event *)
-  | On_key of (string -> 'msg)         (* read event.key *)
-  | On_value of (string -> 'msg)       (* read event.target.value *)
-  | On_form of (form_data -> 'msg)     (* preventDefault + FormData fields *)
-  | On_event of (Obj.t -> 'msg option) (* whole event, optional — generic fallback *)
-```
-
-### MLX desugaring
-
-| MLX attribute | Handler variant | Value type |
-|---|---|---|
-| `on_click=EXPR` | `Msg EXPR` | bare `msg` value |
-| `on_blur=EXPR`, `on_focus=EXPR` | `Msg EXPR` | `msg` |
-| `on_keydown=EXPR` | `On_key EXPR` | `string -> msg` (named function) |
-| `on_keyup=EXPR`, `on_keypress=EXPR` | `On_key EXPR` | `string -> msg` |
-| `on_input=EXPR`, `on_change=EXPR` | `On_value EXPR` | `string -> msg` |
-| `on_submit=EXPR` | `On_form EXPR` | `form_data -> msg` |
-| `on_<other>=EXPR` | `On_event EXPR` | `Obj.t -> msg option` |
-
-```mlx
-(* Known event with bare msg value — NO Some/None boilerplate *)
-<button on_click=Increment>(txt "+")</button>
-
-(* Known events extracting a string — named function *)
-let handle_key k = if k = "Enter" then Save else NoOp
-let handle_value v = SetName v
-
-<input on_keydown=handle_key on_input=handle_value />
-
-(* Submit: uncontrolled name= fields; credentials from FormData *)
-let handle_submit fields = Submit fields
-<form on_submit=handle_submit>
-  <input name="email" type="email" />
-  <input name="password" type="password" />
-</form>
-
-(* Generic fallback for unknown events — returns msg option *)
-let on_wheel _ev = Some Scrolled
-<div on_wheel=on_wheel>(txt "")</div>
-```
-
-### ⚠ MLX limitation (CRITICAL)
-
-**Inline `fun` is NOT accepted as an attribute value.** Always name the handler first:
-
-```mlx
-(* WRONG — parse error *)
-<button on_click=(fun _ -> Increment)>(txt "+")</button>
-
-(* RIGHT — bare msg value or named handler *)
-<button on_click=Increment>(txt "+")</button>
-```
-
-For `on_keydown`/`on_input` this means you MUST define `let handle_key k = ...` before using `on_keydown=handle_key`.
-
-### Programmatic API (in `.ml` files without MLX)
-
-```ocaml
-let open Html in
-element
-  ~handlers:[ ("click", on_click Increment) ]
-  ~text:"+"
-  "button" ()
-```
-
-`Html.on_click : 'msg -> 'msg handler` is the `Msg` constructor.
-
-## Props — typed inputs (attributes)
-
-```ocaml
-module Props : sig
-  type 'msg decl
-  type 'msg t = 'msg decl list
-  val int    : string -> on:(int    -> 'msg) -> ?default:int    -> unit -> 'msg decl
-  val float  : string -> on:(float  -> 'msg) -> ?default:float  -> unit -> 'msg decl
-  val bool   : string -> on:(bool   -> 'msg) -> ?default:bool   -> unit -> 'msg decl
-  val string : string -> on:(string -> 'msg) -> ?default:string -> unit -> 'msg decl
-  val list   : string -> eq:('a -> 'a -> bool) -> on:('a list -> 'msg) -> 'msg decl
-  val of_eq  : string -> eq:('a -> 'a -> bool) -> on:('a      -> 'msg) -> 'msg decl
-end
-```
-
-The string is the HTML attribute name; the runtime parses the attribute value into the declared type and dispatches the `~on` message. No manual `JSON.parse` or string parsing in component code.
-
-```ocaml
-let props : msg Well_web.Props.t = [
-  Well_web.Props.int "step" ~default:1 ~on:(fun v -> Set_step v);
-]
-```
-
-In HTML: `<well-counter step="2"></well-counter>` → dispatches `Set_step 2` on connect.
-
-## Cmd — effects going out
-
-```ocaml
-module Cmd : sig
-  type ('msg, 'emits) t
-  val none   : ('msg, 'emits) t
-  val msg    : 'msg -> ('msg, 'emits) t           (* self-message (async loop) *)
-  val emit   : 'emits -> ('msg, 'emits) t          (* event-w-górę to parent *)
-  val focus  : string -> ('msg, 'emits) t          (* focus a DOM element by selector *)
-  val send   : addr:string -> 'a -> ('msg, 'emits) t (* parent → child loop *)
-  val is_none : ('msg, 'emits) t -> bool
-end
-```
-
-- `Cmd.none` — no effect (the common case).
-- `Cmd.emit (CountChanged n)` — declare an output to the **parent** (Manager state). The component does NOT mutate the parent's state; it only emits.
-- `Cmd.send ~addr child_msg` — parent → child: put `child_msg` on the loop named by `addr` (`Html.element ~addr` / MLX `addr=`). Missing addr is a no-op. Not `key` or a ref.
-- `Cmd.msg m` — schedule a self-message (async).
-- `Cmd.focus "selector"` — focus an input after render.
-
-## emits — declared outputs
-
-A typed variant listing what the component may emit up. This is the component's contract with its parent:
-
-```ocaml
-type emits = CountChanged of int | Reset
-```
-
-The parent listens (in shell HTML or a parent component) and reacts. Direction is **always up**; the component never reaches into the parent's state.
-
-## Reference example: `web/counter.mlx`
-
-```mlx
-(* Counter — config-driven step counter.
-   @input  step : int (default 1)
-   @output CountChanged : int — new count after each change *)
-
-type state = { count : int; step : int }
-type msg = Increment | Decrement | Reset | Set_step of int
-type emits = CountChanged of int
-
-let props : msg Well_web.Props.t = [
-  Well_web.Props.int "step" ~default:1 ~on:(fun v -> Set_step v);
-]
-
-let init ~dispatch:_ = ({ count = 0; step = 1 }, Well_web.Cmd.none)
-
-let update state : msg -> state * (msg, emits) Well_web.Cmd.t = function
-  | Increment ->
-    let s = { state with count = state.count + state.step } in
-    (s, Well_web.Cmd.emit (CountChanged s.count))
-  | Decrement ->
-    let s = { state with count = state.count - state.step } in
-    (s, Well_web.Cmd.emit (CountChanged s.count))
-  | Reset -> ({ count = 0; step = state.step }, Well_web.Cmd.none)
-  | Set_step v -> ({ state with step = v }, Well_web.Cmd.none)
-
-let view state _dispatch _children =
-  let open Html in
-  <div class'="counter" style="display:flex; gap:8px; align-items:center;">
-    <button on_click=Decrement>(Html.txt "-")</button>
-    <span class'="count" style="font-family:monospace; width:32px; text-align:center;">
-      (Html.txt (string_of_int state.count))
-    </span>
-    <button on_click=Increment>(Html.txt "+")</button>
-    <button on_click=Reset>(Html.txt "reset")</button>
-  </div>
-```
-
-Register in `web/register.ml`:
-```ocaml
-let () =
-  Well_web.component ~module_:(module Counter) ~tag_name:"well-counter" ()
-```
-
-Use on a page (`lib/pages/<x>_page.mlx`):
-```mlx
-Well.get "/counter" @@ fun _req ->
-<Layout title="Counter">
-  <well-counter step="2"></well-counter>
-  <script attrs=[("type", "module"); ("src", "/static/app.js")] />
-</Layout>
-```
-
-## MLX pitfalls
-
-- **`class'`, not `class`** — `class` is reserved. `style` works bare.
-- **Bare-string children are auto-wrapped** to `Html.txt`. For any other expression, wrap in parens: `(txt x)`, `(string_of_int n |> txt)`.
-- **`(txt "")` for empty output** — there is no `empty` node. Use it in conditional else-branches.
-- **`{...}` is record syntax ONLY** — not interpolation. Use `(expr)` for function calls.
-- **No inline `fun` in attribute values** — name handlers first (see typed handlers above).
-
-## Verification
-
-After writing/changing a component:
-```bash
-make build          # well build: web/ → register.bc.js, then static/dune copies it to static/app.js
-```
-Open the page that embeds `<well-*>` and confirm the custom element renders and reacts to clicks/inputs.
-
-## Companion skills
-
-- **`well`** — backend: routes, models, services, LiveView (legacy), SQL.
-- **`frontend-design`** — visual design quality when a component must look distinctive.
-- **`idesign-architecture`** — decomposition (parent = Manager of state; this component = leaf with declared inputs/outputs).
-|well_front}
-
-let frontend_design_skill = {frontend|---
+let frontend_design_skill =
+  {frontend|---
 name: frontend-design
 description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, or applications. Generates creative, polished code that avoids generic AI aesthetics.
 license: Complete terms in LICENSE.txt
@@ -5867,91 +2983,112 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 |}
-    name name name name name
+    name
+    name
+    name
+    name
+    name
 
-type file = {
-  path : string;
-  content : string;
-}
+type file =
+  { path: string
+  ; content: string }
 
 let project_files name =
-  [
-    { path = "well.toml"; content = well_toml name };
-    { path = "AGENTS.md"; content = agents_md };
-    { path = "README.md"; content = readme name };
-    { path = "dune-project"; content = dune_project name };
-    { path = "dune"; content = root_dune };
-    { path = "Makefile"; content = makefile };
-    { path = ".gitignore"; content = gitignore };
-    { path = ".ocamlformat"; content = ocamlformat };
-    (* bin/ *)
-    { path = "bin/dune"; content = bin_dune name };
-    { path = "bin/main.ml"; content = bin_main name };
-    (* lib/ — app library with include_subdirs *)
-    { path = "lib/dune"; content = lib_app_dune name };
-    { path = "lib/app.ml"; content = app_ml name };
-    { path = "lib/events.ml"; content = events name };
-    (* lib/services/ *)
-    { path = "lib/services/note_access_impl.ml"; content = note_access_impl name };
-    { path = "lib/services/task_access_impl.ml"; content = task_access_impl name };
-    { path = "lib/services/task_manager_impl.ml"; content = task_manager_impl name };
-    (* lib/ — root-level modules *)
-    { path = "lib/layout.mlx"; content = layout name };
-    { path = "lib/request_id.ml"; content = request_id name };
-    (* lib/pages/ *)
-    { path = "lib/pages/home_page.mlx"; content = home_page name };
-    { path = "lib/pages/counter_page.mlx"; content = counter_page name };
-    { path = "lib/pages/dashboard_page.mlx"; content = dashboard_page name };
-    { path = "lib/pages/notes_page.mlx"; content = notes_page name };
-    { path = "lib/pages/tasks_page.mlx"; content = tasks_page name };
-    { path = "lib/pages/upload_page.mlx"; content = upload_page name };
-    { path = "lib/pages/login_page.mlx"; content = login_page name };
-    { path = "lib/pages/signup_page.mlx"; content = signup_page name };
-    { path = "lib/pages/web_counter_page.mlx"; content = web_counter_page name };
-    (* lib/live/ *)
-    { path = "lib/live/counter_live.mlx"; content = counter_live name };
-    { path = "lib/live/activity_log_live.mlx"; content = activity_log_live name };
-    (* web/ — TEA web components (js_of_ocaml → app.js) *)
-    { path = "web/dune"; content = lib_web_dune name };
-    { path = "web/counter.mlx"; content = web_counter_ml name };
-    { path = "web/register.ml"; content = web_register_ml name };
-    (* lib/contract/ — .cyrograf sources (single definition per module) *)
-    { path = "lib/contract/dune"; content = contract_boundary_dune };
-    { path = "lib/contract/NoteAccess.cyrograf"; content = contract_note_access_cyrograf };
-    { path = "lib/contract/TaskAccess.cyrograf"; content = contract_task_access_cyrograf };
-    { path = "lib/contract/TaskManager.cyrograf"; content = contract_task_manager_cyrograf };
-    (* lib/contract_generated/ — generated result, produced by dune build *)
-    { path = "lib/contract_generated/dune"; content = contract_gen_dune };
-    { path = "lib/contract_generated/ocaml/dune"; content = contract_data_dune };
-    { path = "lib/contract_generated/ocaml_js/dune"; content = contract_data_browser_dune };
-    { path = "lib/contract_generated/adapters/dune"; content = contract_adapters_dune };
-    { path = "lib/contract_generated/adapters_browser/dune"; content = contract_adapters_browser_dune };
-    { path = "lib/contract_generated/typescript/dune"; content = contract_typescript_dune };
-    (* test/ *)
-    { path = "test/dune"; content = test_dune name };
-    { path = Printf.sprintf "test/%s_test.ml" name; content = test_main name };
-    (* static/ *)
-    { path = "static/dune"; content = static_dune };
-    { path = "static/ts/tasks.ts"; content = tasks_ts };
-    { path = "static/tasks.js"; content = tasks_js };
-    { path = "static/app.css"; content = static_app_css ^ notes_css ^ counter_css ^ dashboard_css ^ auth_css ^ tasks_css ^ upload_css };
-    { path = "static/well.ts"; content = static_well_ts };
-    { path = "tsconfig.json"; content = tsconfig_json };
-    { path = "data/.gitkeep"; content = "" };
-    { path = "data/uploads/.gitkeep"; content = "" };
-    { path = Printf.sprintf "%s.service" name; content = systemd_unit name };
-    { path = ".agents/skills/well/SKILL.md"; content = well_skill };
-    (* .agents/skills/idesign-architecture/ *)
-    { path = ".agents/skills/idesign-architecture/SKILL.md"; content = idesign_skill_md };
-    { path = ".agents/skills/idesign-architecture/references/decomposition.md"; content = idesign_ref_decomposition };
-    { path = ".agents/skills/idesign-architecture/references/structure.md"; content = idesign_ref_structure };
-    { path = ".agents/skills/idesign-architecture/references/composition.md"; content = idesign_ref_composition };
-    { path = ".agents/skills/idesign-architecture/references/design-donts.md"; content = idesign_ref_design_donts };
-    { path = ".agents/skills/idesign-architecture/references/design-standard.md"; content = idesign_ref_design_standard };
-    { path = ".agents/skills/idesign-architecture/references/contract-design.md"; content = idesign_ref_contract_design };
-    { path = ".agents/skills/idesign-architecture/references/design-example.md"; content = idesign_ref_design_example };
-    (* .agents/skills/frontend-design/ *)
-    { path = ".agents/skills/frontend-design/SKILL.md"; content = frontend_design_skill };
-    (* .agents/skills/well-front/ *)
-    { path = ".agents/skills/well-front/SKILL.md"; content = well_front_skill };
-  ]
+  [ {path= "well.toml"; content= well_toml name}
+  ; {path= "AGENTS.md"; content= agents_md}
+  ; {path= "README.md"; content= readme name}
+  ; {path= "dune-project"; content= dune_project name}
+  ; {path= "dune"; content= root_dune}
+  ; {path= "Makefile"; content= makefile}
+  ; {path= ".gitignore"; content= gitignore}
+  ; {path= ".ocamlformat"; content= ocamlformat}
+  ; (* bin/ *)
+    {path= "bin/dune"; content= bin_dune name}
+  ; {path= "bin/main.ml"; content= bin_main name}
+  ; (* lib/ — app library with include_subdirs *)
+    {path= "lib/dune"; content= lib_app_dune name}
+  ; {path= "lib/app.ml"; content= app_ml name}
+  ; {path= "lib/events.ml"; content= events name}
+  ; (* lib/services/ *)
+    {path= "lib/services/note_access_impl.ml"; content= note_access_impl name}
+  ; {path= "lib/services/task_access_impl.ml"; content= task_access_impl name}
+  ; {path= "lib/services/task_manager_impl.ml"; content= task_manager_impl name}
+  ; (* lib/ — root-level modules *)
+    {path= "lib/layout.mlx"; content= layout name}
+  ; {path= "lib/request_id.ml"; content= request_id name}
+  ; (* lib/pages/ *)
+    {path= "lib/pages/home_page.mlx"; content= home_page name}
+  ; {path= "lib/pages/counter_page.mlx"; content= counter_page name}
+  ; {path= "lib/pages/notes_page.mlx"; content= notes_page name}
+  ; {path= "lib/pages/tasks_page.mlx"; content= tasks_page name}
+  ; {path= "lib/pages/upload_page.mlx"; content= upload_page name}
+  ; {path= "lib/pages/login_page.mlx"; content= login_page name}
+  ; {path= "lib/pages/signup_page.mlx"; content= signup_page name}
+  ; {path= "lib/pages/web_counter_page.mlx"; content= web_counter_page name}
+  ; (* web/ — TEA web components (js_of_ocaml → app.js) *)
+    {path= "web/dune"; content= lib_web_dune name}
+  ; {path= "web/counter.mlx"; content= web_counter_ml name}
+  ; {path= "web/register.ml"; content= web_register_ml name}
+  ; (* lib/contract/ — .cyrograf sources (single definition per module) *)
+    {path= "lib/contract/dune"; content= contract_boundary_dune}
+  ; { path= "lib/contract/NoteAccess.cyrograf"
+    ; content= contract_note_access_cyrograf }
+  ; { path= "lib/contract/TaskAccess.cyrograf"
+    ; content= contract_task_access_cyrograf }
+  ; { path= "lib/contract/TaskManager.cyrograf"
+    ; content= contract_task_manager_cyrograf }
+  ; (* lib/contract_generated/ — generated result, produced by dune build *)
+    {path= "lib/contract_generated/dune"; content= contract_gen_dune}
+  ; {path= "lib/contract_generated/ocaml/dune"; content= contract_data_dune}
+  ; { path= "lib/contract_generated/ocaml_js/dune"
+    ; content= contract_data_browser_dune }
+  ; { path= "lib/contract_generated/adapters/dune"
+    ; content= contract_adapters_dune }
+  ; { path= "lib/contract_generated/adapters_browser/dune"
+    ; content= contract_adapters_browser_dune }
+  ; { path= "lib/contract_generated/typescript/dune"
+    ; content= contract_typescript_dune }
+  ; (* test/ *)
+    {path= "test/dune"; content= test_dune name}
+  ; {path= Printf.sprintf "test/%s_test.ml" name; content= test_main name}
+  ; (* static/ *)
+    {path= "static/dune"; content= static_dune}
+  ; {path= "static/ts/tasks.ts"; content= tasks_ts}
+  ; {path= "static/tasks.js"; content= tasks_js}
+  ; { path= "static/app.css"
+    ; content=
+        static_app_css
+        ^ notes_css
+        ^ counter_css
+        ^ dashboard_css
+        ^ auth_css
+        ^ tasks_css
+        ^ upload_css }
+  ; {path= "static/well.ts"; content= static_well_ts}
+  ; {path= "tsconfig.json"; content= tsconfig_json}
+  ; {path= "data/.gitkeep"; content= ""}
+  ; {path= "data/uploads/.gitkeep"; content= ""}
+  ; {path= Printf.sprintf "%s.service" name; content= systemd_unit name}
+  ; {path= ".agents/skills/well/SKILL.md"; content= well_skill}
+  ; (* .agents/skills/idesign-architecture/ *)
+    { path= ".agents/skills/idesign-architecture/SKILL.md"
+    ; content= idesign_skill_md }
+  ; { path= ".agents/skills/idesign-architecture/references/decomposition.md"
+    ; content= idesign_ref_decomposition }
+  ; { path= ".agents/skills/idesign-architecture/references/structure.md"
+    ; content= idesign_ref_structure }
+  ; { path= ".agents/skills/idesign-architecture/references/composition.md"
+    ; content= idesign_ref_composition }
+  ; { path= ".agents/skills/idesign-architecture/references/design-donts.md"
+    ; content= idesign_ref_design_donts }
+  ; { path= ".agents/skills/idesign-architecture/references/design-standard.md"
+    ; content= idesign_ref_design_standard }
+  ; { path= ".agents/skills/idesign-architecture/references/contract-design.md"
+    ; content= idesign_ref_contract_design }
+  ; { path= ".agents/skills/idesign-architecture/references/design-example.md"
+    ; content= idesign_ref_design_example }
+  ; (* .agents/skills/frontend-design/ *)
+    { path= ".agents/skills/frontend-design/SKILL.md"
+    ; content= frontend_design_skill }
+  ; (* .agents/skills/well-front/ *)
+    {path= ".agents/skills/well-front/SKILL.md"; content= well_front_skill} ]

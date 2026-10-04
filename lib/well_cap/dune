@@ -10,12 +10,7 @@
   (progn (echo "let css = {cap_css|") (cat %{deps}) (echo "|cap_css}")))))
 
 (rule
- (targets well_embed.js)
- (deps ../../static/well.ts)
- (action (run bun build --minify --target=browser --outfile %{targets} %{deps})))
-
-(rule
  (targets cap_js.ml)
- (deps well_embed.js)
+ (deps web/register.bc.js)
  (action (with-stdout-to %{targets}
-  (progn (echo "let js = {well_js|") (cat %{deps}) (echo "|well_js}")))))
+  (progn (echo "let js = {cap_js|") (cat %{deps}) (echo "|cap_js}")))))

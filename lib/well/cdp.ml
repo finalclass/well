@@ -607,7 +607,7 @@ let click t ?text ?role ?name ?selector () =
           var target = %s;
           var els = document.querySelectorAll(
             'button, a, [role="button"], input[type="submit"], ' +
-            'input[type="button"], [onclick], [data-lv-click], ' +
+            'input[type="button"], [onclick], ' +
             'flt-semantics, [aria-label]');
           for (var el of els) {
             if ((el.innerText || el.value || '').trim() === target ||
