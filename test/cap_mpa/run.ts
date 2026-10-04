@@ -63,6 +63,7 @@ try {
     "messages",
     "logs",
     "telemetry",
+    "metrics",
     "repl",
     "users",
     "users/new",

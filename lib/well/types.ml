@@ -172,6 +172,39 @@ let rec resolve (resp : response) : resolved =
         r_headers = [ ("Content-Type", cfg.stream_content_type) ];
         r_body = "" }
 
+(** Content type implied by a response, without rendering the body.
+    An explicit content-type header on [`Custom] wins over the inner body. *)
+let rec response_content_type (resp : response) : string =
+  match resp with
+  | `Custom c ->
+      (match
+         List.find_opt
+           (fun (k, _) -> String.lowercase_ascii k = "content-type")
+           c.headers
+       with
+       | Some (_, v) -> v
+       | None -> response_content_type c.body)
+  | `Html _ -> "text/html; charset=utf-8"
+  | `Text _ -> "text/plain; charset=utf-8"
+  | `Redirect _ -> ""
+  | `Stream cfg -> cfg.stream_content_type
+  | _ -> "application/json"
+
+(** First header value, without rendering the body. *)
+let rec response_header name (resp : response) =
+  let name = String.lowercase_ascii name in
+  match resp with
+  | `Custom c ->
+      (match
+         List.find_opt
+           (fun (k, _) -> String.lowercase_ascii k = name)
+           c.headers
+       with
+       | Some (_, v) -> Some v
+       | None -> response_header name c.body)
+  | `Redirect url when name = "location" -> Some url
+  | _ -> None
+
 (** Get the HTTP status code from a response without full resolution. *)
 let rec response_status (resp : response) : int =
   match resp with

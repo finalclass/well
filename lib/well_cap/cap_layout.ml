@@ -7,6 +7,7 @@ let nav_items =
   ; ("/_cap/messages", "Messages", {|&#9993;|})
   ; ("/_cap/logs", "Logs", {|&#9776;|})
   ; ("/_cap/telemetry", "Telemetry", {|&#9201;|})
+  ; ("/_cap/metrics", "Metrics", {|&#9638;|})
   ; ("/_cap/repl", "REPL", {|&#9002;|})
   ; ("/_cap/users", "Users", {|&#9823;|}) ]
 

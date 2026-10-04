@@ -183,6 +183,43 @@ let match_cap_route meth path =
 (* ── Route introspection ──────────────────────────────────────────── *)
 
 (** List all registered routes as [(method, path, kind)] triples. *)
+let pattern segments =
+  match segments with
+  | [] -> "/"
+  | segs ->
+      "/"
+      ^ String.concat "/"
+          (List.map
+             (function Static s -> s | Param p -> ":" ^ p | Wildcard w -> "*" ^ w)
+             segs)
+
+let route_template route = pattern route.segments
+
+let static_pattern path =
+  let best =
+    List.fold_left
+      (fun acc (mount : static_mount) ->
+        let prefix = mount.prefix in
+        let plen = String.length prefix in
+        let matches =
+          path = prefix
+          || plen = 0
+          || (String.length path > plen
+              && String.sub path 0 plen = prefix
+              && path.[plen] = '/')
+        in
+        if not matches then acc
+        else
+          match acc with
+          | Some (len, _) when len >= plen -> acc
+          | _ -> Some (plen, prefix))
+      None !static_mounts
+  in
+  match best with
+  | None -> None
+  | Some (_, prefix) ->
+      Some (if prefix = "" || prefix = "/" then "/*" else prefix ^ "/*")
+
 let list_routes () =
   let seg_to_string = function Static s -> s | Param p -> ":" ^ p | Wildcard w -> "*" ^ w in
   let build_path segs = "/" ^ String.concat "/" (List.map seg_to_string segs) in

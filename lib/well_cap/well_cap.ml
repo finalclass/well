@@ -342,6 +342,23 @@ let init () =
                  (Cap_data.telemetry ())
                  (Html.element_to_string (`Html initial)) ) ) ) ) ;
   get
+    "/_cap/metrics"
+    (authenticated (fun req ->
+         let window = Metrics_page.normalize_window (query req "window") in
+         let class_ = Metrics_page.normalize_class (query req "class") in
+         let http, flow, services, mutes = Metrics_page.gather ~window ~class_ in
+         page
+           req
+           "/_cap/metrics"
+           "Metrics"
+           (Metrics_page.view req ~window ~class_ http flow services mutes) )) ;
+  post
+    "/_cap/metrics/mute"
+    (authenticated (fun req ->
+         let window = Metrics_page.normalize_window (field req "window") in
+         let class_ = Metrics_page.normalize_class (field req "class") in
+         CRRedirect (Metrics_page.apply req ~window ~class_) )) ;
+  get
     "/_cap/repl"
     (authenticated (fun req ->
          let schema = Repl_page.schema_to_json (Repl_page.build_schema ()) in

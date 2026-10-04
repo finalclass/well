@@ -770,7 +770,7 @@ body {
   .console-sidebar.open { transform: translateX(0); }
   .console-sidebar.open ~ .sidebar-backdrop { display: block; }
   .console-sidebar.open ~ .menu-toggle { display: none; }
-  .console-content { margin-left: 0; padding: 56px 16px 20px; }
+  .console-content { margin-left: 0; padding: 56px 16px 20px; min-width: 0; }
 }
 
 /* ── Select ────────────────────────────────────── */

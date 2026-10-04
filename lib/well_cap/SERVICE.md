@@ -23,14 +23,15 @@ Nawigacja używa zwykłych odnośników i pełnych żądań dokumentu.
 | `/_cap/messages` | Wiadomości MessageBus |
 | `/_cap/logs` | Logi |
 | `/_cap/telemetry` | Telemetria |
+| `/_cap/metrics` | Metryki tras, obiegu i metod usług |
 | `/_cap/repl` | REPL |
 | `/_cap/users` | Lista użytkowników |
 | `/_cap/users/new` | Tworzenie użytkownika |
 | `/_cap/users/:id` | Karta użytkownika i formularze administracyjne |
 
-Filtry, wyszukiwanie, stronicowanie, wybór bazy i tabeli oraz wybór
-usługi i metody RPC mają reprezentację w URL. Bezpośrednie wejście,
-odświeżenie oraz Wstecz/Dalej odtwarzają wskazany widok.
+Filtry, wyszukiwanie, stronicowanie, wybór bazy i tabeli, wybór
+usługi i metody RPC oraz okno i klasa metryk mają reprezentację w URL.
+Bezpośrednie wejście, odświeżenie oraz Wstecz/Dalej odtwarzają wskazany widok.
 Nieistniejący użytkownik otrzymuje odpowiedź 404.
 
 Formularze administracyjne korzystają z POST i ochrony CSRF.
@@ -40,7 +41,35 @@ ponownie do HTML. Wylogowanie jest operacją POST.
 
 Zachowane operacje: tworzenie i usuwanie użytkownika, zmiana emaila
 i hasła, nadawanie i odbieranie grantów, przeglądanie baz i tabel,
-edycja komórek, wykonywanie SQL, wywoływanie RPC i wykonywanie REPL.
+edycja komórek, wykonywanie SQL, wywoływanie RPC, wykonywanie REPL
+oraz włączanie i wyłączanie pomiaru metod usług.
+
+## Metryki
+
+Strona `/_cap/metrics` czyta agregaty z bazy frameworka. Agregaty
+przeżywają restart procesu i obejmują ostatnią godzinę albo ostatnią
+dobę. Parametry `window=hour|day` i `class=app|static|cap` wybierają
+widok.
+
+Endpoint HTTP jest parą metody i szablonu trasy (`GET /users/:id`).
+Nieznana ścieżka wpada do jednego wiersza `(unmatched)`, a pliki
+statyczne do prefiksu montowania z `/*`. Dla każdego endpointu widać
+liczbę wejść, średni czas, przybliżony p95 oraz liczby odpowiedzi
+2xx, 4xx i 5xx. Ruch aplikacji, plików statycznych i CAP jest osobno.
+Czas żądania obejmuje całą obsługę HTTP i nie zastępuje czasu metody.
+
+Obieg liczy przejścia między dokumentami HTML aplikacji w jednej
+sesji przeglądarki. Pierwsze wejście sesji zaczyna się od `(entry)`.
+Żądania JSON, pliki statyczne, CAP i odpowiedzi inne niż 2xx nie
+przesuwają obiegu.
+
+Każda zarejestrowana metoda usługi i aktora jest mierzona, także gdy
+usługa nie jest opublikowana przez `expose`. Wiersz pokazuje liczbę
+wywołań, średni czas, przybliżony p95 oraz podział na sukces i błąd
+wykonania. Odmowa zapisana jako zwykły wynik kontraktu jest sukcesem
+wywołania. Operator wycisza całą usługę albo jedną metodę na 1, 6
+albo 24 godziny. Po tym terminie pomiar wraca. Wybór przeżywa restart.
+Wywołanie, które omija rejestr usług, nie ma wiersza.
 Usunięcie ostatniego posiadacza grantu `cap` lub odebranie mu tego grantu
 jest odrzucane.
 

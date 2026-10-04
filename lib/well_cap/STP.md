@@ -30,5 +30,10 @@ Testy integracyjne używają izolowanej aplikacji i testowej bazy.
 - Sprawdzić bezpośrednie adresy, odświeżenie i Wstecz/Dalej.
 - Sprawdzić napływ logów i wiadomości, aktualizację telemetrii,
   podpowiedzi i historię REPL oraz cleanup po opuszczeniu strony.
+- Metryki: dwa wejścia na `/users/1` i `/users/2` dają jeden wiersz
+  szablonu; JSON nie tworzy przejścia obiegu; plik statyczny i strona
+  CAP nie wchodzą do klasy aplikacji; wyciszenie metody zatrzymuje jej
+  licznik do podanego terminu, a po terminie licznik znów rośnie;
+  restart procesu zachowuje liczby z okna.
 - Porównać wygląd przed i po migracji przy identycznym viewport.
 - Potwierdzić brak połączeń LiveView i błędów konsoli.

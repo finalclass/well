@@ -747,10 +747,34 @@ let handle_connection flow _addr =
         Log.log ~level:"error" "%s error: %s" label msg;
         `Text "Internal Server Error" |> status 500
       in
+      let route_pattern route = Router.route_template route in
+      let effective_meth =
+        if meth = "HEAD" then
+          match Router.match_route "HEAD" path with
+          | Some _ -> "HEAD"
+          | None -> "GET"
+        else meth
+      in
+      let pre_class, pre_route =
+        if is_cap_path then
+          match Router.match_cap_route meth path with
+          | Some (route, _) -> ("cap", route_pattern route)
+          | None -> ("cap", Metrics.unmatched)
+        else
+          match Router.match_route effective_meth path with
+          | Some (route, _) -> ("app", route_pattern route)
+          | None ->
+              let methods = ["GET"; "POST"; "PUT"; "DELETE"; "HEAD"] in
+              match List.find_map (fun m -> Router.match_route m path) methods with
+              | Some (route, _) -> ("app", route_pattern route)
+              | None -> ("app", Metrics.unmatched)
+      in
+      let hit = ref (pre_class, pre_route) in
       let base_handler (req : request) =
         match (if is_cap_path then Router.match_cap_route req.meth req.path
                else None) with
         | Some (route, params) ->
+            hit := ("cap", route_pattern route);
             (try route.handler { req with params }
              with exn -> safe_500 exn "cap handler")
         | None ->
@@ -763,10 +787,14 @@ let handle_connection flow _addr =
         in
         match Router.match_route effective_meth req.path with
         | Some (route, params) ->
+            hit := ("app", route_pattern route);
             route.handler { req with params }
         | None ->
             (match Static_serve.try_serve_static req.meth req.path req.headers with
              | Some r when r.r_status = -1 ->
+                 (match Router.static_pattern req.path with
+                  | Some template -> hit := ("static", template)
+                  | None -> ());
                  let file_path = List.assoc "_stream_path" r.r_headers in
                  let hdrs = List.filter (fun (k, _) -> k <> "_stream_path" && k <> "Content-Type") r.r_headers in
                  let ct = match List.assoc_opt "Content-Type" r.r_headers with
@@ -787,6 +815,9 @@ let handle_connection flow _addr =
                       close_in ic
                     with exn -> close_in_noerr ic; raise exn))
              | Some r ->
+                 (match Router.static_pattern req.path with
+                  | Some template -> hit := ("static", template)
+                  | None -> ());
                  `Custom { status = Some r.r_status;
                            headers = r.r_headers; body = `Text r.r_body }
              | None ->
@@ -794,11 +825,16 @@ let handle_connection flow _addr =
                  let matching =
                    List.filter (fun m -> Router.match_route m req.path <> None) all_methods
                  in
-                 if matching <> [] then
+                 if matching <> [] then begin
+                   (match Router.match_route (List.hd matching) req.path with
+                    | Some (route, _) -> hit := ("app", route_pattern route)
+                    | None -> hit := ("app", Metrics.unmatched));
                    `Text "Method Not Allowed" |> status 405
                    |> header "Allow" (String.concat ", " matching)
-                 else
-                   `Text "Not Found" |> status 404)
+                 end else begin
+                   hit := ("app", Metrics.unmatched);
+                   `Text "Not Found" |> status 404
+                 end)
       in
       let pipeline =
         if is_cap_path then
@@ -825,6 +861,59 @@ let handle_connection flow _addr =
       Telemetry.incr_requests ();
       let dt_us = int_of_float ((Unix.gettimeofday () -. t0) *. 1e6) in
       Telemetry.add_latency_us dt_us;
+      let class_, route = !hit in
+      let http_status = response_status resp in
+      Metrics.observe_http ~class_ ~meth ~route ~status:http_status ~us:dt_us;
+      let content_type = String.lowercase_ascii (response_content_type resp) in
+      let document =
+        class_ = "app"
+        && http_status >= 200
+        && http_status < 300
+        && (let rec contains s sub i =
+              let sl = String.length s and nl = String.length sub in
+              if i + nl > sl then false
+              else if String.sub s i nl = sub then true
+              else contains s sub (i + 1)
+            in
+            contains content_type "text/html" 0)
+      in
+      if document then begin
+        try
+          let session_id =
+            match parse_session_id hdrs with
+            | Some sid -> Some sid
+            | None ->
+                match response_header "set-cookie" resp with
+                | None -> None
+                | Some cookie ->
+                    let pair =
+                      match String.index_opt cookie ';' with
+                      | Some i -> String.sub cookie 0 i
+                      | None -> cookie
+                    in
+                    let pair = String.trim pair in
+                    let prefix = "well_session=" in
+                    let n = String.length prefix in
+                    if String.length pair >= n && String.sub pair 0 n = prefix then
+                      Some (String.trim (String.sub pair n (String.length pair - n)))
+                    else None
+          in
+          begin
+            match session_id with
+            | None -> ()
+            | Some sid ->
+                let here = meth ^ " " ^ route in
+                let from_route =
+                  match Session_store.get ~session_id:sid ~key:"_well_doc" with
+                  | Some previous -> previous
+                  | None -> Metrics.entry
+                in
+                Metrics.observe_flow ~from_route ~to_route:here;
+                Session_store.set ~session_id:sid ~key:"_well_doc" ~value:here
+          end
+        with exn ->
+          Log.log ~level:"error" "metrics flow: %s" (Printexc.to_string exn)
+      end;
       let wants_close = client_wants_close hdrs in
       match extract_stream resp with
       | Some (cfg, extra_hdrs) ->
@@ -1446,6 +1535,8 @@ module S3 = S3
 
 (** Server telemetry and Prometheus metrics. *)
 module Telemetry = Telemetry
+
+module Metrics = Metrics
 
 (** Configuration from [well.toml] with environment variable overrides. *)
 module Config = Config

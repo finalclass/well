@@ -102,6 +102,26 @@ let register_handler name entry =
 
 (* ── Dispatch ─────────────────────────────────────────────────────── *)
 
+let elapsed_us t0 =
+  max 0 (int_of_float ((Unix.gettimeofday () -. t0) *. 1_000_000.))
+
+let call_drut spec rpc ctx payload_text =
+  let t0 = Unix.gettimeofday () in
+  let result =
+    try spec.dhandler rpc ctx payload_text
+    with exn -> Error (Drut_handler_error (Printexc.to_string exn))
+  in
+  let ok = match result with Ok _ -> true | Error _ -> false in
+  Metrics.observe_service ~service:spec.dname ~rpc ~us:(elapsed_us t0) ~ok;
+  result
+
+let result_ok = function
+  | `Assoc fields ->
+      (match List.assoc_opt "error" fields with
+       | Some (`String _) -> false
+       | _ -> true)
+  | _ -> true
+
 (** Dispatch an RPC call to a named service or actor.
 
     The preserved [dispatch_by_name] entry accepts an already-parsed JSON AST.
@@ -112,13 +132,18 @@ let register_handler name entry =
     network inputs (HTTP, socket) never use this path. *)
 let dispatch_by_name name rpc ctx payload =
   match Hashtbl.find_opt handlers name with
-  | Some entry -> entry.dispatch rpc ctx payload
+  | Some entry ->
+      let t0 = Unix.gettimeofday () in
+      let result = entry.dispatch rpc ctx payload in
+      Metrics.observe_service
+        ~service:name ~rpc ~us:(elapsed_us t0) ~ok:(result_ok result);
+      result
   | None ->
     (match Hashtbl.find_opt drut_handlers name with
      | None -> `Assoc [("error", `String (name ^ " is not registered"))]
      | Some spec ->
        let payload_text = Yojson.Safe.to_string payload in
-       (match spec.dhandler rpc ctx payload_text with
+       (match call_drut spec rpc ctx payload_text with
         | Ok text -> (try Yojson.Safe.from_string text with _ -> `String text)
         | Error (Drut_request_error m)
         | Error (Drut_dispatch_error m)
@@ -130,7 +155,7 @@ let dispatch_by_name name rpc ctx payload =
 let dispatch_drut_by_name name rpc ctx_wire payload_text =
   match Hashtbl.find_opt drut_handlers name with
   | None -> Error (Drut_dispatch_error (name ^ " is not registered"))
-  | Some entry -> entry.dhandler rpc ctx_wire payload_text
+  | Some entry -> call_drut entry rpc ctx_wire payload_text
 
 (* ── Expose service over HTTP ─────────────────────────────────────── *)
 
@@ -161,7 +186,7 @@ let expose_http_routes () =
       List.iter (fun (rpc : rpc_info) ->
         let path = Printf.sprintf "/rpc/%s/%s" name rpc.rname in
         !_register_post_rpc path (fun ctx_wire body ->
-          match spec.dhandler rpc.rname ctx_wire body with
+          match call_drut spec rpc.rname ctx_wire body with
           | Ok text -> { status = 200; body = text }
           | Error (Drut_request_error m) -> { status = 400; body = error_body m }
           | Error (Drut_dispatch_error m) -> { status = 404; body = error_body m }
@@ -194,13 +219,7 @@ let start_all ~sw:_ =
   List.iter (fun spec ->
     Hashtbl.replace drut_handlers spec.dname spec;
     spec.dset_ref (fun rpc ctx_wire payload_text ->
-      match Hashtbl.find_opt drut_handlers spec.dname with
-      | None ->
-        Error (Drut_dispatch_error (spec.dname ^ " is not registered"))
-      | Some entry ->
-        (try entry.dhandler rpc ctx_wire payload_text
-         with exn ->
-           Error (Drut_handler_error (Printexc.to_string exn))))
+      dispatch_drut_by_name spec.dname rpc ctx_wire payload_text)
   ) drut_specs;
   expose_http_routes ()
 
