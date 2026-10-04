@@ -13,7 +13,7 @@
 ; github.com/finalclass/cyrograf (main). Do not replace with a home path,
 ; placeholder SHA or a rewritten single root commit.
 (pin
- (url "git+https://github.com/finalclass/cyrograf#0b886ea9e5965448e6c5d1855713220835b573a8")
+ (url "git+https://github.com/finalclass/cyrograf#8f07d974c633054ec44196bedab5e130b454c129")
  (package
   (name cyrograf)))
 

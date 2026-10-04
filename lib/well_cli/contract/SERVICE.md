@@ -246,14 +246,20 @@ Mapowanie na HTTP jest wiążące:
   jako błąd przez Proxy (kompatybilność).
 
 Domyślny Proxy zachowuje kontrakt przeglądarkowy CSRF, cookies i XHR.
-TypeScript dodatkowo eksportuje `createProxy(options)` oraz współdzielony
-`well_transport.ts`. Opcje to `baseUrl`, `bearerToken` (sekret lub dostawca
-synchroniczny/asynchroniczny), `fetch` oraz dodatni `timeoutMs`.
-Instancje mają niezależną konfigurację. Bearer używa jawnego Authorization,
-`credentials: omit`, nie wysyła CSRF/XHR i odrzuca przekierowania.
-Błędy HTTP zachowują `status` w nieudanym ProxyResult; diagnostyka transportu
-nie zawiera sekretu ani treści wyjątku. Callback otrzymuje wynik raz.
-Domyślne `Proxy` pozostaje zgodne z istniejącymi wywołaniami.
+TypeScript używa funkcji operacji generowanych przez Cyrograf:
+`Service.method(ctx, request): Promise<Response>`. Well eksportuje
+`createClient(options): ClientContext` z `well_transport.ts`; kontekst
+implementuje `RpcContext` Cyrografu. Opcje to `baseUrl`, `bearerToken`
+(sekret lub dostawca synchroniczny/asynchroniczny), `fetch` oraz dodatni
+`timeoutMs`. Kontekst nie jest przesyłany jako dane requestu.
+Instancje mają niezależną konfigurację. Domyślny kontekst przeglądarki zachowuje
+CSRF, cookies i XHR. Bearer używa Authorization, `credentials: omit`,
+nie wysyła CSRF/XHR i odrzuca przekierowania. Błędy transportu i protokołu
+odrzucają Promise przez `RpcError` z `status` i klasyfikacją błędu;
+diagnostyka nie zawiera sekretów ani treści wyjątku transportu. Warianty
+domenowe pozostają zwykłymi odpowiedziami. TS nie generuje callbacków,
+`ProxyResult` ani powielonych funkcji RPC; moduły proxy re-eksportują klienta
+Cyrografu. OCaml browser, Go i Dart zachowują swoje obecne interfejsy.
 Serwer może włączyć [uwierzytelnianie API tokenów](../../well/SERVICE.md).
 
 ### Rozszerzenie Actor

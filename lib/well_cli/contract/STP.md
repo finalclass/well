@@ -155,3 +155,10 @@ zrzut logu sieci i konsoli oraz porównanie wartości z natywnym OCaml i TS.
 - Formatowania, LSP i edytorów Cyrografu — należą do jego własnego STP.
 - Nowych proxy Python/Java/C#/Rust — oddzielne rozszerzenie.
 - JetBrains Cyrografu — ograniczenie wydania Cyrografu, nie tej migracji.
+
+## TypeScript Promise client
+
+`make contract-clients` verifies generated `Service.method(ctx, request)` against
+real HTTP, preserving browser CSRF, strict Drut and domain replies.
+`make api-token-test` verifies independent bearer contexts, HTTP status errors,
+credential-free diagnostics, timeouts and redirects with the Promise client.
