@@ -73,6 +73,12 @@ let () =
   check "alias OTP admission" (match Well.Auth.verify_otp ~email:alias ~code:alias_otp () with
     | Ok user -> user.id = user1.id && user.email = user1.email
     | Error _ -> false);
+  let concurrent_code = Result.get_ok (Well.Auth.initiate_otp ~email:alias ()) in
+  let verifications = List.init 2 (fun _ -> Domain.spawn (fun () ->
+    Well.Auth.verify_otp ~email:alias ~code:concurrent_code ()))
+    |> List.map Domain.join in
+  check "concurrent OTP consumption has one success"
+    (List.length (List.filter Result.is_ok verifications) = 1);
   check "registration reserves alias" (Result.is_error
     (Well.Auth.register ~email:alias ~password:"password123" ()));
   check "OAuth account creation reserves alias" (Result.is_error

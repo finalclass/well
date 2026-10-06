@@ -783,7 +783,7 @@ let verify_otp ~email ~code ?(ip = "") () =
     Error "Account temporarily locked"
   else
   let stmt = Sqlite3.prepare db
-    "SELECT id FROM _well_otps WHERE email = ? AND code = ? AND expires_at >= ? AND user_id = ?" in
+    "DELETE FROM _well_otps WHERE email = ? AND code = ? AND expires_at >= ? AND user_id = ? RETURNING user_id" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
   let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT code) in
   let _ = Sqlite3.bind stmt 3 (Sqlite3.Data.INT (Int64.of_int now)) in
@@ -792,16 +792,17 @@ let verify_otp ~email ~code ?(ip = "") () =
     | None -> Sqlite3.Data.NULL) in
   match Sqlite3.step stmt with
   | Sqlite3.Rc.ROW ->
+    let owner_id = Sqlite3.column_int stmt 0 in
     let _ = Sqlite3.finalize stmt in
     let del = Sqlite3.prepare db
-      "DELETE FROM _well_otps WHERE email = ?" in
+      "DELETE FROM _well_otps WHERE email = ? AND user_id = ?" in
     let _ = Sqlite3.bind del 1 (Sqlite3.Data.TEXT email) in
+    let _ = Sqlite3.bind del 2 (Sqlite3.Data.INT (Int64.of_int owner_id)) in
     let _ = Sqlite3.step del in
     let _ = Sqlite3.finalize del in
-    let email = _primary_email db email in
     let user_stmt = Sqlite3.prepare db
-      (Printf.sprintf "SELECT %s FROM _well_users WHERE email = ?" _user_cols) in
-    let _ = Sqlite3.bind user_stmt 1 (Sqlite3.Data.TEXT email) in
+      (Printf.sprintf "SELECT %s FROM _well_users WHERE id = ?" _user_cols) in
+    let _ = Sqlite3.bind user_stmt 1 (Sqlite3.Data.INT (Int64.of_int owner_id)) in
     (match Sqlite3.step user_stmt with
      | Sqlite3.Rc.ROW ->
        let user = _read_user user_stmt in
@@ -809,6 +810,7 @@ let verify_otp ~email ~code ?(ip = "") () =
        if user.is_archived then
          Error "Account is archived"
        else begin
+         let email = user.email in
          _forgive_attempts db ~email;
          _record_attempt db ~email ~ip ~is_valid:true;
          Ok user
