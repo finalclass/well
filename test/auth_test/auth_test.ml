@@ -11,6 +11,15 @@ let check name cond =
 let () =
   Mirage_crypto_rng_unix.use_default ();
 
+  Well.Db.with_well_db (fun db ->
+    ignore (Sqlite3.exec db {|CREATE TABLE _well_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT 'legacy',
+      first_name TEXT NOT NULL DEFAULT '', last_name TEXT NOT NULL DEFAULT ''
+    )|});
+    ignore (Sqlite3.exec db {|INSERT INTO _well_users (id,email,password_hash,first_name,last_name)
+      VALUES (400001,'legacy@example.com','','Legacy','Identity')|}));
+
   (* ── PBKDF2 correctness ─────────────────────────────────────────── *)
 
   let r1 = Well.Auth.register ~email:"test@example.com" ~password:"password123" () in
@@ -19,6 +28,11 @@ let () =
   check "register returns id" (user1.id > 0);
   check "register returns email" (user1.email = "test@example.com");
   check "register returns created_at" (String.length user1.created_at > 0);
+  check "migration preserves existing profile and identity"
+    (match Well.Auth.get_user 400001 with
+      | Some user -> user.email = "legacy@example.com" && user.first_name = "Legacy"
+        && user.last_name = "Identity" && user.created_at = "legacy"
+      | None -> false);
 
   (* Login with correct password *)
   let l1 = Well.Auth.login ~email:"test@example.com" ~password:"password123" () in
@@ -43,6 +57,72 @@ let () =
   check "get_user email" ((Option.get u).email = "test@example.com");
   let u_none = Well.Auth.get_user 999999 in
   check "get_user not found" (Option.is_none u_none);
+
+  let alias = "alternate@example.com" in
+  check "aliases normalize and omit primary" (Result.is_ok
+    (Well.Auth.replace_email_aliases ~user_id:user1.id
+      ~emails:[" Alternate@Example.com "; alias; user1.email] ()));
+  check "aliases return canonical set"
+    (Well.Auth.email_aliases ~user_id:user1.id () = [alias]);
+  check "alias lookup preserves user id and primary email"
+    (Well.Auth.find_user_by_email " ALTERNATE@EXAMPLE.COM " = Some user1);
+  check "alias password admission" (match Well.Auth.login ~email:alias ~password:"password123" () with
+    | Ok user -> user.id = user1.id && user.email = user1.email
+    | Error _ -> false);
+  let alias_otp = Result.get_ok (Well.Auth.initiate_otp ~email:alias ()) in
+  check "alias OTP admission" (match Well.Auth.verify_otp ~email:alias ~code:alias_otp () with
+    | Ok user -> user.id = user1.id && user.email = user1.email
+    | Error _ -> false);
+  check "registration reserves alias" (Result.is_error
+    (Well.Auth.register ~email:alias ~password:"password123" ()));
+  check "OAuth account creation reserves alias" (Result.is_error
+    (Well.Auth.create_user_without_password ~email:alias));
+  let other = Result.get_ok (Well.Auth.register ~email:"alias-other@example.com" ~password:"password123" ()) in
+  check "other primary update rejects alias" (Result.is_error (Well.Auth.update_email other.id alias));
+  check "invalid replacement is atomic" (Result.is_error
+    (Well.Auth.replace_email_aliases ~user_id:user1.id ~emails:["bad"] ())
+    && Well.Auth.email_aliases ~user_id:user1.id () = [alias]);
+  check "conflicting replacement is atomic" (Result.is_error
+    (Well.Auth.replace_email_aliases ~user_id:user1.id ~emails:[other.email] ())
+    && Well.Auth.email_aliases ~user_id:user1.id () = [alias]);
+  check "missing identity is rejected" (Result.is_error
+    (Well.Auth.replace_email_aliases ~user_id:999999 ~emails:[] ()));
+  let racers = List.map (fun user -> Domain.spawn (fun () ->
+    Well.Auth.replace_email_aliases ~user_id:user ~emails:["race@example.com"] ()))
+    [user1.id; other.id] in
+  let results = List.map Domain.join racers in
+  check "concurrent alias claims have one winner" (List.length (List.filter Result.is_ok results) = 1);
+  ignore (Well.Auth.replace_email_aliases ~user_id:user1.id ~emails:[alias] ());
+  ignore (Well.Auth.replace_email_aliases ~user_id:other.id ~emails:[] ());
+  let pending = Result.get_ok (Well.Auth.initiate_otp ~email:alias ()) in
+  check "aliases can be cleared" (Result.is_ok
+    (Well.Auth.replace_email_aliases ~user_id:user1.id ~emails:[] ()));
+  check "removed alias no longer resolves" (Well.Auth.find_user_by_email alias = None);
+  check "alias can be reassigned" (Result.is_ok
+    (Well.Auth.replace_email_aliases ~user_id:other.id ~emails:[alias] ()));
+  check "old OTP cannot transfer accounts" (Result.is_error (Well.Auth.verify_otp ~email:alias ~code:pending ()));
+  check "existing identity and profile survive" (Well.Auth.get_user user1.id = Some user1);
+  ignore (Well.Auth.replace_email_aliases ~user_id:other.id ~emails:[] ());
+  ignore (Well.Auth.replace_email_aliases ~user_id:user1.id ~emails:[alias] ());
+  Well.Auth.archive_user ~id:user1.id ~is_archived:true ();
+  check "archived alias password rejects" (Result.is_error (Well.Auth.login ~email:alias ~password:"password123" ()));
+  let archived_code = Result.get_ok (Well.Auth.initiate_otp ~email:alias ()) in
+  check "archived alias OTP rejects" (Result.is_error (Well.Auth.verify_otp ~email:alias ~code:archived_code ()));
+  Well.Auth.archive_user ~id:user1.id ~is_archived:false ();
+  Well.Auth.reset_attempts ~email:alias ();
+  for i = 1 to 5 do ignore (Well.Auth.login ~email:(if i mod 2 = 0 then alias else user1.email) ~password:"wrongpassword" ()) done;
+  check "alias shares primary failure budget" (Well.Auth.login_attempts ~email:alias () = Well.Auth.login_attempts ~email:user1.email ());
+  check "primary cannot bypass alias failures" (Well.Auth.login ~email:user1.email ~password:"password123" () = Error "Account temporarily locked");
+  let locked_code = Result.get_ok (Well.Auth.initiate_otp ~email:alias ()) in
+  check "OTP cannot bypass shared lock" (Well.Auth.verify_otp ~email:alias ~code:locked_code () = Error "Account temporarily locked");
+  Well.Auth.reset_attempts ~email:alias ();
+  ignore (Well.Auth.replace_email_aliases ~user_id:user1.id ~emails:[] ());
+  check "own alias can become primary" (Result.is_ok (Well.Auth.replace_email_aliases ~user_id:other.id ~emails:[alias] ())
+    && Result.is_ok (Well.Auth.update_email other.id alias)
+    && Well.Auth.email_aliases ~user_id:other.id () = []);
+  ignore (Well.Auth.replace_email_aliases ~user_id:other.id ~emails:["delete-alias@example.com"] ());
+  Well.Auth.delete_user other.id;
+  check "deletion frees aliases" (Well.Auth.find_user_by_email "delete-alias@example.com" = None);
 
   (* ── Email normalization ─────────────────────────────────────────── *)
 

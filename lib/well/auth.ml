@@ -66,7 +66,7 @@ let configure
 (* ── Database — uses shared well.sqlite pool ─────────────────── *)
 
 (** Create auth tables in [well.sqlite] if they do not exist yet. Idempotent. *)
-let ensure_tables, _reset_tables = Db.once_resettable (fun db ->
+let _ensure_tables, _reset_tables = Db.once_resettable (fun db ->
     let _ = Sqlite3.exec db
       {|CREATE TABLE IF NOT EXISTS _well_users (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,7 +116,53 @@ let ensure_tables, _reset_tables = Db.once_resettable (fun db ->
           user_id INTEGER PRIMARY KEY,
           settings TEXT NOT NULL DEFAULT '{}'
         )|} in
+    ignore (Sqlite3.exec db
+      "ALTER TABLE _well_otps ADD COLUMN user_id INTEGER");
+    let exec sql =
+      match Sqlite3.exec db sql with
+      | Sqlite3.Rc.OK -> ()
+      | _ -> failwith (Sqlite3.errmsg db)
+    in
+    exec {|CREATE TABLE IF NOT EXISTS _well_email_aliases (
+      email TEXT PRIMARY KEY COLLATE NOCASE,
+      user_id INTEGER NOT NULL
+    )|};
+    exec "CREATE INDEX IF NOT EXISTS _well_email_aliases_user ON _well_email_aliases(user_id)";
+    exec {|CREATE TRIGGER IF NOT EXISTS _well_alias_owner BEFORE INSERT ON _well_email_aliases
+      BEGIN
+        SELECT RAISE(ABORT, 'Email already taken') WHERE EXISTS
+          (SELECT 1 FROM _well_users WHERE email = NEW.email COLLATE NOCASE);
+        SELECT RAISE(ABORT, 'User not found') WHERE NOT EXISTS
+          (SELECT 1 FROM _well_users WHERE id = NEW.user_id);
+      END|};
+    exec {|CREATE TRIGGER IF NOT EXISTS _well_primary_owner_insert BEFORE INSERT ON _well_users
+      BEGIN
+        SELECT RAISE(ABORT, 'Email already taken') WHERE EXISTS
+          (SELECT 1 FROM _well_email_aliases WHERE email = NEW.email COLLATE NOCASE);
+      END|};
+    exec {|CREATE TRIGGER IF NOT EXISTS _well_primary_owner_update BEFORE UPDATE OF email ON _well_users
+      BEGIN
+        SELECT RAISE(ABORT, 'Email already taken') WHERE EXISTS
+          (SELECT 1 FROM _well_email_aliases WHERE email = NEW.email COLLATE NOCASE AND user_id <> NEW.id);
+      END|};
+    exec {|CREATE TRIGGER IF NOT EXISTS _well_primary_alias_promoted AFTER UPDATE OF email ON _well_users
+      BEGIN
+        DELETE FROM _well_email_aliases WHERE email = NEW.email COLLATE NOCASE AND user_id = NEW.id;
+      END|};
+    exec {|CREATE TRIGGER IF NOT EXISTS _well_alias_removed AFTER DELETE ON _well_email_aliases
+      BEGIN
+        DELETE FROM _well_otps WHERE email = OLD.email COLLATE NOCASE;
+      END|};
+    exec {|CREATE TRIGGER IF NOT EXISTS _well_alias_user_deleted AFTER DELETE ON _well_users
+      BEGIN
+        DELETE FROM _well_email_aliases WHERE user_id = OLD.id;
+        DELETE FROM _well_otps WHERE user_id = OLD.id;
+      END|};
     ())
+
+let ensure_tables db =
+  Sqlite3.busy_timeout db 5000;
+  _ensure_tables db
 
 (* ── Hex helpers ───────────────────────────────────────────────── *)
 
@@ -271,7 +317,26 @@ let _read_user stmt =
 
 (* ── Brute-force protection ──────────────────────────────────── *)
 
+let _primary_email db email =
+  let stmt = Sqlite3.prepare db
+    "SELECT email FROM _well_users WHERE email = ? COLLATE NOCASE OR id IN (SELECT user_id FROM _well_email_aliases WHERE email = ?)" in
+  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+    ignore (Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email));
+    ignore (Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT email));
+    match Sqlite3.step stmt with
+    | Sqlite3.Rc.ROW -> Sqlite3.column_text stmt 0
+    | _ -> email)
+
+let _email_user_id db email =
+  let stmt = Sqlite3.prepare db "SELECT id FROM _well_users WHERE email = ? COLLATE NOCASE" in
+  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+    ignore (Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT (_primary_email db email)));
+    match Sqlite3.step stmt with
+    | Sqlite3.Rc.ROW -> Some (Sqlite3.column_int stmt 0)
+    | _ -> None)
+
 let _count_recent_failures db ~email =
+  let email = _primary_email db email in
   let cutoff = now_unix () - _config.login_failure_window_seconds in
   let stmt = Sqlite3.prepare db
     "SELECT COUNT(*) FROM _well_login_attempts WHERE email = ? AND is_valid = 0 AND is_forgiven = 0 AND occurred_at > ?" in
@@ -285,6 +350,7 @@ let _count_recent_failures db ~email =
   n
 
 let _record_attempt db ~email ~ip ~is_valid =
+  let email = _primary_email db email in
   let stmt = Sqlite3.prepare db
     "INSERT INTO _well_login_attempts (email, ip, is_valid, occurred_at) VALUES (?, ?, ?, ?)" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
@@ -296,6 +362,7 @@ let _record_attempt db ~email ~ip ~is_valid =
   ()
 
 let _forgive_attempts db ~email =
+  let email = _primary_email db email in
   let stmt = Sqlite3.prepare db
     "UPDATE _well_login_attempts SET is_forgiven = 1 WHERE email = ? AND is_valid = 0 AND is_forgiven = 0" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
@@ -353,6 +420,7 @@ let login ~email ~password ?(ip = "") () =
   else
     Db.with_well_db @@ fun db ->
     ensure_tables db;
+    let email = _primary_email db email in
     (* Check brute-force limit *)
     let failures = _count_recent_failures db ~email in
     if failures >= _config.login_failures_limit then begin
@@ -434,6 +502,7 @@ let find_user_by_email email =
   let email = normalize_email email in
   Db.with_well_db @@ fun db ->
   ensure_tables db;
+  let email = _primary_email db email in
   let stmt = Sqlite3.prepare db
     (Printf.sprintf "SELECT %s FROM _well_users WHERE email = ?" _user_cols) in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
@@ -445,6 +514,66 @@ let find_user_by_email email =
   | _ ->
     let _ = Sqlite3.finalize stmt in
     None
+
+let email_aliases ~user_id () =
+  with_db @@ fun db ->
+  let stmt = Sqlite3.prepare db
+    "SELECT email FROM _well_email_aliases WHERE user_id = ? ORDER BY email" in
+  Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+    ignore (Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int user_id)));
+    let rec read acc = match Sqlite3.step stmt with
+      | Sqlite3.Rc.ROW -> read (Sqlite3.column_text stmt 0 :: acc)
+      | Sqlite3.Rc.DONE -> List.rev acc
+      | _ -> failwith (Sqlite3.errmsg db)
+    in read [])
+
+let replace_email_aliases ~user_id ~emails () =
+  let emails = List.map normalize_email emails |> List.sort_uniq String.compare in
+  if List.exists (fun email -> not (validate_email email)) emails then
+    Error "Invalid email address"
+  else with_db @@ fun db ->
+  let exec sql = match Sqlite3.exec db sql with
+    | Sqlite3.Rc.OK -> ()
+    | _ -> failwith (Sqlite3.errmsg db)
+  in
+  let statement sql values f =
+    let stmt = Sqlite3.prepare db sql in
+    Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+      List.iteri (fun i value -> ignore (Sqlite3.bind stmt (i + 1) value)) values;
+      f stmt)
+  in
+  let uid = Sqlite3.Data.INT (Int64.of_int user_id) in
+  exec "BEGIN IMMEDIATE";
+  try
+    let primary = statement "SELECT email FROM _well_users WHERE id = ?" [uid]
+      (fun stmt -> match Sqlite3.step stmt with
+        | Sqlite3.Rc.ROW -> Some (Sqlite3.column_text stmt 0)
+        | _ -> None) in
+    match primary with
+    | None -> exec "ROLLBACK"; Error "User not found"
+    | Some primary ->
+      let emails = List.filter (fun email -> email <> normalize_email primary) emails in
+      let current = statement "SELECT email FROM _well_email_aliases WHERE user_id = ?" [uid]
+        (fun stmt -> let rec read acc = match Sqlite3.step stmt with
+          | Sqlite3.Rc.ROW -> read (Sqlite3.column_text stmt 0 :: acc)
+          | Sqlite3.Rc.DONE -> acc
+          | _ -> failwith (Sqlite3.errmsg db)
+        in read []) in
+      List.iter (fun email -> if not (List.mem email emails) then
+        statement "DELETE FROM _well_email_aliases WHERE user_id = ? AND email = ?"
+          [uid; Sqlite3.Data.TEXT email] (fun stmt ->
+            if Sqlite3.step stmt <> Sqlite3.Rc.DONE then failwith (Sqlite3.errmsg db))) current;
+      let rec insert = function
+        | [] -> exec "COMMIT"; Ok ()
+        | email :: rest when List.mem email current -> insert rest
+        | email :: rest ->
+          let rc = statement "INSERT INTO _well_email_aliases(email,user_id) VALUES (?,?)"
+            [Sqlite3.Data.TEXT email; uid] Sqlite3.step in
+          if rc = Sqlite3.Rc.DONE then insert rest
+          else if rc = Sqlite3.Rc.CONSTRAINT then (exec "ROLLBACK"; Error "Email already taken")
+          else failwith (Sqlite3.errmsg db)
+      in insert emails
+  with exn -> ignore (Sqlite3.exec db "ROLLBACK"); raise exn
 
 (** Create a user with no password (for OAuth / OTP-only flows). *)
 let create_user_without_password ~email =
@@ -599,11 +728,14 @@ let initiate_otp ~email () =
       let code = generate_code _config.otp_code_length in
       let expires_at = now + _config.otp_lifetime_seconds in
       let stmt = Sqlite3.prepare db
-        "INSERT INTO _well_otps (email, code, created_at, expires_at) VALUES (?, ?, ?, ?)" in
+        "INSERT INTO _well_otps (email, code, created_at, expires_at, user_id) VALUES (?, ?, ?, ?, ?)" in
       let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
       let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT code) in
       let _ = Sqlite3.bind stmt 3 (Sqlite3.Data.INT (Int64.of_int now)) in
       let _ = Sqlite3.bind stmt 4 (Sqlite3.Data.INT (Int64.of_int expires_at)) in
+    let _ = Sqlite3.bind stmt 5 (match _email_user_id db email with
+      | Some id -> Sqlite3.Data.INT (Int64.of_int id)
+      | None -> Sqlite3.Data.NULL) in
       let _ = Sqlite3.step stmt in
       let _ = Sqlite3.finalize stmt in
       Ok code
@@ -647,11 +779,17 @@ let verify_otp ~email ~code ?(ip = "") () =
   Db.with_well_db @@ fun db ->
   ensure_tables db;
   let now = now_unix () in
+  if _count_recent_failures db ~email >= _config.login_failures_limit then
+    Error "Account temporarily locked"
+  else
   let stmt = Sqlite3.prepare db
-    "SELECT id FROM _well_otps WHERE email = ? AND code = ? AND expires_at >= ?" in
+    "SELECT id FROM _well_otps WHERE email = ? AND code = ? AND expires_at >= ? AND user_id = ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
   let _ = Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT code) in
   let _ = Sqlite3.bind stmt 3 (Sqlite3.Data.INT (Int64.of_int now)) in
+  let _ = Sqlite3.bind stmt 4 (match _email_user_id db email with
+    | Some id -> Sqlite3.Data.INT (Int64.of_int id)
+    | None -> Sqlite3.Data.NULL) in
   match Sqlite3.step stmt with
   | Sqlite3.Rc.ROW ->
     let _ = Sqlite3.finalize stmt in
@@ -660,6 +798,7 @@ let verify_otp ~email ~code ?(ip = "") () =
     let _ = Sqlite3.bind del 1 (Sqlite3.Data.TEXT email) in
     let _ = Sqlite3.step del in
     let _ = Sqlite3.finalize del in
+    let email = _primary_email db email in
     let user_stmt = Sqlite3.prepare db
       (Printf.sprintf "SELECT %s FROM _well_users WHERE email = ?" _user_cols) in
     let _ = Sqlite3.bind user_stmt 1 (Sqlite3.Data.TEXT email) in

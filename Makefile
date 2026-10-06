@@ -149,3 +149,7 @@ cap-access-test:
 
 cap-http-test:
 	$(DUNE) test --force test/hardening_test test/production_test test/bus_test
+
+.PHONY: auth-test
+auth-test:
+	$(DUNE) runtest test/auth_test
