@@ -1,0 +1,24 @@
+(library
+ (name civil_clock_cases)
+ (modules cases))
+
+(test
+ (name civil_clock_test)
+ (modules civil_clock_test)
+ (libraries well.core well.test civil_clock_cases unix))
+
+(executable
+ (name consumer)
+ (modules consumer)
+ (libraries well.core civil_clock_cases unix))
+
+(rule
+ (alias runtest)
+ (deps
+  (sandbox none)
+  run.ts
+  (source_tree compile_fail)
+  %{lib:well.core:well__Civil_clock.cmi})
+ (action
+  (run deno run -A %{dep:run.ts} %{exe:consumer.exe} %{bin:ocamlc}
+   %{lib:well.core:well.cmi} %{lib:timedesc:timedesc.cmi})))

@@ -1,3 +1,58 @@
+# axe sync — Well.Civil_clock — #3 — 2026-10-08
+
+Zatwierdzona specyfikacja: commit fcd3f44 oraz polecenie użytkownika
+„Zatwierdzam. Wykonaj implementację.” Zakres:
+lib/well/civil_clock/SERVICE.md i STP.md, implementacja publicznego
+Well.Civil_clock oraz integracja zależności i odbioru C01–C06.
+Sygnatura civil_clock.mli odpowiada dokładnie blokowi kontraktu w SERVICE.md.
+
+Układ źródeł określa .axe/source-manifest.json. Brak docs/ nie został
+potraktowany jako baseline; odbiór dotyczy jawnie zatwierdzonej delty #3.
+Specyfikacja zachowała identyczną treść podczas implementacji.
+
+## Odbiór
+
+- make civil-clock-test: exit 0; 62 testy API, w tym 21 przykładów konwersji,
+  przeplot dwóch domen, błędne dane i granice reprezentacji.
+- C06: osobny konsument well.core bez Well.run/Eio, uruchomiony dla TZ=UTC
+  i TZ=America/New_York; oba procesy sprawdziły zegar, aliasy i 21 konwersji.
+  Kontrola dodatnia kompiluje się; obie negatywne próby są odrzucane
+  z powodu niezgodności typów, nie błędu składni lub brakujących zależności.
+- make check: exit 0.
+- make build: exit 0.
+- dune tools exec ocamlformat -- --check lib/well/civil_clock.ml test/civil_clock_test/cases.ml test/civil_clock_test/civil_clock_test.ml test/civil_clock_test/consumer.ml test/civil_clock_test/compile_fail/valid.ml test/civil_clock_test/compile_fail/invalid_zone.ml test/civil_clock_test/compile_fail/invalid_date.ml: exit 0.
+- dune tools exec ocamlformat -- --doc-comments=before --check lib/well/civil_clock.mli: exit 0.
+- deno fmt --check test/civil_clock_test/run.ts: exit 0.
+- deno check test/civil_clock_test/run.ts: exit 0.
+- git diff --check: exit 0.
+- Kontrola Deno: sygnatura mli identyczna ze specyfikacją po usunięciu
+  docstringów i normalizacji białych znaków; exit 0.
+
+Lock wygenerowano przez make lock z tymczasowym DUNE_WORKSPACE wskazującym
+te same trzy rewizje repozytoriów pakietów co bazowy lock. Dodano wyłącznie
+nowe zależności; wersje istniejących pakietów i pin Cyrografu zachowane.
+Tymczasowy workspace i pliki prób kompilacji zostały usunięte.
+
+Wyniki poleceń są zachowane w wątku T3; skrót odbioru jest publikowany
+w PR https://github.com/finalclass/well/pull/5. Nie zapisano lokalnych
+plików dowodowych ani surowych logów do repozytorium.
+
+Pomiar od rozpoczęcia implementacji: 2026-10-08T11:18:18.711Z
+do 2026-10-08T11:38:30.661Z, 1212 s.
+
+## Freeze
+
+Przesunięto wyłącznie dwa w pełni zweryfikowane dokumenty:
+lib/well/civil_clock/SERVICE.md i lib/well/civil_clock/STP.md.
+Nie certyfikowano innych zmian frameworka ani migracji DG.
+
+SHA-256 zatwierdzonych źródeł:
+
+- SERVICE.md: 2b9532f9bd0b20f57ebf98e4f52273fda7b584471cf8f2e856cda9b8ff4a1b6d
+- STP.md: 3ce6c43dc4b61a76b17c9e46112fdc54544c45882129191101f9b45a89f4ab7e
+
+---
+
 # axe sync — dostęp CAP — 2026-10-04
 
 Zatwierdzona delta tego wątku jest zaimplementowana i zweryfikowana:

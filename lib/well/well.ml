@@ -1556,6 +1556,8 @@ module Config = Config
 (** TOML file reader and writer. *)
 module Toml = Toml
 
+module Civil_clock = Civil_clock
+
 (** Chrome DevTools Protocol client for end-to-end testing. *)
 module Cdp = Cdp
 

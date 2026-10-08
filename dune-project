@@ -41,6 +41,8 @@
   ppx_deriving
   ppx_deriving_yojson
   otoml
+  (timedesc (>= 3.1.2))
+  timedesc-tzdb
   camlzip
   (js_of_ocaml (= 6.2.0))
   (js_of_ocaml-compiler (= 6.2.0))
