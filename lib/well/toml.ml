@@ -9,8 +9,55 @@ let from_file path = Otoml.Parser.from_file path
 (** Parse a TOML string. *)
 let from_string s = Otoml.Parser.from_string s
 
+open struct
+  let rec prepare_for_printing value =
+    let open Otoml in
+    match value with
+    | TomlArray values ->
+        let values = List.map prepare_for_printing values in
+        if
+          values <> []
+          && List.for_all
+               (function
+                 | TomlTable _ -> true
+                 | _ -> false )
+               values
+        then TomlTableArray values
+        else TomlArray values
+    | TomlTable fields ->
+        let fields =
+          List.map
+            (fun (key, value) -> (key, prepare_for_printing value))
+            fields
+        in
+        let scalars, tables =
+          List.partition
+            (fun (_, value) ->
+              match value with
+              | TomlTable _
+               |TomlTableArray _ ->
+                  false
+              | _ -> true )
+            fields
+        in
+        TomlTable (scalars @ tables)
+    | TomlTableArray values ->
+        TomlTableArray (List.map prepare_for_printing values)
+    | TomlInlineTable fields ->
+        TomlInlineTable
+          (List.map
+             (fun (key, value) -> (key, prepare_for_printing value))
+             fields )
+    | value -> value
+end
+
 (** Serialize a TOML value to string. *)
-let to_string t = Otoml.Printer.to_string t
+let to_string t =
+  Otoml.Printer.to_string
+    ~indent_width:2
+    ~indent_character:' '
+    ~newline_before_table:true
+    (prepare_for_printing t)
 
 (** Write a TOML value to a file. *)
 let to_file path t =

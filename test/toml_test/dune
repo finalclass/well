@@ -1,0 +1,3 @@
+(test
+ (name toml_test)
+ (libraries well.core well.test otoml unix))

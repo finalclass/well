@@ -4,6 +4,13 @@ RELEASE_DIR := _release
 
 INSTALL_DIR := $(HOME)/.local/bin
 
+.PHONY: toml-test registry-test
+toml-test:
+	$(DUNE) runtest test/toml_test
+
+registry-test:
+	$(DUNE) runtest test/registry_test
+
 .PHONY: build check test clean lock dev release install ocamlformat-mlx \
 	contract-check contract-build contract-native contract-publish \
 	contract-browser contract-clients contract-socket contract-actor \
