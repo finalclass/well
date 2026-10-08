@@ -164,3 +164,7 @@ cap-http-test:
 .PHONY: auth-test
 auth-test:
 	$(DUNE) runtest test/auth_test
+
+.PHONY: login-navigation-test
+login-navigation-test:
+	$(DUNE) runtest test/login_navigation_test

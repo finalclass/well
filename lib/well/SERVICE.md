@@ -1,10 +1,11 @@
-# SERVICE.md — Well (HTTP: CSRF, CORS)
+# SERVICE.md — Well (HTTP: CSRF, CORS, powrót po logowaniu)
 
 ## Role
 
 Ochrona żądań HTTP zmieniających stan (CSRF) oraz opcjonalne, fail-closed
 zezwolenie przeglądarki na cross-origin (CORS). Integracja jawnych tokenów API
-ze zweryfikowaną tożsamością aplikacji i kontekstem RPC. Aplikacja well jest
+ze zweryfikowaną tożsamością aplikacji i kontekstem RPC. Bezpieczna nawigacja
+do logowania i lokalny powrót po uwierzytelnieniu. Aplikacja well jest
 same-origin; CORS nie jest częścią scaffoldu.
 
 ## Abstraction boundary
@@ -15,6 +16,95 @@ i sposób składania nagłówków odpowiedzi. Aplikacja widzi `Well.csrf`,
 `Well.csrf_token` i `Well.cors`.
 
 ## Contract
+
+### Bezpieczny powrót po logowaniu
+
+`Well.Login_navigation` jest wspólną Utility dla middleware, OAuth i
+aplikacji. Enkapsuluje bezpieczeństwo lokalnego celu i kodowanie nawigacji;
+uprawnienia użytkownika oraz obsługa logowania należą do aplikacji.
+
+```ocaml
+module Login_navigation : sig
+  val safe_target : string -> string
+  val return_target : request -> string
+  val login_url :
+    ?login_path:string -> ?return_param:string -> string -> string
+end
+
+val require_auth :
+  ?login_path:string -> ?return_param:string -> unit -> middleware
+```
+
+`safe_target` zwraca zaakceptowany cel bez zmian albo `"/"`.
+Cel zaczyna się od pojedynczego `/`. Adres zewnętrzny, pusty cel,
+prefiks `//`, backslash, znaki sterujące U+0000–U+001F i
+U+007F–U+009F oraz literalne białe znaki Unicode są odrzucane.
+Query i fragment są dozwolone. Walidacja obejmuje także kolejne
+warstwy dekodowania procentowego aż do braku zmian: cel pozostaje
+lokalny, bez backslash i znaków sterujących, a jego ścieżka nie zawiera
+białych znaków. Zakodowane spacje w query są dozwolone. Ta kontrola
+nie dekoduje wyniku ani nie zamienia `+` na spację.
+
+```use-case
+Zweryfikuj cel powrotu — safe_target
+
+<cel narusza politykę lokalnego celu>
+  (END "/")
+<_>
+  (END wejściowy cel bez zmian)
+```
+
+`return_target` zachowuje ścieżkę GET i znaczenie wszystkich par
+`req.query`, ich kolejność, powtórzone nazwy oraz puste wartości.
+Nazwy i wartości query koduje oddzielnie; istniejące escape'y w
+`req.path` pozostają bez zmian. Pisownia query może być kanonizowana.
+
+```use-case
+Wybierz cel żądania — return_target
+
+<metoda inna niż GET>
+  (END "/")
+<_>
+  [Złóż req.path z poprawnie zakodowanym req.query]
+  [Wywołaj safe_target]
+  (END zweryfikowany cel)
+```
+
+`login_url` domyślnie używa `login_path="/login"` i
+`return_param="return_to"`. Konfiguracja wymaga bezpiecznego
+lokalnego adresu logowania i niepustej nazwy parametru; naruszenie
+rzuca `Invalid_argument`. Istniejące query i fragment strony logowania
+są zachowane. Nazwy istniejących parametrów porównuje się po
+dekodowaniu HTTP; wszystkie wystąpienia wybranego parametru powrotu
+są zastępowane jednym. Parametr trafia przed fragmentem.
+
+```use-case
+Zbuduj adres logowania — login_url
+
+[Zweryfikuj konfigurację]
+[Wywołaj safe_target dla przekazanego celu]
+[Zakoduj nazwę parametru i cały cel jako pojedynczą wartość query]
+[Zastąp istniejący parametr powrotu albo dopisz go do query]
+(END lokalny adres logowania z jednym parametrem powrotu)
+```
+
+`require_auth` zachowuje obsługę uwierzytelnionego użytkownika.
+Nieuwierzytelniony klient akceptujący HTML otrzymuje przekierowanie
+z `login_url (return_target req)` przy wskazanej konfiguracji.
+Brak Accept zachowuje traktowanie klienta jako HTML; klient
+nieakceptujący HTML otrzymuje dotychczasowe 401 `Unauthorized`.
+
+OAuth wywołuje `safe_target` przy przyjęciu `return_to`
+i przed końcowym przekierowaniem z wartości sesji. Publiczne
+`Well.OAuth.validate_return_to` zachowuje sygnaturę `string -> string`
+i deleguje do tej samej polityki.
+
+Przykład: GET `/operations?filter=a%26b` daje
+`/login?return_to=%2Foperations%3Ffilter%3Da%2526b`.
+Po jednym dekodowaniu parametru celem jest
+`/operations?filter=a%26b`; parametr filtra po powrocie ma wartość `a&b`.
+Aplikacja może użyć `~login_path:"/logowanie"` i
+`~return_param:"redirect"`.
 
 ### Diagnostyka HTTP
 
@@ -193,6 +283,29 @@ Lista CORS nie osłabia CSRF: POST z dozwolonej obcej origin i tak dostaje
 ## Verification strategy
 
 Krytyczne (testy HTTP / unit middleware):
+
+Powrót po logowaniu:
+
+- Round-trip GET przez rzeczywisty HTTP: przykład z kontraktu oraz
+  query z `&`, `?`, `+`, spacją, Unicode, literalnym procentem,
+  istniejącymi escape'ami, powtórzonymi nazwami i pustymi wartościami.
+  Po odczycie parametru powrotu i ponownym GET widok dostaje te same dane.
+- Wspólna tabela walidacji dla Utility i OAuth: bezpieczne cele
+  zachowane; adresy zewnętrzne, `//`, backslash, sterujące i białe znaki
+  odrzucone także po pojedynczym i wielokrotnym kodowaniu procentowym.
+  Zakodowane spacje w query zaakceptowane.
+- POST, PUT, PATCH, DELETE, HEAD i OPTIONS dają cel `/`;
+  żądanie operacji nie jest odtwarzane po logowaniu.
+- Domyślna konfiguracja oraz `/logowanie?lang=pl#formularz`
+  z parametrem `redirect`: jeden parametr powrotu przed fragmentem,
+  pozostałe dane strony logowania zachowane; zastępowanie również
+  powtórzonej i zakodowanej nazwy parametru.
+- Niepoprawny login_path i pusta nazwa parametru dają Invalid_argument.
+- Middleware: HTML i brak Accept dają przekierowanie, klient JSON daje
+  401 bez Location, uwierzytelniony użytkownik przechodzi do handlera.
+- OAuth: cel przyjęty przez authorize i cel odczytany z sesji przed
+  przekierowaniem stosują tę samą politykę, również dla złośliwej
+  wartości zapisanej w sesji; zachowana sygnatura validate_return_to.
 
 API token (`make api-token-test`):
 

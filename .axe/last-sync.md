@@ -53,6 +53,44 @@ SHA-256 zatwierdzonych źródeł:
 
 ---
 
+# axe sync — Well #4 — bezpieczny powrót po logowaniu — 2026-10-08
+
+Zatwierdzona w tym wątku delta lib/well/SERVICE.md jest zaimplementowana
+i zweryfikowana. Zakres: Well.Login_navigation, require_auth oraz
+wspólna walidacja OAuth; testy wynikają z zatwierdzonej strategii weryfikacji.
+Specyfikacja pozostała bajtowo zgodna z zaakceptowanym patchem.
+
+GET zachowuje ścieżkę i znaczenie query. Inne metody wybierają /.
+Cel jest lokalny także po wielokrotnym dekodowaniu procentowym;
+wynik zachowuje wejściowe kodowanie. Adres logowania obsługuje istniejące
+query, fragment i konfigurowaną nazwę jednego parametru powrotu.
+OAuth waliduje zarówno wejście authorize, jak i cel odczytany z sesji.
+
+## Odbiór
+
+- make check: exit 0.
+- make build: exit 0.
+- make login-navigation-test: exit 0; 2137 sprawdzeń Utility, middleware,
+  rzeczywistego HTTP oraz authorize/callback OAuth ze stubem dostawcy.
+- make test: exit 2; wyłącznie znane błędy oauth_provider_test (Not_found),
+  cmd_effects_test i props_parse_test (caml_pure_js_expr), opisane już
+  w poprzednich raportach regresji poniżej.
+- Auth: 159/159; hardening: 101/101; production: 160/160;
+  API token: 50/50; Actor: 110/110.
+- ocamlformat: exit 0; nowe moduły i test oraz zmieniona funkcja middleware.
+- git diff --check: exit 0.
+
+## Freeze
+
+Freeze bez zmian: lib/well/SERVICE.md zawiera również wcześniej
+niezamrożone zmiany API-token i CAP. Odbiór #4 nie certyfikuje całej
+odziedziczonej delty ani pełnej regresji. Nie tworzono nowego baseline.
+
+Weryfikacja zakończona: 2026-10-08T11:33:01.431Z.
+Czas od rozpoczęcia implementacji i przygotowania środowiska: 909 s.
+Wyniki i ograniczenia są publikowane w PR; surowe logi pozostają tymczasowe.
+
+---
 # axe sync — dostęp CAP — 2026-10-04
 
 Zatwierdzona delta tego wątku jest zaimplementowana i zweryfikowana:

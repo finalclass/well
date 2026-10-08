@@ -84,6 +84,8 @@ let url_encode = Url.encode
 (** Decode a URL-encoded (percent-encoded) string. *)
 let url_decode = Url.decode
 
+module Login_navigation = Login_navigation
+
 (** Map a file extension (without dot) to its MIME type. *)
 let ext_to_mime = Url.ext_to_mime
 
