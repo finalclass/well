@@ -12,6 +12,8 @@
     "HANDOFF-TYPED-EVENT-HANDLERS.md",
     "cmd-extend.md",
     "lib/well/SERVICE.md",
+    "lib/well/civil_clock/SERVICE.md",
+    "lib/well/civil_clock/STP.md",
     "lib/well/actor/SERVICE.md",
     "lib/well/actor/API.md",
     "lib/well/actor/ARCH.md",

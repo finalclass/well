@@ -5,6 +5,10 @@ RELEASE_DIR := _release
 INSTALL_DIR := $(HOME)/.local/bin
 
 .PHONY: toml-test registry-test
+.PHONY: civil-clock-test
+civil-clock-test:
+	$(DUNE) runtest test/civil_clock_test
+
 toml-test:
 	$(DUNE) runtest test/toml_test
 
