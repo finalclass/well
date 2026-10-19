@@ -23,6 +23,7 @@ registry-test:
 .PHONY: api-token-test
 api-token-test: build
 	$(DUNE) exec test/api_token/api_token_test.exe
+	deno run -A test/api_token/admission.ts
 	deno run -A test/api_token/run.ts
 
 build:

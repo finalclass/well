@@ -2,3 +2,9 @@
  (name api_token_test)
  (modules api_token_test)
  (libraries well eio eio_main))
+
+(executable
+ (name admission_server)
+ (modules admission_server)
+ (libraries well well.cap)
+ (link_flags -linkall))
