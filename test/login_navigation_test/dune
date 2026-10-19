@@ -1,0 +1,3 @@
+(test
+ (name login_navigation_test)
+ (libraries well eio eio_main))

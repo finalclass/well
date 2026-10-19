@@ -84,6 +84,8 @@ let url_encode = Url.encode
 (** Decode a URL-encoded (percent-encoded) string. *)
 let url_decode = Url.decode
 
+module Login_navigation = Login_navigation
+
 (** Map a file extension (without dot) to its MIME type. *)
 let ext_to_mime = Url.ext_to_mime
 
@@ -1555,6 +1557,8 @@ module Config = Config
 
 (** TOML file reader and writer. *)
 module Toml = Toml
+
+module Civil_clock = Civil_clock
 
 (** Chrome DevTools Protocol client for end-to-end testing. *)
 module Cdp = Cdp

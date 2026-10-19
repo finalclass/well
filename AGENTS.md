@@ -51,6 +51,9 @@ Znany, niezależny failure runtime: `oauth_provider_test` — ignorować.
    dispatch tekstowy, kontekst, rozróżnienie błędów, publikacja, rozszerzenie
    Actor oraz kryteria M01–M13. Cyrograf jest właścicielem języka i kodeków;
    Well tylko komponuje je z adapterami. Plan: `PLAN-CYROGRAF-MIGRATION.md`.
+1c. `lib/well/civil_clock/SERVICE.md` + `lib/well/civil_clock/STP.md` —
+   publiczne API `Well.Civil_clock`: daty cywilne, jawne strefy IANA,
+   konwersja chwil i kryteria odbioru.
 2. `lib/<service>/SERVICE.md` — rola, granica abstrakcji, założenia, scenariusze,
    strategia weryfikacji usługi. **Czarnoskrzynkowa** — co usługa oferuje, nie
    jak jest zbudowana w środku.

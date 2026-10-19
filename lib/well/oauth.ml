@@ -504,11 +504,7 @@ let link_or_create_user provider_user ~provider_name =
 
 (* ── Validate return_to ─────────────────────────────────────────── *)
 
-let validate_return_to s =
-  if s = "" then "/"
-  else if String.length s >= 1 && s.[0] = '/'
-       && not (String.length s >= 2 && s.[1] = '/') then s
-  else "/"
+let validate_return_to = Login_navigation.safe_target
 
 (* ── Route handlers ─────────────────────────────────────────────── *)
 

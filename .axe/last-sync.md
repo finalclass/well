@@ -1,3 +1,96 @@
+# axe sync — Well.Civil_clock — #3 — 2026-10-08
+
+Zatwierdzona specyfikacja: commit fcd3f44 oraz polecenie użytkownika
+„Zatwierdzam. Wykonaj implementację.” Zakres:
+lib/well/civil_clock/SERVICE.md i STP.md, implementacja publicznego
+Well.Civil_clock oraz integracja zależności i odbioru C01–C06.
+Sygnatura civil_clock.mli odpowiada dokładnie blokowi kontraktu w SERVICE.md.
+
+Układ źródeł określa .axe/source-manifest.json. Brak docs/ nie został
+potraktowany jako baseline; odbiór dotyczy jawnie zatwierdzonej delty #3.
+Specyfikacja zachowała identyczną treść podczas implementacji.
+
+## Odbiór
+
+- make civil-clock-test: exit 0; 62 testy API, w tym 21 przykładów konwersji,
+  przeplot dwóch domen, błędne dane i granice reprezentacji.
+- C06: osobny konsument well.core bez Well.run/Eio, uruchomiony dla TZ=UTC
+  i TZ=America/New_York; oba procesy sprawdziły zegar, aliasy i 21 konwersji.
+  Kontrola dodatnia kompiluje się; obie negatywne próby są odrzucane
+  z powodu niezgodności typów, nie błędu składni lub brakujących zależności.
+- make check: exit 0.
+- make build: exit 0.
+- dune tools exec ocamlformat -- --check lib/well/civil_clock.ml test/civil_clock_test/cases.ml test/civil_clock_test/civil_clock_test.ml test/civil_clock_test/consumer.ml test/civil_clock_test/compile_fail/valid.ml test/civil_clock_test/compile_fail/invalid_zone.ml test/civil_clock_test/compile_fail/invalid_date.ml: exit 0.
+- dune tools exec ocamlformat -- --doc-comments=before --check lib/well/civil_clock.mli: exit 0.
+- deno fmt --check test/civil_clock_test/run.ts: exit 0.
+- deno check test/civil_clock_test/run.ts: exit 0.
+- git diff --check: exit 0.
+- Kontrola Deno: sygnatura mli identyczna ze specyfikacją po usunięciu
+  docstringów i normalizacji białych znaków; exit 0.
+
+Lock wygenerowano przez make lock z tymczasowym DUNE_WORKSPACE wskazującym
+te same trzy rewizje repozytoriów pakietów co bazowy lock. Dodano wyłącznie
+nowe zależności; wersje istniejących pakietów i pin Cyrografu zachowane.
+Tymczasowy workspace i pliki prób kompilacji zostały usunięte.
+
+Wyniki poleceń są zachowane w wątku T3; skrót odbioru jest publikowany
+w PR https://github.com/finalclass/well/pull/5. Nie zapisano lokalnych
+plików dowodowych ani surowych logów do repozytorium.
+
+Pomiar od rozpoczęcia implementacji: 2026-10-08T11:18:18.711Z
+do 2026-10-08T11:38:30.661Z, 1212 s.
+
+## Freeze
+
+Przesunięto wyłącznie dwa w pełni zweryfikowane dokumenty:
+lib/well/civil_clock/SERVICE.md i lib/well/civil_clock/STP.md.
+Nie certyfikowano innych zmian frameworka ani migracji DG.
+
+SHA-256 zatwierdzonych źródeł:
+
+- SERVICE.md: 2b9532f9bd0b20f57ebf98e4f52273fda7b584471cf8f2e856cda9b8ff4a1b6d
+- STP.md: 3ce6c43dc4b61a76b17c9e46112fdc54544c45882129191101f9b45a89f4ab7e
+
+---
+
+# axe sync — Well #4 — bezpieczny powrót po logowaniu — 2026-10-08
+
+Zatwierdzona w tym wątku delta lib/well/SERVICE.md jest zaimplementowana
+i zweryfikowana. Zakres: Well.Login_navigation, require_auth oraz
+wspólna walidacja OAuth; testy wynikają z zatwierdzonej strategii weryfikacji.
+Specyfikacja pozostała bajtowo zgodna z zaakceptowanym patchem.
+
+GET zachowuje ścieżkę i znaczenie query. Inne metody wybierają /.
+Cel jest lokalny także po wielokrotnym dekodowaniu procentowym;
+wynik zachowuje wejściowe kodowanie. Adres logowania obsługuje istniejące
+query, fragment i konfigurowaną nazwę jednego parametru powrotu.
+OAuth waliduje zarówno wejście authorize, jak i cel odczytany z sesji.
+
+## Odbiór
+
+- make check: exit 0.
+- make build: exit 0.
+- make login-navigation-test: exit 0; 2137 sprawdzeń Utility, middleware,
+  rzeczywistego HTTP oraz authorize/callback OAuth ze stubem dostawcy.
+- make test: exit 2; wyłącznie znane błędy oauth_provider_test (Not_found),
+  cmd_effects_test i props_parse_test (caml_pure_js_expr), opisane już
+  w poprzednich raportach regresji poniżej.
+- Auth: 159/159; hardening: 101/101; production: 160/160;
+  API token: 50/50; Actor: 110/110.
+- ocamlformat: exit 0; nowe moduły i test oraz zmieniona funkcja middleware.
+- git diff --check: exit 0.
+
+## Freeze
+
+Freeze bez zmian: lib/well/SERVICE.md zawiera również wcześniej
+niezamrożone zmiany API-token i CAP. Odbiór #4 nie certyfikuje całej
+odziedziczonej delty ani pełnej regresji. Nie tworzono nowego baseline.
+
+Weryfikacja zakończona: 2026-10-08T11:33:01.431Z.
+Czas od rozpoczęcia implementacji i przygotowania środowiska: 909 s.
+Wyniki i ograniczenia są publikowane w PR; surowe logi pozostają tymczasowe.
+
+---
 # axe sync — dostęp CAP — 2026-10-04
 
 Zatwierdzona delta tego wątku jest zaimplementowana i zweryfikowana:

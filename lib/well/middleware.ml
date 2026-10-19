@@ -357,31 +357,30 @@ let current_user req =
   | Some _ as v -> v
   | None -> Session_store.get ~session_id:req.session_id ~key:_auth_key
 
-(** Authentication middleware. Redirects unauthenticated users to [login_path]. *)
-let require_auth ?(login_path = "/login") () : middleware = fun next req ->
-  let user = Session_store.get ~session_id:req.session_id ~key:_auth_key in
-  match user with
-  | Some uid ->
-      let req = Auth_ctx.set (Some uid) req in
-      next req
-  | None ->
-      let accepts_html =
-        match List.assoc_opt "accept" req.headers with
-        | Some v -> String.lowercase_ascii v |> fun s ->
-            (try ignore (Str.search_forward (Str.regexp_string "text/html") s 0); true
-             with Not_found -> false)
-        | None -> true
-      in
-      if accepts_html then
-        let safe_path =
-          let p = req.path in
-          if String.length p >= 2 && String.sub p 0 2 = "//" then "/"
-          else if String.length p >= 1 && p.[0] = '/' then p
-          else "/"
+let require_auth ?login_path ?return_param () : middleware =
+  let login_url = Login_navigation.login_url ?login_path ?return_param in
+  ignore (login_url "/") ;
+  fun next req ->
+    let user = Session_store.get ~session_id:req.session_id ~key:_auth_key in
+    match user with
+    | Some uid ->
+        let req = Auth_ctx.set (Some uid) req in
+        next req
+    | None ->
+        let accepts_html =
+          match List.assoc_opt "accept" req.headers with
+          | Some v -> (
+              String.lowercase_ascii v |> fun s ->
+              try
+                ignore (Str.search_forward (Str.regexp_string "text/html") s 0) ;
+                true
+              with
+              | Not_found -> false )
+          | None -> true
         in
-        `Redirect (login_path ^ "?return_to=" ^ safe_path)
-      else
-        `Text "Unauthorized" |> status 401
+        if accepts_html
+        then `Redirect (login_url (Login_navigation.return_target req))
+        else `Text "Unauthorized" |> status 401
 
 (* ── Basic Auth ───────────────────────────────────────────────────── *)
 
