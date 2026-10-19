@@ -4,12 +4,17 @@ type identity =
   { user_id: string
   ; session_data: (string * string) list }
 
-let verifier : ((string -> identity option) * (request -> bool)) option Atomic.t
-    =
+let verifier :
+    ((string -> identity option) * (request -> bool) * (request -> bool)) option
+    Atomic.t =
   Atomic.make None
 
-let configure ?(applies_to = fun _ -> true) ~verify () =
-  Atomic.set verifier (Some (verify, applies_to))
+let configure
+    ?(applies_to = fun _ -> true)
+    ?(authorize = fun _ -> true)
+    ~verify
+    () =
+  Atomic.set verifier (Some (verify, applies_to, authorize))
 
 let binding : (string * (string * string) list * bool Atomic.t) Eio.Fiber.key =
   Eio.Fiber.create_key ()
@@ -70,7 +75,22 @@ let reject () =
   |> status 401
   |> header "WWW-Authenticate" "Bearer"
 
-let run ~fresh_session next req verify token =
+let admit authorize next req =
+  let decision =
+    try Ok (authorize req) with
+    | _ -> Error ()
+  in
+  match decision with
+  | Ok true -> next req
+  | Ok false ->
+      json
+        (`Assoc [("error", `String "API token does not admit this operation")])
+      |> status 403
+  | Error () ->
+      json (`Assoc [("error", `String "API token authorization unavailable")])
+      |> status 503
+
+let run ~fresh_session ~authorize next req verify token =
   let result =
     try Ok (verify token) with
     | _ -> Error ()
@@ -93,7 +113,7 @@ let run ~fresh_session next req verify token =
         ~finally:(fun () -> Atomic.set active false)
         (fun () ->
           Eio.Fiber.with_binding binding (session_id, data, active) (fun () ->
-              next req ) )
+              admit authorize next req ) )
 
 let protect_mutation session_id =
   match session_data session_id with

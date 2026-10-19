@@ -232,9 +232,9 @@ let api_token_authenticated = Api_token.authenticated
 
 let session_middleware : middleware = fun next req ->
   match Atomic.get Api_token.verifier, Api_token.bearer req.headers with
-  | Some (verify, applies_to), Some (Ok token) when applies_to req ->
-      Api_token.run ~fresh_session:generate_session_id next req verify token
-  | Some (_, applies_to), Some (Error ()) when applies_to req -> Api_token.reject ()
+  | Some (verify, applies_to, authorize), Some (Ok token) when applies_to req ->
+      Api_token.run ~fresh_session:generate_session_id ~authorize next req verify token
+  | Some (_, applies_to, _), Some (Error ()) when applies_to req -> Api_token.reject ()
   | _ -> cookie_session_middleware next req
 
 (* ── Session API ─────────────────────────────────────────────────── *)

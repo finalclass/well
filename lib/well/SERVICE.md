@@ -34,6 +34,7 @@ type api_token_identity = {
 }
 val api_token_auth :
   ?applies_to:(request -> bool) ->
+  ?authorize:(request -> bool) ->
   verify:(string -> api_token_identity option) -> unit -> unit
 val api_token_authenticated : request -> bool
 ```
@@ -55,6 +56,11 @@ Uwierzytelnij żądanie API
   <token odrzucony albo pusty user_id>
     (END 401 bez wykonania handlera)
   [Udostępnij tożsamość tylko w bieżącym fiberze żądania]
+  [Sprawdź authorize w kontekście zweryfikowanej tożsamości]
+  <wyjątek authorize>
+    (END 503 bez wykonania handlera)
+  <authorize zwraca false>
+    (END 403 bez wykonania handlera)
   [Wywołaj handler bez uwierzytelniania cookie]
   (END odpowiedź bez tworzenia sesji przeglądarkowej)
 <_>
@@ -70,6 +76,17 @@ Opcjonalny predykat `applies_to` jawnie ogranicza integrację do wybranych
 zachowują wcześniejszą obsługę sesji i CSRF. Pozwala to aplikacji zachować
 oddzielny istniejący protokół Bearer session ID w wyznaczonym API.
 Wyjątki weryfikatora dają ogólny komunikat 503, bez treści wyjątku.
+
+Opcjonalny `authorize` domyślnie zwraca true. Jest wywoływany po poprawnej
+weryfikacji Bearera, przed dowolnym handlerem HTTP, również RPC, REST,
+plikami, stronami, diagnostyką i trasami `/_cap/` pomijającymi globalny
+middleware aplikacji. Widzi zweryfikowaną tożsamość przez
+`api_token_authenticated`, `rpc_ctx` i `Session.get`. Zwrócenie false daje
+ogólne 403, a wyjątek ogólne 503 bez treści wyjątku, fallbacku cookie,
+utworzenia sesji i nagłówka Set-Cookie. Callback nie jest wywoływany dla
+odrzuconego Bearera, żądań bez Bearera ani poza `applies_to`.
+Reguły uprawnień pozostają w aplikacji. Integracja dotyczy HTTP;
+nie dodaje tokenowego transportu WebSocket.
 
 `Well.rpc_ctx` i `Well.Session.get/get_all` widzą tę samą tożsamość.
 `user_id` w danych dodatkowych nie zastępuje zweryfikowanego właściciela.
@@ -204,6 +221,12 @@ API token (`make api-token-test`):
 - Odwołanie/wygaśnięcie/nieaktywny właściciel symulowane przez weryfikator:
   kolejne żądanie dostaje 401; każdorazowa weryfikacja.
 - Wyjątek weryfikatora: 503 bez treści wyjątku; brak fallbacku.
+- Domyślny `authorize` zachowuje dotychczasowe działanie. Jawny callback
+  widzi właściciela i dane tokenu; jego false i wyjątek blokują handler bez
+  skutków ubocznych, odpowiednio przez 403 i 503, również na RPC i CAP.
+  Odmowa nie tworzy cookie ani sesji, a kontekst znika po zakończeniu.
+- `authorize` nie działa dla błędnego Bearera, samego cookie ani poza
+  `applies_to`; równoległe callbacki zachowują izolację tożsamości.
 - Równoległe żądania różnych właścicieli z yieldem oraz wyjątek handlera:
   tożsamości nie przenikają do siebie ani do następnego żądania.
 - Próby zmiany danych tożsamości: odrzucone, właściciel niezmieniony.

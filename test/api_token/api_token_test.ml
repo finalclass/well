@@ -211,4 +211,61 @@ let () =
       check
         "child fiber cannot retain completed identity"
         (not !child_has_identity) ) ;
+  let admitted = ref true in
+  let authorization_sid = ref "" in
+  let authorizations = ref 0 in
+  Well.api_token_auth
+    ~applies_to:(fun req -> req.path <> "/legacy")
+    ~verify:(fun token ->
+      if token = "alice" || token = "bob"
+      then Some {Well.user_id= token; session_data= [("role", "employee")]}
+      else None )
+    ~authorize:(fun req ->
+      incr authorizations ;
+      authorization_sid := req.session_id ;
+      check "authorization token marker" (Well.api_token_authenticated req) ;
+      check "authorization trusted owner" ((Well.rpc_ctx req).user_id = user req) ;
+      check
+        "authorization data"
+        ( Well.Session.get ~session_id:req.session_id ~key:"role"
+        = Some "employee" ) ;
+      let before = user req in
+      Eio.Fiber.yield () ;
+      check "authorization fiber isolation" (before = user req) ;
+      if req.path = "/failure" then failwith "private diagnostic" ;
+      !admitted )
+    () ;
+  admitted := false ;
+  executed := false ;
+  let denied = run (cookie :: authorization "alice") unexpected in
+  check "authorization denies" (denied.r_status = 403 && not !executed) ;
+  check
+    "authorization no cookie"
+    (not (List.mem_assoc "Set-Cookie" denied.r_headers)) ;
+  check
+    "denied identity removed"
+    (Well.Session.get ~session_id:!authorization_sid ~key:"user_id" = None) ;
+  let failed =
+    Well.session_middleware
+      unexpected
+      {(request (cookie :: authorization "alice")) with path= "/failure"}
+    |> Well.resolve
+  in
+  check
+    "authorization failure redacted"
+    ( failed.r_status = 503
+    && failed.r_body = "{\"error\":\"API token authorization unavailable\"}" ) ;
+  check "failure skips handler" (not !executed) ;
+  check
+    "failed identity removed"
+    (Well.Session.get ~session_id:!authorization_sid ~key:"user_id" = None) ;
+  let before = !authorizations in
+  ignore (run (cookie :: authorization "invalid") unexpected) ;
+  ignore (run [cookie] unexpected) ;
+  ignore (Well.session_middleware unexpected legacy_request) ;
+  check "callback only for verified applicable bearer" (!authorizations = before) ;
+  admitted := true ;
+  Eio.Fiber.both
+    (fun () -> ignore (run (authorization "alice") (fun _ -> Well.text "ok")))
+    (fun () -> ignore (run (authorization "bob") (fun _ -> Well.text "ok"))) ;
   Printf.printf "API token: %d checks passed\n%!" !checks
