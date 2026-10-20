@@ -45,6 +45,47 @@ Testy integracyjne używają izolowanej aplikacji i testowej bazy.
 - Na tym samym połączeniu kanał aplikacji nadal działa według swojej
   autoryzacji, także gdy klient nie ma grantu CAP.
 
+## Retencja logów
+
+Testy bufora działają w izolowanym procesie z rzeczywistym modułem
+CAP oraz, dla napływu logów, z podłączonym hookiem loggera.
+Nie podmieniają bufora jego modelem. Korzystają z limitów
+z sekcji „Retencja logów” w SERVICE.md.
+
+- Po wielokrotnym przekroczeniu limitu liczby wpisów zostają najnowsze
+  wpisy; limit sumy bajtów działa także dla mniejszej liczby dłuższych
+  komunikatów. Do budżetu wliczany jest kontekst.
+- Bardzo długi komunikat i poziom, długi klucz i wartość oraz wiele par kontekstu
+  respektują limit pojedynczego wpisu, pierwszeństwo komunikatu
+  i znaczniki skrócenia. Skrócenie polskiego tekstu nie rozcina UTF-8.
+  Plik i stdout otrzymują pełne dane.
+- Import pliku wielokrotnie większego od budżetu, również z pojedynczym
+  bardzo długim wierszem, zachowuje dozwolony wycinek. Po dopisaniu
+  kolejnych wpisów obowiązują te same limity. Niepoprawny wiersz
+  nie blokuje odczytu następnych poprawnych wpisów.
+- Po usuwaniu najstarszych wpisów `recent`, wyszukiwanie z filtrami,
+  `before` i `around` nie zwracają usuniętych wpisów ani duplikatów.
+  Pokryć pusty bufor, granice zachowanego zakresu, skok poza zakres
+  oraz monotoniczność identyfikatorów. Kilka rund równoległego dopisywania
+  i odczytów zachowuje te własności oraz kończy się bez zakleszczenia.
+- Próba pamięci obejmuje rozgrzewkę do nasycenia retencji oraz
+  dziesięć kolejnych partii po 100 000 unikalnych logów z kontekstem.
+  Po każdej partii pełne GC i pomiar liczby zachowanych wpisów,
+  bajtów treści, żywych bajtów sterty i RSS procesu. Dopuszczalny
+  wzrost żywej sterty względem pomiaru po rozgrzewce wynosi 1 MiB,
+  a RSS 16 MiB; żaden limit retencji nie może być przekroczony.
+  Osobne próby obejmują powtarzany import oraz generowanie dużych
+  komunikatów i kontekstów, każda z własną rozgrzewką przy tym samym
+  rozkładzie rozmiarów wpisów co próba. Dane wejściowe są tworzone partiami
+  i po emisji zwalniane, żeby generator nie przechowywał historii.
+  Raport podaje każdy pomiar i całkowitą liczbę wyemitowanych wpisów,
+  nie tylko wynik końcowy. Wynik dotyczy pamięci logowania CAP,
+  a nie wszystkich możliwych alokacji aplikacji.
+- Regresja obejmuje istniejące testy CAP MPA i CAP access.
+  W przeglądarce sprawdzić napływ, filtry, stronicowanie i skok
+  do czasu po wyparciu starych wpisów oraz informację o ograniczonym
+  wycinku historii. Brak grantu `cap` nadal blokuje dane logów.
+
 ## Odbiór przeglądarkowy
 
 - Przeklikać każdą stronę, formularz i akcję na danych testowych,

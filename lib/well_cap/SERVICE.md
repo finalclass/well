@@ -44,6 +44,44 @@ i hasła, nadawanie i odbieranie grantów, przeglądanie baz i tabel,
 edycja komórek, wykonywanie SQL, wywoływanie RPC, wykonywanie REPL
 oraz włączanie i wyłączanie pomiaru metod usług.
 
+## Retencja logów
+
+Podgląd logów CAP przechowuje najnowszy wycinek historii procesu.
+Pamięć zachowanych wpisów jest ograniczona niezależnie od czasu działania,
+liczby wygenerowanych logów, otwarcia panelu i rotacji plików.
+Jednocześnie obowiązują limity 4096 wpisów i 4 MiB treści.
+Treść oznacza sumę długości w bajtach poziomu, komunikatu oraz kluczy
+i wartości kontekstu; liczba wpisów ogranicza narzut struktur danych.
+Przekroczenie któregokolwiek limitu usuwa najstarsze wpisy i zwalnia
+odwołania do ich komunikatów oraz kontekstu.
+
+Jeden zachowany wpis zawiera najwyżej 16 KiB treści. Poziom zajmuje
+najwyżej 64 bajty tego budżetu. Komunikat ma pierwszeństwo przed
+kontekstem. Zbyt długi poziom lub komunikat jest skracany
+na granicy znaku UTF-8, z widocznym znacznikiem `[truncated]` wliczanym
+do limitu; kontekst zachowuje tylko pierwsze kompletne pary mieszczące
+się w pozostałym budżecie. Pominięcie kontekstu również jest oznaczone
+tym znacznikiem. Panel zachowuje własną ograniczoną kopię, bez
+utrzymywania odwołań do pierwotnych dużych komunikatów i kontekstów.
+Ograniczenie podglądu nie zmienia treści kierowanej do pliku i stdout.
+
+Import istniejącego `well.log` przy uruchomieniu stosuje tę samą
+retencję i ograniczenie pojedynczego wpisu. Odczyt jest strumieniowy:
+rozmiar pliku ani pojedynczego wiersza nie wyznacza rozmiaru bufora
+odczytu. Po imporcie nowe wpisy wypierają najstarsze na tych samych
+zasadach.
+
+Identyfikatory wpisów rosną przez czas życia procesu i nie są używane
+ponownie po usunięciu wpisu. Wyszukiwanie, filtry, stronicowanie
+według identyfikatora i skok do czasu dotyczą wyłącznie zachowanej
+historii. Starsze usunięte wpisy nie wracają przy odświeżeniu ani
+stronicowaniu; strona poprzedzająca najstarszy zachowany wpis jest
+pusta. Skok do czasu poza zachowanym zakresem wskazuje najbliższy
+zachowany wpis. Odczyty pozostają chronologiczne i bez duplikatów
+również podczas równoległego dopisywania i usuwania najstarszych wpisów.
+Strona logów wyraźnie informuje, że pokazuje tylko ostatni wycinek
+historii. Dotychczasowe reguły dostępu CAP obowiązują bez zmian.
+
 ## Metryki
 
 Strona `/_cap/metrics` czyta agregaty z bazy frameworka. Agregaty
