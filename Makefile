@@ -148,6 +148,11 @@ contract-scaffold: build
 	deno run -A test/contract_scaffold/run.ts
 
 .PHONY: cap-test cap-browser-test
+.PHONY: cap-log-retention-test
+cap-log-retention-test:
+	$(DUNE) build test/cap_log_retention/retention.exe
+	deno run -A test/cap_log_retention/run.ts
+
 cap-test: build
 	deno run -A test/cap_mpa/run.ts
 

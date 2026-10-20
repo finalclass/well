@@ -121,7 +121,8 @@ let view req model =
       (link "/_cap/logs" "Reset")
   in
   html_raw
-    ( filters
+    ( {|<p class="text-muted" role="note">Podgląd pokazuje tylko ostatni wycinek historii: do 4096 wpisów i 4 MiB treści. Starsze wpisy są usuwane z pamięci panelu.</p>|}
+    ^ filters
     ^ String.concat
         ""
         (List.map (render_entry ~jump_target:model.jump_target) model.entries)
