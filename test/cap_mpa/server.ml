@@ -37,6 +37,11 @@ let () =
            (`String "Wiadomość testowa") ) ;
       Well.Log.log "Log testowy CAP" ;
       Well.text "ok" ) ;
+  Well.get "/acceptance-log-overflow" (fun _ ->
+      for index = 1 to 13000 do
+        Well.Log.log "Retencja %05d" index
+      done ;
+      Well.text "ok" ) ;
   Well.use Well.csrf ;
   Well.run
     ~host:"127.0.0.1"

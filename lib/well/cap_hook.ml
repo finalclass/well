@@ -12,12 +12,12 @@ type cap_response =
 
 (* ── Forward refs (wired by well.ml before init) ─────────────────── *)
 
-let _register_cap_get :
-  (string -> (Types.request -> cap_response) -> unit) ref =
+let _register_cap_get : (string -> (Types.request -> cap_response) -> unit) ref
+    =
   ref (fun _ _ -> ())
 
-let _register_cap_post :
-  (string -> (Types.request -> cap_response) -> unit) ref =
+let _register_cap_post : (string -> (Types.request -> cap_response) -> unit) ref
+    =
   ref (fun _ _ -> ())
 
 (* Cap init — filled by well_cap at module load time *)
@@ -27,179 +27,327 @@ let _cap_init : (unit -> unit) ref = ref (fun () -> ())
 
 let start_time = ref 0.0
 
-(* ── Log store (growable array) ──────────────────────────────────── *)
-
 module Log_buffer = struct
-  type entry = {
-    id : int;
-    level : string;
-    message : string;
-    timestamp : float;
-    ctx : (string * string) list;
-  }
+  type entry =
+    { id: int
+    ; level: string
+    ; message: string
+    ; timestamp: float
+    ; ctx: (string * string) list }
 
-  let _dummy = { id = 0; level = ""; message = ""; timestamp = 0.0; ctx = [] }
-  let _arr = ref (Array.make 4096 _dummy)
+  let max_entries = 4096
+
+  let max_bytes = 4 * 1024 * 1024
+
+  let max_entry_bytes = 16 * 1024
+
+  let max_level_bytes = 64
+
+  let truncation_marker = "[truncated]"
+
+  let marker_bytes = String.length truncation_marker
+
+  let entries : entry option array = Array.make max_entries None
+
+  let first = ref 0
+
+  let retained = ref 0
+
+  let retained_bytes = ref 0
+
+  let retained_cost = ref 0
+
   let count = ref 0
+
   let mu = Mutex.create ()
 
-  let _ensure_capacity () =
-    let len = Array.length !_arr in
-    if !count >= len then begin
-      let new_arr = Array.make (len * 2) _dummy in
-      Array.blit !_arr 0 new_arr 0 !count;
-      _arr := new_arr
-    end
+  let with_lock f =
+    Mutex.lock mu ;
+    Fun.protect ~finally:(fun () -> Mutex.unlock mu) f
 
-  let push ~level ~message ~timestamp ?(ctx=[]) () =
-    Mutex.lock mu;
-    _ensure_capacity ();
-    let id = !count in
-    let entry = { id; level; message; timestamp; ctx } in
-    (!_arr).(id) <- entry;
-    incr count;
-    Mutex.unlock mu;
-    entry
+  let utf8_prefix_length text limit =
+    let length = String.length text in
+    let finish = ref (min length (max 0 limit)) in
+    if !finish < length
+    then
+      while !finish > 0 && Char.code text.[!finish] land 0xc0 = 0x80 do
+        decr finish
+      done ;
+    !finish
+
+  let copy_prefix text limit = String.sub text 0 (utf8_prefix_length text limit)
+
+  let bounded_text limit text =
+    if String.length text <= limit
+    then String.sub text 0 (String.length text)
+    else copy_prefix text (limit - marker_bytes) ^ truncation_marker
+
+  let entry_bytes entry =
+    List.fold_left
+      (fun total (key, value) -> total + String.length key + String.length value)
+      (String.length entry.level + String.length entry.message)
+      entry.ctx
+
+  let entry_cost entry = entry_bytes entry + 64 + (48 * List.length entry.ctx)
+
+  let copy_context budget ctx =
+    let rec loop budget copied = function
+      | [] -> (List.rev copied, false)
+      | (key, value) :: rest ->
+          let cost = String.length key + String.length value + 48 in
+          if cost > budget
+          then (List.rev copied, true)
+          else
+            let pair =
+              ( String.sub key 0 (String.length key)
+              , String.sub value 0 (String.length value) )
+            in
+            loop (budget - cost) (pair :: copied) rest
+    in
+    loop budget [] ctx
+
+  let normalize level message ctx =
+    let level = bounded_text max_level_bytes level in
+    let reserve = if ctx = [] then 0 else marker_bytes in
+    let message =
+      bounded_text (max_entry_bytes - String.length level - reserve) message
+    in
+    let budget =
+      max_entry_bytes - String.length level - String.length message - reserve
+    in
+    let ctx, omitted = copy_context budget ctx in
+    let message = if omitted then message ^ truncation_marker else message in
+    (level, message, ctx)
+
+  let at index = Option.get entries.((!first + index) mod max_entries)
+
+  let evict () =
+    let entry = at 0 in
+    retained_bytes := !retained_bytes - entry_bytes entry ;
+    retained_cost := !retained_cost - entry_cost entry ;
+    entries.(!first) <- None ;
+    first := (!first + 1) mod max_entries ;
+    decr retained
+
+  let push ~level ~message ~timestamp ?(ctx = []) () =
+    let level, message, ctx = normalize level message ctx in
+    with_lock (fun () ->
+        let entry = {id= !count; level; message; timestamp; ctx} in
+        let bytes = entry_bytes entry and cost = entry_cost entry in
+        while
+          !retained > 0
+          && ( !retained >= max_entries
+             || !retained_bytes + bytes > max_bytes
+             || !retained_cost + cost > max_bytes )
+        do
+          evict ()
+        done ;
+        entries.((!first + !retained) mod max_entries) <- Some entry ;
+        incr retained ;
+        incr count ;
+        retained_bytes := !retained_bytes + bytes ;
+        retained_cost := !retained_cost + cost ;
+        entry )
+
+  let stats () = with_lock (fun () -> (!retained, !retained_bytes))
+
+  let range start finish =
+    let result = ref [] in
+    for index = finish - 1 downto start do
+      result := at index :: !result
+    done ;
+    !result
 
   let recent n =
-    Mutex.lock mu;
-    let n = min n !count in
-    let start = !count - n in
-    let result = ref [] in
-    for i = !count - 1 downto start do
-      result := (!_arr).(i) :: !result
-    done;
-    Mutex.unlock mu;
-    !result
+    with_lock (fun () -> range (max 0 (!retained - max 0 n)) !retained)
 
-  let recent_filtered ~n ?(level="all") ?(search="") ?(since=0.0) ?(until=0.0) () =
-    Mutex.lock mu;
-    let result = ref [] in
-    let found = ref 0 in
-    let i = ref (!count - 1) in
-    while !i >= 0 && !found < n do
-      let e = (!_arr).(!i) in
-      let level_ok = level = "all" || e.level = level in
-      let search_ok = search = "" ||
-        (try let _ = Str.search_forward (Str.regexp_string_case_fold search) e.message 0 in true
-         with Not_found -> false) in
-      let since_ok = since = 0.0 || e.timestamp >= since in
-      let until_ok = until = 0.0 || e.timestamp <= until in
-      if level_ok && search_ok && since_ok && until_ok then begin
-        result := e :: !result;
-        incr found
-      end;
-      (* Stop early if we've gone past the date range *)
-      if since > 0.0 && e.timestamp < since then i := 0
-      else decr i
-    done;
-    Mutex.unlock mu;
-    !result
+  let recent_filtered
+      ~n
+      ?(level = "all")
+      ?(search = "")
+      ?(since = 0.)
+      ?(until = 0.)
+      () =
+    let pattern =
+      if search = "" then None else Some (Str.regexp_string_case_fold search)
+    in
+    let matches entry =
+      (level = "all" || entry.level = level)
+      && (since <= 0. || entry.timestamp >= since)
+      && (until <= 0. || entry.timestamp <= until)
+      &&
+      match pattern with
+      | None -> true
+      | Some pattern -> (
+        try
+          ignore (Str.search_forward pattern entry.message 0) ;
+          true
+        with
+        | Not_found -> false )
+    in
+    with_lock (fun () ->
+        let result = ref [] and found = ref 0 and index = ref (!retained - 1) in
+        while !index >= 0 && !found < n do
+          let entry = at !index in
+          if matches entry
+          then begin
+            result := entry :: !result ;
+            incr found
+          end ;
+          decr index
+        done ;
+        !result )
 
-  (* Find entry nearest to timestamp, return entries around it + target id *)
   let around ~target_ts ~n =
-    Mutex.lock mu;
-    if !count = 0 then begin
-      Mutex.unlock mu;
-      ([], -1)
-    end else begin
-      (* Binary search for nearest entry *)
-      let lo = ref 0 in
-      let hi = ref (!count - 1) in
-      while !lo < !hi do
-        let mid = !lo + (!hi - !lo) / 2 in
-        if (!_arr).(mid).timestamp < target_ts then lo := mid + 1
-        else hi := mid
-      done;
-      (* lo is the first entry >= target_ts, check if lo-1 is closer *)
-      let nearest =
-        if !lo >= !count then !count - 1
-        else if !lo > 0 then
-          let diff_lo = abs_float ((!_arr).(!lo).timestamp -. target_ts) in
-          let diff_prev = abs_float ((!_arr).(!lo - 1).timestamp -. target_ts) in
-          if diff_prev < diff_lo then !lo - 1 else !lo
-        else !lo
-      in
-      let target_id = (!_arr).(nearest).id in
-      let half = n / 2 in
-      let start_idx = max 0 (nearest - half) in
-      let end_idx = min !count (start_idx + n) in
-      let result = ref [] in
-      for i = end_idx - 1 downto start_idx do
-        result := (!_arr).(i) :: !result
-      done;
-      Mutex.unlock mu;
-      (!result, target_id)
-    end
+    let nearer candidate selected =
+      if candidate <= target_ts && selected <= target_ts
+      then candidate > selected
+      else if candidate >= target_ts && selected >= target_ts
+      then candidate < selected
+      else abs_float (candidate -. target_ts) < abs_float (selected -. target_ts)
+    in
+    with_lock (fun () ->
+        if !retained = 0 || n <= 0
+        then ([], -1)
+        else begin
+          let nearest = ref 0 in
+          for index = 1 to !retained - 1 do
+            if nearer (at index).timestamp (at !nearest).timestamp
+            then nearest := index
+          done ;
+          let start = max 0 (!nearest - (n / 2)) in
+          (range start (start + min n (!retained - start)), (at !nearest).id)
+        end )
 
   let before ~before_id ~n =
-    Mutex.lock mu;
-    let end_idx = min before_id !count in
-    let start_idx = max 0 (end_idx - n) in
-    let result = ref [] in
-    for i = end_idx - 1 downto start_idx do
-      result := (!_arr).(i) :: !result
-    done;
-    Mutex.unlock mu;
-    !result
+    with_lock (fun () ->
+        let finish = ref !retained in
+        while !finish > 0 && (at (!finish - 1)).id >= before_id do
+          decr finish
+        done ;
+        range (max 0 (!finish - max 0 n)) !finish )
 
-  let entry_to_json (e : entry) =
-    let ctx_json =
-      if e.ctx = [] then "{}"
-      else
-        "{" ^ String.concat ","
-          (List.map (fun (k, v) ->
-            Printf.sprintf {|"%s":"%s"|} (String.escaped k) (String.escaped v)
-          ) e.ctx) ^ "}"
-    in
-    Printf.sprintf
-      {|{"id":%d,"level":"%s","message":"%s","timestamp":%f,"ctx":%s}|}
-      e.id (String.escaped e.level) (String.escaped e.message) e.timestamp ctx_json
+  let entry_to_json entry =
+    Yojson.Safe.to_string
+      (`Assoc
+         [ ("id", `Int entry.id)
+         ; ("level", `String entry.level)
+         ; ("message", `String entry.message)
+         ; ("timestamp", `Float entry.timestamp)
+         ; ("ctx", `Assoc (List.map (fun (k, v) -> (k, `String v)) entry.ctx))
+         ] )
 
-  (* Parse a log line: [well] YYYY-MM-DD HH:MM:SS.mmm [LEVEL] MESSAGE *)
   let parse_line line =
-    let len = String.length line in
-    if len > 7 && String.sub line 0 7 = "[well] " then begin
-      let rest = String.sub line 7 (len - 7) in
-      if String.length rest >= 25 then begin
-        let ts_str = String.sub rest 0 23 in
-        let after_ts = String.sub rest 24 (String.length rest - 24) in
-        match String.index_opt after_ts ']' with
-        | Some i when i > 1 && after_ts.[0] = '[' ->
-            let level = String.sub after_ts 1 (i - 1) in
-            let msg =
-              if String.length after_ts > i + 2 then
-                String.sub after_ts (i + 2) (String.length after_ts - i - 2)
-              else ""
+    try
+      if not (String.starts_with ~prefix:"[well] " line)
+      then None
+      else
+        let rest = String.sub line 7 (String.length line - 7) in
+        let utc = rest.[19] = 'Z' in
+        let ts_size = if utc then 24 else 23 in
+        let ts = String.sub rest 0 ts_size in
+        let after =
+          String.sub rest (ts_size + 1) (String.length rest - ts_size - 1)
+        in
+        match String.index_opt after ']' with
+        | Some finish when finish > 1 && after.[0] = '[' ->
+            let level = String.sub after 1 (finish - 1) in
+            let offset = min (String.length after) (finish + 2) in
+            let message =
+              String.sub after offset (String.length after - offset)
             in
-            (try
-              Scanf.sscanf ts_str "%d-%d-%d %d:%d:%d.%d"
-                (fun y mo d h mi s ms ->
-                  let tm = { Unix.tm_sec = s; tm_min = mi; tm_hour = h;
-                             tm_mday = d; tm_mon = mo - 1; tm_year = y - 1900;
-                             tm_wday = 0; tm_yday = 0; tm_isdst = false } in
-                  let (t, _) = Unix.mktime tm in
-                  Some (level, msg, t +. (float_of_int ms /. 1000.0)))
-            with _ -> None)
+            let convert y mo d h mi s ms =
+              match Ptime.of_date_time ((y, mo, d), ((h, mi, s), 0)) with
+              | None -> None
+              | Some timestamp ->
+                  Some
+                    ( level
+                    , message
+                    , Ptime.to_float_s timestamp +. (float_of_int ms /. 1000.)
+                    )
+            in
+            if utc
+            then Scanf.sscanf ts "%d-%d-%d %d:%d:%dZ.%d" convert
+            else Scanf.sscanf ts "%d-%d-%d %d:%d:%d.%d" convert
         | _ -> None
-      end else None
-    end else None
+    with
+    | Invalid_argument _
+     |Scanf.Scan_failure _
+     |Failure _
+     |End_of_file ->
+        None
+
+  let read_bounded_line channel =
+    let buffer = Buffer.create 256 in
+    let limit = max_entry_bytes + 128 in
+    let truncated = ref false in
+    let in_level = ref false in
+    let level_bytes = ref 0 in
+    let keep character =
+      if Buffer.length buffer < limit
+      then Buffer.add_char buffer character
+      else truncated := true
+    in
+    let append character =
+      if !in_level
+      then
+        if character = ']'
+        then begin
+          in_level := false ;
+          keep character
+        end
+        else if !level_bytes <= max_level_bytes
+        then begin
+          incr level_bytes ;
+          keep character
+        end
+        else truncated := true
+      else begin
+        let length = Buffer.length buffer in
+        if
+          character = '['
+          && (length = 31 || length = 32)
+          && String.starts_with ~prefix:"[well] " (Buffer.contents buffer)
+        then in_level := true ;
+        keep character
+      end
+    in
+    let rec loop () =
+      match input_char channel with
+      | '\n' -> Some (Buffer.contents buffer, !truncated)
+      | character ->
+          append character ;
+          loop ()
+      | exception End_of_file ->
+          if Buffer.length buffer = 0
+          then None
+          else Some (Buffer.contents buffer, !truncated)
+    in
+    loop ()
 
   let load_from_file path =
-    if Sys.file_exists path then begin
-      let ic = open_in path in
-      Mutex.lock mu;
-      (try while true do
-        let line = input_line ic in
-        match parse_line line with
-        | Some (level, msg, ts) ->
-            _ensure_capacity ();
-            let id = !count in
-            (!_arr).(id) <- { id; level; message = msg; timestamp = ts; ctx = [] };
-            incr count
-        | None -> ()
-      done with End_of_file -> ());
-      Mutex.unlock mu;
-      close_in_noerr ic
+    if Sys.file_exists path
+    then begin
+      let channel = open_in_bin path in
+      Fun.protect
+        ~finally:(fun () -> close_in_noerr channel)
+        (fun () ->
+          let rec loop () =
+            match read_bounded_line channel with
+            | None -> ()
+            | Some (line, truncated) ->
+                ( match parse_line line with
+                | None -> ()
+                | Some (level, message, timestamp) ->
+                    let message =
+                      if truncated
+                      then
+                        bounded_text (max_entry_bytes - max_level_bytes) message
+                      else message
+                    in
+                    ignore (push ~level ~message ~timestamp ()) ) ;
+                loop ()
+          in
+          loop () )
     end
 end

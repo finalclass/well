@@ -307,6 +307,37 @@ try {
     "message stream data",
     (await request("/_cap/api/messages")).text.includes("Wiadomość testowa"),
   );
+  await request("/acceptance-log-overflow");
+  check(
+    "logs explain retention",
+    (await request("/_cap/logs")).text.includes("ostatni wycinek historii"),
+  );
+  check(
+    "evicted logs are absent",
+    JSON.parse((await request("/_cap/api/logs?q=Retencja%2000001")).text)
+      .length === 0,
+  );
+  const retainedLogs = JSON.parse(
+    (await request("/_cap/api/logs?q=Retencja")).text,
+  );
+  check(
+    "newest logs survive",
+    retainedLogs.at(-1)?.message === "Retencja 13000",
+  );
+  const firstRetainedId = JSON.parse(
+    (await request("/_cap/api/logs?at=2000-01-01T00%3A00")).text,
+  )[0].id;
+  check(
+    "pagination ends at retention boundary",
+    JSON.parse((await request(`/_cap/api/logs?before=${firstRetainedId}`)).text)
+      .length === 0,
+  );
+  check(
+    "filtered retained logs are ordered",
+    retainedLogs.every((entry: { id: number }, index: number) =>
+      index === 0 || entry.id > retainedLogs[index - 1].id
+    ),
+  );
   check(
     "telemetry data",
     Array.isArray(JSON.parse((await request("/_cap/api/telemetry")).text)),
