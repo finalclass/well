@@ -8,6 +8,64 @@ let check name cond =
     Printf.eprintf "FAIL: %s\n%!" name
   end
 
+let age_failures ~email ~seconds =
+  Well.Db.with_well_db (fun db ->
+      let stmt = Sqlite3.prepare db
+        "UPDATE _well_login_attempts SET occurred_at = occurred_at - ? WHERE email = ? AND is_valid = 0" in
+      Fun.protect ~finally:(fun () -> ignore (Sqlite3.finalize stmt)) (fun () ->
+          ignore (Sqlite3.bind stmt 1 (Sqlite3.Data.INT (Int64.of_int seconds)));
+          ignore (Sqlite3.bind stmt 2 (Sqlite3.Data.TEXT email));
+          if Sqlite3.step stmt <> Sqlite3.Rc.DONE then
+            failwith "Cannot age fixture authentication failures"))
+
+let check_otp_failure_windows () =
+  let email = "otp-window@example.com" in
+  let alias = "otp-window-alias@example.com" in
+  let password = "Window-fixture-19!" in
+  let user = Result.get_ok (Well.Auth.register ~email ~password ()) in
+  ignore (Result.get_ok (Well.Auth.replace_email_aliases ~user_id:user.id ~emails:[alias] ()));
+  let code = Result.get_ok (Well.Auth.initiate_otp ~email:alias ()) in
+  for i = 1 to 5 do
+    ignore (Well.Auth.verify_otp ~email:(if i mod 2 = 0 then alias else email)
+      ~code:"wrong" ~failure_window_seconds:900 ())
+  done;
+  check "explicit OTP window enforces the shared alias failure threshold"
+    (Well.Auth.verify_otp ~email:alias ~code ~failure_window_seconds:900 ()
+      = Error "Account temporarily locked");
+  age_failures ~email ~seconds:1000;
+  check "default OTP retains the one-hour failure window"
+    (Well.Auth.verify_otp ~email:alias ~code () = Error "Account temporarily locked");
+  let explicit = Domain.spawn (fun () ->
+      Well.Auth.verify_otp ~email:alias ~code:"wrong" ~failure_window_seconds:900 ()) in
+  let default = Domain.spawn (fun () -> Well.Auth.verify_otp ~email ~code ()) in
+  check "explicit OTP window excludes older failures"
+    (Domain.join explicit = Error "Invalid or expired code");
+  check "concurrent default OTP keeps its configured window"
+    (Domain.join default = Error "Account temporarily locked");
+  check "explicit OTP call preserves the password failure window"
+    (Well.Auth.login ~email ~password () = Error "Account temporarily locked");
+  let attempts = Well.Auth.login_attempts ~email () in
+  List.iter (fun seconds ->
+      check "nonpositive OTP failure window is rejected"
+        (try ignore (Well.Auth.verify_otp ~email:alias ~code
+           ~failure_window_seconds:seconds ()); false
+         with Invalid_argument _ -> true)) [0; -1];
+  check "invalid OTP windows preserve failure history"
+    (Well.Auth.login_attempts ~email () = attempts);
+  check "short OTP window admits the original unconsumed code"
+    (match Well.Auth.verify_otp ~email:alias ~code ~failure_window_seconds:900 () with
+    | Ok admitted -> admitted.id = user.id && admitted.email = email
+    | Error _ -> false);
+  check "short-window OTP remains single use"
+    (Result.is_error (Well.Auth.verify_otp ~email:alias ~code
+      ~failure_window_seconds:900 ()));
+  Well.Auth.reset_attempts ~email ();
+  for _ = 1 to 5 do ignore (Well.Auth.login ~email ~password:"wrong" ()) done;
+  age_failures ~email ~seconds:3601;
+  let next_code = Result.get_ok (Well.Auth.initiate_otp ~email ()) in
+  check "default OTP admits after its configured window expires"
+    (Result.is_ok (Well.Auth.verify_otp ~email ~code:next_code ()))
+
 let () =
   Mirage_crypto_rng_unix.use_default ();
 
@@ -33,6 +91,8 @@ let () =
       | Some user -> user.email = "legacy@example.com" && user.first_name = "Legacy"
         && user.last_name = "Identity" && user.created_at = "legacy"
       | None -> false);
+
+  check_otp_failure_windows ();
 
   (* Login with correct password *)
   let l1 = Well.Auth.login ~email:"test@example.com" ~password:"password123" () in

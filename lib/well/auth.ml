@@ -335,9 +335,9 @@ let _email_user_id db email =
     | Sqlite3.Rc.ROW -> Some (Sqlite3.column_int stmt 0)
     | _ -> None)
 
-let _count_recent_failures db ~email =
+let _count_recent_failures ?(window_seconds = _config.login_failure_window_seconds) db ~email =
   let email = _primary_email db email in
-  let cutoff = now_unix () - _config.login_failure_window_seconds in
+  let cutoff = now_unix () - window_seconds in
   let stmt = Sqlite3.prepare db
     "SELECT COUNT(*) FROM _well_login_attempts WHERE email = ? AND is_valid = 0 AND is_forgiven = 0 AND occurred_at > ?" in
   let _ = Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT email) in
@@ -774,12 +774,16 @@ let initiate_otp_and_send ?(subject = "Your sign-in code") ~email () =
     | Error message -> Error message)
 
 (** Verify an OTP code. On success, returns the existing user. Never creates accounts. *)
-let verify_otp ~email ~code ?(ip = "") () =
+let verify_otp ~email ~code ?(ip = "") ?failure_window_seconds () =
+  (match failure_window_seconds with
+  | Some seconds when seconds <= 0 ->
+      invalid_arg "Auth.verify_otp: failure_window_seconds must be positive"
+  | _ -> ());
   let email = normalize_email email in
   Db.with_well_db @@ fun db ->
   ensure_tables db;
   let now = now_unix () in
-  if _count_recent_failures db ~email >= _config.login_failures_limit then
+  if _count_recent_failures ?window_seconds:failure_window_seconds db ~email >= _config.login_failures_limit then
     Error "Account temporarily locked"
   else
   let stmt = Sqlite3.prepare db
