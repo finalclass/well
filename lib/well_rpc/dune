@@ -1,0 +1,4 @@
+(library
+ (name well_rpc)
+ (public_name well.rpc)
+ (libraries well.core yojson))

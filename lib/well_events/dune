@@ -1,0 +1,4 @@
+(library
+ (name well_events)
+ (public_name well.events)
+ (libraries well.core))

@@ -264,10 +264,10 @@ let derive_table_impl ~ctxt (_rec_flag, type_decls) name_opt =
             in
             [%stri let _ = fun [%p x_pat] -> [%e body]]
           in
-          (* Generate: let () = Well.Db.register_table { Well.Db.name = "tbl"; columns = [...] } *)
+          (* Generate: let () = Well_db.register_table { Well_db.name = "tbl"; columns = [...] } *)
           let register_call =
             let mk_field name =
-              { txt = Ldot (Ldot (Lident "Well", "Db"), name); loc }
+              { txt = Ldot (Lident "Well_db", name); loc }
             in
             let col_exprs =
               List.map (fun c ->
@@ -287,7 +287,7 @@ let derive_table_impl ~ctxt (_rec_flag, type_decls) name_opt =
             in
             let register_fn =
               Ast_builder.Default.pexp_ident ~loc
-                { txt = Ldot (Ldot (Lident "Well", "Db"), "register_table"); loc }
+                { txt = Ldot (Lident "Well_db", "register_table"); loc }
             in
             [%stri let () = [%e Ast_builder.Default.pexp_apply ~loc
               register_fn [(Nolabel, tbl_expr)]]]
@@ -748,7 +748,7 @@ let derive_topic_impl ~ctxt (_rec_flag, type_decls) name_opt =
       let channel_str = Ast_builder.Default.estring ~loc channel_name in
       let topic_ctor =
         Ast_builder.Default.pexp_ident ~loc
-          { txt = Ldot (Lident "Well", "topic"); loc }
+          { txt = Ldot (Lident "Well_events", "topic"); loc }
       in
       let pat = Ast_builder.Default.pvar ~loc type_name in
       [

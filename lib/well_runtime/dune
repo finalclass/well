@@ -1,0 +1,4 @@
+(library
+ (name well_runtime)
+ (public_name well.runtime)
+ (libraries well.core))

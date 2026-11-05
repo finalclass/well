@@ -2,7 +2,27 @@
 
 ## Unreleased
 
+### Added
+- **Capability libraries.** `well.core` stays the full framework for the
+  composition root. Narrow libraries re-export one capability each so a
+  project built with `(implicit_transitive_deps false)` can give every
+  component only what its architectural role allows:
+  `well.rpc` (`Well_rpc`: RPC context type and wire codec),
+  `well.runtime` (`Well_runtime`: config, env, logging, TOML, civil clock,
+  timers, URL/MIME helpers), `well.http` (`Well_http`: request/response
+  types, routing, middleware, sessions, forms, flash), `well.db`
+  (`Well_db`: SQLite pool, queries, tables, registries), `well.net`
+  (`Well_net`: outbound HTTP, S3, CDP, raw Eio capabilities), `well.mail`
+  (`Well_mail`), `well.auth` (`Well_auth`: Auth, OAuth, OAuthProvider),
+  `well.events` (`Well_events`: typed topics), `well.publish`
+  (`Well_publish`) and `well.subscribe` (`Well_subscribe`). Service
+  registration and dispatch by name remain only in `well.core`.
+
 ### Breaking changes
+- **`well.ppx` output:** `[@@deriving table]` now expands to
+  `Well_db.register_table` and `[@@deriving topic]` to `Well_events.topic`.
+  `well.ppx` declares `well.db`, `well.events` and `sqlite3` as runtime
+  libraries, so preprocessed libraries receive them automatically.
 - **`Well.cors`:** `origins` is required and must be non-empty. There is no
   default `["*"]`. Call `Well.cors ~origins:[...] ()`. The middleware never
   sets `Access-Control-Allow-Credentials`.

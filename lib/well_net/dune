@@ -1,0 +1,4 @@
+(library
+ (name well_net)
+ (public_name well.net)
+ (libraries well.core))

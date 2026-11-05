@@ -1,0 +1,4 @@
+(library
+ (name well_auth)
+ (public_name well.auth)
+ (libraries well.core))

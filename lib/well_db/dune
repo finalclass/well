@@ -1,0 +1,4 @@
+(library
+ (name well_db)
+ (public_name well.db)
+ (libraries well.core))

@@ -56,6 +56,7 @@ This is how you learn a framework in 2026. You don't read documentation that goe
 - **MessageBus** — SQLite-backed persistent pub/sub
 - **Channels** — authorized WebSocket gateway
 - **Auto-TLS** — `Well.run ~domain:"myapp.com" ()` and Let's Encrypt certificates just happen
+- **Capability libraries** — `well.rpc`, `well.runtime`, `well.http`, `well.db`, `well.net`, `well.mail`, `well.auth`, `well.events`, `well.publish`, `well.subscribe` expose one capability each; with `(implicit_transitive_deps false)` a component can only use what it declares, while `well.core` stays reserved for the composition root
 - **Single binary deployment** — patchelf + bundled .so, no Docker needed
 
 ## Auto-TLS (Let's Encrypt)

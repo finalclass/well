@@ -1,0 +1,4 @@
+(library
+ (name well_mail)
+ (public_name well.mail)
+ (libraries well.core))

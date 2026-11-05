@@ -1,0 +1,4 @@
+(library
+ (name well_http)
+ (public_name well.http)
+ (libraries well.core well.rpc yojson))
