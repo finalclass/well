@@ -18,7 +18,24 @@
   (`Well_publish`) and `well.subscribe` (`Well_subscribe`). Service
   registration and dispatch by name remain only in `well.core`.
 
+### Fixed
+- **Compound primary keys in auto-migration.** `Well.Db.create_table_sql`
+  emits a table constraint `PRIMARY KEY (a, b, ...)` for several
+  `[@primary_key]` fields, as `[@@deriving table]` already did. SQLite
+  rejected the former per-column form, so such tables were never created.
+- **Migration log.** `auto_migrate` logs `created table` / `added column`
+  only when SQLite accepts the statement; a rejected statement is logged at
+  `error` level with the SQLite message and the SQL.
+
 ### Breaking changes
+- **Tables belong to one database file.** `[@@deriving table ~database:"x.sqlite"]`
+  and `Well.Db.register_table ~database` assign a table to a database file
+  (default `Well.Db.default_database`, `app.sqlite`). `create_pool`,
+  `open_db`, `auto_migrate` and `diff` handle only the tables of their
+  database; `Well.Db.tables_in` lists them and `with_test_db` still migrates
+  every registered table. Before, every pool created every registered table
+  in its own file. A table kept outside `app.sqlite` must now name its
+  database.
 - **`well.ppx` output:** `[@@deriving table]` now expands to
   `Well_db.register_table` and `[@@deriving topic]` to `Well_events.topic`.
   `well.ppx` declares `well.db`, `well.events` and `sqlite3` as runtime

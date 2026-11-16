@@ -492,7 +492,9 @@ let handle_socket_line line =
             reply (`Assoc [("error", `String "invalid db path")])
           else
             let db = Sqlite3.db_open db_path in
-            let entries = Db.diff db in
+            let entries =
+              Db.diff ~database:(Filename.basename db_path) db
+            in
             ignore (Sqlite3.db_close db);
             let result = `List (List.map Db.diff_entry_to_json entries) in
             reply (`Assoc [("result", result)])

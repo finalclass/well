@@ -43,7 +43,9 @@ let with_db_for source f =
   | Well_fw -> Well.Db.with_well_db f
 
 let get_table_names_app () =
-  List.map (fun (t : Well.Db.table) -> t.name) !Well.Db.registered_tables
+  List.map
+    (fun (t : Well.Db.table) -> t.name)
+    (Well.Db.tables_in Well.Db.default_database)
 
 let get_table_names_well () =
   try
@@ -69,7 +71,7 @@ let get_table_names source =
   | Well_fw -> get_table_names_well ()
 
 let find_pk_app table_name =
-  let tables = !Well.Db.registered_tables in
+  let tables = Well.Db.tables_in Well.Db.default_database in
   match
     List.find_opt (fun (t : Well.Db.table) -> t.name = table_name) tables
   with

@@ -366,6 +366,21 @@ type note = {
 - Schema registration for compile-time validation
 - Auto-migration: `Well.Db.create_pool ()` creates tables + adds new columns
 
+A table belongs to one database file, `app.sqlite` by default. Name another
+file with `~database`; the pool opened on that file migrates it:
+
+```ocaml
+type ledger_entry = {
+  account : string; [@primary_key]
+  period : string; [@primary_key]
+  balance : int;
+} [@@deriving table ~name:"ledger" ~database:"ledger.sqlite"]
+
+let pool = lazy (Well.Db.create_pool ~filename:"ledger.sqlite" ())
+```
+
+Several `[@primary_key]` fields form one compound primary key.
+
 Type mapping: `int`→INTEGER, `float`→REAL, `string`→TEXT, `bool`→INTEGER, `'a option`→nullable
 
 ### Define Queries

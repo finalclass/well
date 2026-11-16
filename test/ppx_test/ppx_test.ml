@@ -15,6 +15,12 @@ type post = {
   body : string option;
 } [@@deriving table ~name:"posts"]
 
+type ledger_entry = {
+  account : string; [@primary_key]
+  period : string; [@primary_key]
+  balance : int;
+} [@@deriving table ~name:"ledger" ~database:"ledger.sqlite"]
+
 (* Simple SELECT — all columns *)
 let%query all_users = "SELECT id, name, email, active FROM users"
 
@@ -137,4 +143,9 @@ let () =
   assert (List.length page2 = 1);
   assert ((List.hd page1).name <> (List.hd page2).name);
   ignore (Sqlite3.db_close db);
+  let names database =
+    List.map (fun (t : Well.Db.table) -> t.name) (Well.Db.tables_in database) in
+  assert (names "ledger.sqlite" = ["ledger"]);
+  assert (List.mem "users" (names Well.Db.default_database));
+  assert (not (List.mem "ledger" (names Well.Db.default_database)));
   Printf.printf "All PPX tests passed!\n"

@@ -155,16 +155,17 @@ let columns registry =
         ; nullable = false } ]
   else base
 
+let database () =
+  Config.get_string ~default:Db.default_database "well.registry.db"
+
 let register_table (registry : t) =
-  Db.register_table {name = registry.table; columns = columns registry}
+  Db.register_table
+    ~database:(database ())
+    {name = registry.table; columns = columns registry}
 
 let register_tables registries = List.iter register_table registries
 
-let pool =
-  lazy
-    (Db.create_pool
-       ~filename:(Config.get_string ~default:"app.sqlite" "well.registry.db")
-       () )
+let pool = lazy (Db.create_pool ~filename:(database ()) ())
 
 let with_db f = Db.with_conn (Lazy.force pool) f
 

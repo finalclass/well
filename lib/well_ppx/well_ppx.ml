@@ -200,7 +200,7 @@ let sanitize_name s =
 (*  [@@deriving table]                                                *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
-let derive_table_impl ~ctxt (_rec_flag, type_decls) name_opt =
+let derive_table_impl ~ctxt (_rec_flag, type_decls) name_opt database_opt =
   let loc = Expansion_context.Deriver.derived_item_loc ctxt in
   List.concat_map
     (fun (td : type_declaration) ->
@@ -289,8 +289,14 @@ let derive_table_impl ~ctxt (_rec_flag, type_decls) name_opt =
               Ast_builder.Default.pexp_ident ~loc
                 { txt = Ldot (Lident "Well_db", "register_table"); loc }
             in
+            let database_arg =
+              match database_opt with
+              | Some database ->
+                  [(Labelled "database", Ast_builder.Default.estring ~loc database)]
+              | None -> []
+            in
             [%stri let () = [%e Ast_builder.Default.pexp_apply ~loc
-              register_fn [(Nolabel, tbl_expr)]]]
+              register_fn (database_arg @ [(Nolabel, tbl_expr)])]]
           in
           [
             field_use;
@@ -314,7 +320,7 @@ let _ =
     ~str_type_decl:
       (Deriving.Generator.V2.make
          ~attributes:[Attribute.T attr_primary_key]
-         Deriving.Args.(empty +> arg "name" (estring __))
+         Deriving.Args.(empty +> arg "name" (estring __) +> arg "database" (estring __))
          derive_table_impl)
 
 (* ═══════════════════════════════════════════════════════════════════ *)

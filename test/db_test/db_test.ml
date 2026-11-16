@@ -12,6 +12,53 @@ let () =
     ];
   };
 
+  Well.Db.register_table ~database:"ledger.sqlite" {
+    name = "test_ledger";
+    columns = [
+      { cname = "account"; sqlite_type = "TEXT"; primary = true; nullable = false };
+      { cname = "period"; sqlite_type = "TEXT"; primary = true; nullable = false };
+      { cname = "balance"; sqlite_type = "INTEGER"; primary = false; nullable = false };
+    ];
+  };
+
+  Well.Db.register_table ~database:"rejected.sqlite" {
+    name = "sqlite_reserved";
+    columns = [
+      { cname = "id"; sqlite_type = "INTEGER"; primary = true; nullable = false };
+    ];
+  };
+
+  let table_exists db name =
+    let stmt = Sqlite3.prepare db
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?" in
+    ignore (Sqlite3.bind_text stmt 1 name);
+    let exists = Sqlite3.step stmt = Sqlite3.Rc.ROW in
+    ignore (Sqlite3.finalize stmt);
+    exists
+  in
+
+  let with_memory_pool filename f =
+    let old_memory_mode = !(Well.Db.memory_mode) in
+    Well.Db.memory_mode := true;
+    Fun.protect
+      ~finally:(fun () -> Well.Db.memory_mode := old_memory_mode)
+      (fun () ->
+        let pool = Well.Db.create_pool ~size:1 ~filename () in
+        Fun.protect
+          ~finally:(fun () -> Well.Db.close_pool pool)
+          (fun () -> Well.Db.with_conn pool f))
+  in
+
+  let capture_logs f =
+    let lines = ref [] in
+    let old_hook = !Well.Log._hook in
+    Well.Log._hook := Some (fun _ level msg _ -> lines := (level, msg) :: !lines);
+    Fun.protect
+      ~finally:(fun () -> Well.Log._hook := old_hook)
+      (fun () -> f ());
+    List.rev !lines
+  in
+
   let run_domains count f =
     let domains = List.init count (fun i -> Domain.spawn (fun () -> f i)) in
     List.iter Domain.join domains
@@ -97,6 +144,33 @@ let () =
       );
     );
 
+    describe "auto_migrate" (fun () ->
+      it "creates a table with a compound primary key" (fun () ->
+        with_memory_pool "ledger.sqlite" (fun db ->
+          expect (table_exists db "test_ledger") |> to_be_true;
+          ignore (Sqlite3.exec db
+            "INSERT INTO test_ledger (account, period, balance) VALUES ('a', '2026-11', 1)");
+          let duplicate = Sqlite3.exec db
+            "INSERT INTO test_ledger (account, period, balance) VALUES ('a', '2026-11', 2)" in
+          expect (duplicate = Sqlite3.Rc.CONSTRAINT) |> to_be_true)
+      );
+      it "creates only the tables registered for the pool's database" (fun () ->
+        with_memory_pool "ledger.sqlite" (fun db ->
+          expect (table_exists db "test_users") |> to_be_false);
+        with_memory_pool "app.sqlite" (fun db ->
+          expect (table_exists db "test_users") |> to_be_true;
+          expect (table_exists db "test_ledger") |> to_be_false)
+      );
+      it "reports a table SQLite rejects as an error, not as created" (fun () ->
+        let logs = capture_logs (fun () ->
+          with_memory_pool "rejected.sqlite" (fun db ->
+            expect (table_exists db "sqlite_reserved") |> to_be_false)) in
+        expect (List.exists (fun (level, _) -> level = "error") logs) |> to_be_true;
+        expect (List.exists (fun (_, msg) -> msg = "created table sqlite_reserved") logs)
+        |> to_be_false
+      );
+    );
+
     describe "CRUD operations" (fun () ->
       it "insert and select" (fun () ->
         Well.Db.with_test_db (fun db ->
@@ -122,6 +196,17 @@ let () =
           | _ -> false
         ) diffs in
         expect has_create |> to_be_true;
+        ignore (Sqlite3.db_close db)
+      );
+      it "considers only the tables of the given database" (fun () ->
+        let db = Sqlite3.db_open ":memory:" in
+        let created database =
+          List.filter_map (function
+            | Well.Db.Create_table t -> Some t.name
+            | _ -> None) (Well.Db.diff ~database db)
+        in
+        expect (created "ledger.sqlite" = ["test_ledger"]) |> to_be_true;
+        expect (List.mem "test_ledger" (created "app.sqlite")) |> to_be_false;
         ignore (Sqlite3.db_close db)
       );
       it "detects new column" (fun () ->

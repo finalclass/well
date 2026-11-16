@@ -29,12 +29,25 @@ type table = {
 
 (* ── Runtime registry ─────────────────────────────────────────────── *)
 
+(** Database file that owns a table registered without [~database]. *)
+let default_database = "app.sqlite"
+
 (** All tables registered via [\[@@deriving table\]] or {!register_table}. *)
 let registered_tables : table list ref = ref []
 
-(** Register a table schema for auto-migration. Called by [\[@@deriving table\]]. *)
-let register_table tbl =
-  registered_tables := tbl :: !registered_tables
+let registered_databases : (string * table) list ref = ref []
+
+(** Register a table schema for auto-migration of [database]. Called by
+    [\[@@deriving table\]]. *)
+let register_table ?(database = default_database) tbl =
+  registered_tables := tbl :: !registered_tables;
+  registered_databases := (database, tbl) :: !registered_databases
+
+(** Tables registered for the database file [database]. *)
+let tables_in database =
+  List.filter_map (fun (owner, tbl) ->
+    if owner = database then Some tbl else None
+  ) !registered_databases
 
 (* ── SQLite introspection ─────────────────────────────────────────── *)
 
@@ -84,15 +97,24 @@ let get_db_columns db table_name =
 
 (** Generate a [CREATE TABLE IF NOT EXISTS] statement from a table schema. *)
 let create_table_sql tbl =
+  let pk_cols = List.filter (fun c -> c.primary) tbl.columns in
+  let compound_pk = List.length pk_cols > 1 in
   let col_strs =
     List.map (fun c ->
-      let pk = if c.primary then " PRIMARY KEY" else "" in
-      let nn = if c.nullable || c.primary then "" else " NOT NULL" in
+      let single_pk = c.primary && not compound_pk in
+      let pk = if single_pk then " PRIMARY KEY" else "" in
+      let nn = if c.nullable || single_pk then "" else " NOT NULL" in
       Printf.sprintf "%s %s%s%s" (quote_id c.cname) c.sqlite_type pk nn
     ) tbl.columns
   in
+  let pk_constraint =
+    if compound_pk then
+      [Printf.sprintf "PRIMARY KEY (%s)"
+         (String.concat ", " (List.map (fun c -> quote_id c.cname) pk_cols))]
+    else []
+  in
   Printf.sprintf "CREATE TABLE IF NOT EXISTS %s (%s)"
-    (quote_id tbl.name) (String.concat ", " col_strs)
+    (quote_id tbl.name) (String.concat ", " (col_strs @ pk_constraint))
 
 (* ── Diff types ───────────────────────────────────────────────────── *)
 
@@ -106,8 +128,9 @@ type diff_entry =
 
 (* ── Diff computation ─────────────────────────────────────────────── *)
 
-(** Compute schema differences between registered tables and the database. *)
-let diff db =
+(** Compute schema differences between the tables registered for [database]
+    and the database. *)
+let diff ?(database = default_database) db =
   List.concat_map (fun tbl ->
     if not (table_exists db tbl.name) then
       [Create_table tbl]
@@ -141,7 +164,7 @@ let diff db =
       in
       adds @ extras @ mismatches
     end
-  ) !registered_tables
+  ) (tables_in database)
 
 (* ── Diff to JSON ─────────────────────────────────────────────────── *)
 
@@ -163,14 +186,19 @@ let diff_entry_to_json = function
 
 (* ── Auto-migrate ─────────────────────────────────────────────────── *)
 
-(** Apply pending migrations: creates missing tables, adds new columns,
-    and warns about schema drift (extra columns or type mismatches). *)
-let auto_migrate db =
+let exec_migration db ~success sql =
+  match Sqlite3.exec db sql with
+  | Sqlite3.Rc.OK -> Log.log "%s" success
+  | rc ->
+      Log.log ~level:"error" "migration failed (%s: %s): %s"
+        (Sqlite3.Rc.to_string rc) (Sqlite3.errmsg db) sql
+
+let migrate_tables db tables =
   List.iter (fun tbl ->
     if not (table_exists db tbl.name) then begin
-      let sql = create_table_sql tbl in
-      ignore (Sqlite3.exec db sql);
-      Log.log "created table %s" tbl.name
+      exec_migration db
+        ~success:(Printf.sprintf "created table %s" tbl.name)
+        (create_table_sql tbl)
     end else begin
       let db_cols = get_db_columns db tbl.name in
       (* ADD COLUMN for new fields *)
@@ -182,8 +210,9 @@ let auto_migrate db =
           let nn = if col.nullable then "" else " NOT NULL" in
           let sql = Printf.sprintf "ALTER TABLE %s ADD COLUMN %s %s%s DEFAULT %s"
             (quote_id tbl.name) (quote_id col.cname) col.sqlite_type nn default in
-          ignore (Sqlite3.exec db sql);
-          Log.log "%s: added column %s" tbl.name col.cname
+          exec_migration db
+            ~success:(Printf.sprintf "%s: added column %s" tbl.name col.cname)
+            sql
         end
       ) tbl.columns;
       (* WARN about columns in DB but not in code *)
@@ -203,7 +232,14 @@ let auto_migrate db =
         | _ -> ()
       ) tbl.columns
     end
-  ) !registered_tables
+  ) tables
+
+(** Apply pending migrations of the tables registered for [database]: creates
+    missing tables, adds new columns, and warns about schema drift (extra
+    columns or type mismatches). A statement SQLite rejects is logged as an
+    error. *)
+let auto_migrate ?(database = default_database) db =
+  migrate_tables db (tables_in database)
 
 (* ── Data directory ───────────────────────────────────────────────── *)
 
@@ -401,7 +437,7 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
     let uri = _memory_uri filename in
     let db = _db_open ~uri:true uri in
     _init_conn db;
-    auto_migrate db;
+    auto_migrate ~database:filename db;
     { conns = [|{ db; mutex = _reentrant_mutex () }|];
       next = Atomic.make 0;
       mutex = Mutex.create ();
@@ -418,7 +454,7 @@ let create_pool ?(size = 8) ?(filename = "app.sqlite") () =
       let db = _db_open path in
       _init_conn db;
       if not (Atomic.exchange migrated true) then
-	        auto_migrate db;
+	        auto_migrate ~database:filename db;
 	      { db; mutex = _reentrant_mutex () }) in
 	    { conns;
 	      next = Atomic.make 0;
@@ -477,7 +513,7 @@ let open_db ?(filename = "app.sqlite") () =
     let uri = _memory_uri filename in
     let db = _db_open ~uri:true uri in
     _init_conn db;
-    auto_migrate db;
+    auto_migrate ~database:filename db;
     db
   end else begin
     let dir = !data_dir in
@@ -486,7 +522,7 @@ let open_db ?(filename = "app.sqlite") () =
     let path = _db_path dir filename in
     let db = _db_open path in
     _init_conn db;
-    auto_migrate db;
+    auto_migrate ~database:filename db;
     db
   end
 
@@ -551,7 +587,7 @@ let backup path =
 let with_test_db f =
   let db = _db_open ":memory:" in
   ignore (Sqlite3.exec db "PRAGMA journal_mode=WAL");
-  auto_migrate db;
+  migrate_tables db !registered_tables;
   Fun.protect
     ~finally:(fun () -> ignore (Sqlite3.db_close db))
     (fun () -> f db)
