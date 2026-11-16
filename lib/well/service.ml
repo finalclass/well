@@ -493,7 +493,9 @@ let handle_socket_line line =
           else
             let db = Sqlite3.db_open db_path in
             let entries =
-              Db.diff ~database:(Filename.basename db_path) db
+              Db.diff
+                ~database:(String.sub db_path 5 (String.length db_path - 5))
+                db
             in
             ignore (Sqlite3.db_close db);
             let result = `List (List.map Db.diff_entry_to_json entries) in
