@@ -1,0 +1,9 @@
+; Browser test: Html.txt children reach the DOM as their literal text,
+; on first blit and after a diff update.
+
+(executable
+ (name text_escape_test)
+ (modes js)
+ (modules text_escape_test)
+ (libraries well_web)
+ (preprocess (pps js_of_ocaml-ppx)))

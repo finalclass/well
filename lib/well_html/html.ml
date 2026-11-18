@@ -274,7 +274,7 @@ let slot ?attrs ?bool_attrs ?handlers ?children ?text () = tag "slot" ?attrs ?bo
 (** An escaped text node (XSS-safe). MLX bare-string children desugar to this. *)
 let txt (s : string) : 'a node =
   `Html { tag = ""; attrs = []; bool_attrs = []; handlers = []; children = [];
-    text = Some (escape_html s); void = false }
+    text = Some s; void = false }
 
 (** A raw/unescaped HTML node. The string is emitted verbatim. Use with caution. *)
 let raw (s : string) : 'a node =
@@ -315,11 +315,12 @@ let on_event (name : string) (handler : 'msg handler) (node : 'msg vdom) : 'msg 
 (* ── Serialization ────────────────────────────────────────────────── *)
 
 (** Recursively render a node to an HTML string. The server uses this to turn
-    a vdom response into the HTTP body. [tag = ""] and ["#raw"] emit their
-    text verbatim; ["#frag"] flattens to its children's serialization. *)
+    a vdom response into the HTTP body. [tag = ""] escapes its text,
+    ["#raw"] emits its text verbatim; ["#frag"] flattens to its children's serialization. *)
 let rec element_to_string (`Html v : _ node) : string =
   match v.tag with
-  | "" | "#raw" -> (match v.text with Some s -> s | None -> "")
+  | "" -> (match v.text with Some s -> escape_html s | None -> "")
+  | "#raw" -> (match v.text with Some s -> s | None -> "")
   | "#frag" ->
     String.concat "" (List.map element_to_string v.children)
   | _ ->
