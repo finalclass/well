@@ -5,6 +5,7 @@ module Toml = Well.Toml
 module Civil_clock = Well.Civil_clock
 module Telemetry = Well.Telemetry
 module Metrics = Well.Metrics
+module Drain = Well.Drain
 
 let version = Well.version
 let log = Well.log

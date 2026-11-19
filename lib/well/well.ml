@@ -647,14 +647,19 @@ let _start_every ~sw =
   List.iter (fun (name, sleep_s, fn) ->
     Eio.Fiber.fork ~sw (fun () ->
       Log.log "periodic %s started (sleep %.1fs)" name sleep_s;
+      let run () =
+        try fn ()
+        with
+        | Eio.Cancel.Cancelled _ as exn -> raise exn
+        | exn ->
+          Log.log ~level:"error" "periodic %s: %s" name (Printexc.to_string exn)
+      in
       let rec loop () =
-        (try fn ()
-         with
-         | Eio.Cancel.Cancelled _ as exn -> raise exn
-         | exn ->
-           Log.log ~level:"error" "periodic %s: %s" name (Printexc.to_string exn));
-        Env.sleep sleep_s;
-        loop ()
+        match Drain.admit run with
+        | None -> ()
+        | Some () ->
+          Env.sleep sleep_s;
+          loop ()
       in
       loop ())
   ) specs
@@ -663,7 +668,11 @@ let _start_every ~sw =
 
 (** Raised internally for graceful server shutdown. *)
 exception Shutdown
-let _shutting_down = Atomic.make false
+
+let drain_timeout n =
+  if not (Float.is_finite n) || n < 0.0 then
+    invalid_arg "Well.drain_timeout: must be finite and non-negative";
+  Drain.timeout := n
 
 (* ── Server ────────────────────────────────────────────────────────── *)
 
@@ -938,9 +947,9 @@ let handle_connection flow _addr =
           let resolved = Compress.maybe_compress hdrs (resolve resp) in
           let resolved = { resolved with r_headers = ("X-Request-ID", req_id) :: resolved.r_headers } in
           if resolved.r_status >= 500 then Telemetry.incr_errors ();
-          let ka = not wants_close in
+          let ka = not wants_close && not (Drain.requested ()) in
           write_response ~keep_alive:ka ~head:(meth = "HEAD") flow resolved;
-          if wants_close then `Close else `KeepAlive
+          if ka then `KeepAlive else `Close
   in
   let timed_http_request meth path hdrs query_params =
     let result = ref `Close in
@@ -955,11 +964,29 @@ let handle_connection flow _addr =
     !result
   in
   let dispatch_request () =
-    let (meth, path, hdrs, query_params, is_upgrade) = parse_incoming () in
-    if is_upgrade then
-      handle_ws_upgrade meth path hdrs query_params
-    else
-      timed_http_request meth path hdrs query_params
+    Eio.Buf_read.ensure reader 1;
+    let refuse code reason =
+      (try write_response flow (resolve (`Text reason |> status code))
+       with _ -> ());
+      `Handled `Close
+    in
+    let outcome =
+      Drain.enter (fun () ->
+        try
+          let (meth, path, hdrs, query_params, is_upgrade) =
+            parse_incoming ()
+          in
+          if is_upgrade then `Upgrade (meth, path, hdrs, query_params)
+          else `Handled (timed_http_request meth path hdrs query_params)
+        with
+        | Body_too_large -> refuse 413 "Payload Too Large"
+        | Headers_too_large -> refuse 431 "Request Header Fields Too Large")
+    in
+    match outcome with
+    | None -> `Close
+    | Some (`Upgrade (meth, path, hdrs, query_params)) ->
+        handle_ws_upgrade meth path hdrs query_params
+    | Some (`Handled result) -> result
   in
   let req_count = ref 0 in
   let max_reqs = !_max_requests_per_connection in
@@ -1048,7 +1075,7 @@ let handle_http80 ~domain flow _addr =
   let reader =
     Eio.Buf_read.of_flow ~max_size:4096 flow
   in
-  (try
+  let answer () =
     let _meth, raw_path = parse_request_line reader in
     let _hdrs = parse_headers reader in
     let path =
@@ -1088,6 +1115,12 @@ let handle_http80 ~domain flow _addr =
       write_response flow resolved;
       close_flow ()
     end
+  in
+  (try
+    Eio.Buf_read.ensure reader 1;
+    match Drain.enter answer with
+    | Some () -> ()
+    | None -> close_flow ()
   with
   | Eio.Io _ -> (try close_flow () with _ -> ())
   | End_of_file -> (try close_flow () with _ -> ())
@@ -1326,9 +1359,9 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
   let start_server () =
     Eio.Switch.run @@ fun sw ->
     let shutdown_p, shutdown_r = Eio.Promise.create () in
+    let draining_p, draining_r = Eio.Promise.create () in
     let signal_handler _signum =
-      if not (Atomic.exchange _shutting_down true) then
-        Eio.Promise.resolve shutdown_r ()
+      if Drain.request () then Eio.Promise.resolve shutdown_r ()
     in
     Sys.set_signal Sys.sigterm (Sys.Signal_handle signal_handler);
     Sys.set_signal Sys.sigint (Sys.Signal_handle signal_handler);
@@ -1352,7 +1385,9 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
                 (handle_http80 ~domain:dom);
               accept_loop ()
             in
-            accept_loop ());
+            Eio.Fiber.first accept_loop (fun () ->
+              Eio.Promise.await draining_p);
+            Eio.Net.close http80_socket);
           Log.log "HTTP on :80 (ACME challenges + redirect)";
           let cert_pem, domain_key =
             Acme.ensure_certificate ~staging:acme_staging dom
@@ -1436,10 +1471,23 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
                 (Printexc.to_string exn)));
         accept_loop ()
       in
-      accept_loop ());
+      Eio.Fiber.first accept_loop (fun () -> Eio.Promise.await draining_p);
+      Eio.Net.close socket);
     Eio.Promise.await shutdown_p;
     Log.log "shutting down...";
-    Env.sleep 0.5;
+    Eio.Promise.resolve draining_r ();
+    let mono = Env.mono_clock () in
+    let now () =
+      Int64.to_float (Mtime.to_uint64_ns (Eio.Time.Mono.now mono)) /. 1e9
+    in
+    (match Drain.wait ~sleep:(Eio.Time.Mono.sleep mono) ~now () with
+     | Drain.Drained seconds -> Log.log "drained in %.2fs" seconds
+     | Drain.Forced in_flight ->
+         Log.log ~level:"warn"
+           "drain skipped by a repeated signal with %d in flight" in_flight
+     | Drain.Timed_out in_flight ->
+         Log.log ~level:"warn" "drain timed out after %.1fs with %d in flight"
+           !Drain.timeout in_flight);
     Db.close_well_db ();
     Log.log "stopped.";
     Log.close ();
@@ -1504,6 +1552,12 @@ module Log = Log
 
 (** Built-in middleware implementations (CSRF, rate limiting, auth, ...). *)
 module Middleware = Middleware
+
+module Drain : sig
+  val requested : unit -> bool
+  val hold : (unit -> 'a) -> 'a
+  val admit : (unit -> 'a) -> 'a option
+end = Drain
 
 (** ACME (Let's Encrypt) automatic TLS certificate provisioning. *)
 module Acme = Acme

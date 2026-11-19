@@ -18,6 +18,19 @@
   (`Well_publish`) and `well.subscribe` (`Well_subscribe`). Service
   registration and dispatch by name remain only in `well.core`.
 
+- **Graceful shutdown.** On SIGTERM or SIGINT `Well.run` closes the listening
+  socket at once, answers requests already in progress with
+  `Connection: close`, lets every `Well.every` task finish the run in
+  progress and starts no further run, then exits. The wait is bounded by
+  `Well.drain_timeout` (default 20 s) and skipped by a second signal.
+  `Well.Drain` (`Well_runtime.Drain`) exposes `requested`, `hold` and `admit`
+  for application work that shutdown should wait for. WebSocket connections
+  and connections that sent no request are not waited for. Before, the server
+  kept accepting for 0.5 s and then cut everything.
+- **CSRF tokens survive a restart.** Tokens are stored in `well.sqlite`
+  (table `_well_csrf_tokens`) instead of process memory, so a form rendered
+  before a restart can still be submitted after it.
+
 ### Fixed
 - **Compound primary keys in auto-migration.** `Well.Db.create_table_sql`
   emits a table constraint `PRIMARY KEY (a, b, ...)` for several
@@ -28,6 +41,9 @@
   `error` level with the SQLite message and the SQL.
 
 ### Breaking changes
+- **`Well.every` and shutdown.** A task whose function never returns (an
+  endless loop inside one run) now delays shutdown until `Well.drain_timeout`
+  expires. Return from the function when `Well.Drain.requested ()` is true.
 - **Tables belong to one database file.** `[@@deriving table ~database:"x.sqlite"]`
   and `Well.Db.register_table ~database` assign a table to a database file
   (default `Well.Db.default_database`, `app.sqlite`). `create_pool`,

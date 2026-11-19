@@ -131,41 +131,91 @@ let error_handler : middleware = fun next req ->
 (* ── CSRF ─────────────────────────────────────────────────────────── *)
 
 module Csrf_store = struct
-  let mutex = Mutex.create ()
-  let tokens : (string, string) Hashtbl.t = Hashtbl.create 64
+  let check db rc =
+    match rc with
+    | Sqlite3.Rc.OK | Sqlite3.Rc.DONE | Sqlite3.Rc.ROW -> ()
+    | rc ->
+        failwith
+          (Printf.sprintf "CSRF token store: %s (%s)"
+             (Sqlite3.Rc.to_string rc) (Sqlite3.errmsg db))
 
-  let with_lock f =
-    Mutex.lock mutex;
-    Fun.protect ~finally:(fun () -> Mutex.unlock mutex) f
+  let ensure_table =
+    Db.once (fun db ->
+      check db
+        (Sqlite3.exec db
+           {|CREATE TABLE IF NOT EXISTS _well_csrf_tokens (
+               session_id TEXT PRIMARY KEY,
+               token TEXT NOT NULL
+             )|}))
+
+  let with_store f =
+    Db.with_well_db @@ fun db ->
+    Sqlite3.busy_timeout db 5000;
+    ensure_table db;
+    f db
+
+  let prepared db sql values f =
+    let stmt = Sqlite3.prepare db sql in
+    match
+      List.iteri
+        (fun i value ->
+          check db (Sqlite3.bind stmt (i + 1) (Sqlite3.Data.TEXT value)))
+        values;
+      f stmt
+    with
+    | result ->
+        check db (Sqlite3.finalize stmt);
+        result
+    | exception exn ->
+        ignore (Sqlite3.finalize stmt);
+        raise exn
+
+  let token db sql values =
+    prepared db sql values (fun stmt ->
+      match Sqlite3.step stmt with
+      | Sqlite3.Rc.ROW ->
+          let token = Sqlite3.column_text stmt 0 in
+          check db (Sqlite3.step stmt);
+          Some token
+      | rc ->
+          check db rc;
+          None)
+
+  let run db sql values =
+    prepared db sql values (fun stmt -> check db (Sqlite3.step stmt))
 
   let find_or_create session_id generate =
-    with_lock (fun () ->
-      match Hashtbl.find_opt tokens session_id with
-      | Some token -> token
-      | None ->
-          let token = generate () in
-          Hashtbl.replace tokens session_id token;
-          token)
+    with_store @@ fun db ->
+    match
+      token db "SELECT token FROM _well_csrf_tokens WHERE session_id = ?"
+        [session_id]
+    with
+    | Some token -> token
+    | None ->
+        (match
+           token db
+             "INSERT INTO _well_csrf_tokens (session_id, token) VALUES (?, ?) \
+              ON CONFLICT (session_id) DO UPDATE SET token = token \
+              RETURNING token"
+             [session_id; generate ()]
+         with
+         | Some token -> token
+         | None -> failwith "CSRF token store: no token returned")
 
   let migrate old_session_id new_session_id =
-    with_lock (fun () ->
-      match Hashtbl.find_opt tokens old_session_id with
-      | Some token ->
-          Hashtbl.replace tokens new_session_id token;
-          Hashtbl.remove tokens old_session_id
-      | None -> ())
+    with_store @@ fun db ->
+    run db
+      "UPDATE OR REPLACE _well_csrf_tokens SET session_id = ? \
+       WHERE session_id = ?"
+      [new_session_id; old_session_id]
 
-  let snapshot () =
-    with_lock (fun () ->
-      Hashtbl.fold
-        (fun session_id token acc -> (session_id, token) :: acc)
-        tokens [])
-
-  let remove_if session_id token =
-    with_lock (fun () ->
-      match Hashtbl.find_opt tokens session_id with
-      | Some current when current == token -> Hashtbl.remove tokens session_id
-      | _ -> ())
+  let prune () =
+    with_store @@ fun db ->
+    Session_store.ensure_table db;
+    run db
+      "DELETE FROM _well_csrf_tokens WHERE session_id NOT IN \
+       (SELECT session_id FROM _well_sessions)"
+      []
 end
 
 let migrate_csrf_token old_sid new_sid = Csrf_store.migrate old_sid new_sid
@@ -281,12 +331,7 @@ let csrf : middleware = fun next req ->
   end
 
 (** Prune CSRF tokens for sessions no longer in the store. *)
-let cleanup_csrf_tokens () =
-  List.iter (fun (sid, token) ->
-    if Session_store.get ~session_id:sid ~key:"__exists" = None
-    && Session_store.get_all_with_prefix ~session_id:sid ~prefix:"" = []
-    then Csrf_store.remove_if sid token
-  ) (Csrf_store.snapshot ())
+let cleanup_csrf_tokens () = Csrf_store.prune ()
 
 (* ── Rate limiting ────────────────────────────────────────────────── *)
 

@@ -1,0 +1,10 @@
+(executable
+ (name csrf_restart_test)
+ (libraries well eio eio_main))
+
+(rule
+ (alias runtest)
+ (action
+  (progn
+   (run %{exe:csrf_restart_test.exe} issue)
+   (run %{exe:csrf_restart_test.exe} verify))))

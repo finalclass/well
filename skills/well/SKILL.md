@@ -1091,11 +1091,30 @@ Well.Service.cast : (unit -> unit) -> unit  (* fire-and-forget async *)
 Well.every ~name:"kicker" ~sleep:5.0 (fun () ->
   (* runs in loop: execute → sleep 5s → execute → ... *)
   (* crashes are logged, loop continues *)
-  (* cancelled automatically on shutdown *)
+  (* on shutdown the run in progress finishes and no further run starts *)
 )
 ```
 
 Register before `Well.run` (like routes). Each task runs in its own EIO fiber.
+
+### Graceful Shutdown
+
+On SIGTERM or SIGINT the server closes its listening socket, answers the
+requests already in progress with `Connection: close`, lets periodic tasks
+finish the run in progress and then exits. It waits at most
+`Well.drain_timeout` seconds (default 20); a second signal skips the wait.
+WebSocket connections and connections that sent no request are not waited for.
+
+```ocaml
+Well.Drain.requested : unit -> bool            (* shutdown has started *)
+Well.Drain.hold : (unit -> 'a) -> 'a           (* shutdown waits for this work *)
+Well.Drain.admit : (unit -> 'a) -> 'a option   (* same; None once shutdown started *)
+```
+
+A periodic task that loops inside one run must return when
+`Well.Drain.requested ()` turns true, otherwise shutdown waits for the whole
+timeout. Work started on a fiber of your own is cut at exit unless it runs
+inside `Well.Drain.hold`. The same module is available as `Well_runtime.Drain`.
 
 ---
 
@@ -1160,6 +1179,7 @@ Levels: `debug`, `info` (default), `warn`, `error`. Logs to stdout + `data/well.
 Well.max_body_size : int -> unit       (* max request body *)
 Well.keep_alive_timeout : float -> unit
 Well.request_timeout : float -> unit
+Well.drain_timeout : float -> unit     (* wait for work in progress on shutdown, default 20s *)
 Well.ws_rate_limit : float -> unit
 Well.ws_max_frame_size : int -> unit   (* default 10MB *)
 Well.max_upload_size : int -> unit

@@ -1,0 +1,15 @@
+(executable
+ (name drain_server)
+ (modules drain_server)
+ (libraries well eio eio_main))
+
+(executable
+ (name drain_test)
+ (modules drain_test)
+ (libraries unix))
+
+(rule
+ (alias runtest)
+ (deps drain_server.exe)
+ (action
+  (run %{exe:drain_test.exe} %{exe:drain_server.exe})))
