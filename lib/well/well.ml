@@ -605,7 +605,7 @@ let _ip_conn_mu = Mutex.create ()
 
 let ip_of_addr addr =
   match addr with
-  | `Tcp (ip, _port) -> Eio.Net.Ipaddr.pp Format.str_formatter ip; Format.flush_str_formatter ()
+  | `Tcp (ip, _port) -> Format.asprintf "%a" Eio.Net.Ipaddr.pp ip
   | _ -> "unknown"
 
 let conn_acquire ip =
@@ -1443,18 +1443,20 @@ let run ?port ?(workers = 0) ?cert ?key ?domain ?host
            | None -> handle_connection)
     in
     let handler flow addr =
-      let ip = ip_of_addr addr in
-      if conn_acquire ip then
-        (try inner_handler flow addr; conn_release ip
-         with exn -> conn_release ip; raise exn)
-      else begin
-        (try
-           let r = resolve (`Text "Service Unavailable" |> status 503) in
-           let flow = (flow :> Eio.Flow.two_way_ty Eio.Resource.t) in
-           write_response flow r
-         with _ -> ());
-        Eio.Flow.close flow
-      end
+      let serve () =
+        let ip = ip_of_addr addr in
+        if conn_acquire ip then
+          Fun.protect ~finally:(fun () -> conn_release ip) (fun () ->
+            inner_handler flow addr)
+        else
+          try
+            let r = resolve (`Text "Service Unavailable" |> status 503) in
+            let flow = (flow :> Eio.Flow.two_way_ty Eio.Resource.t) in
+            write_response flow r
+          with _ -> ()
+      in
+      Fun.protect ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+        serve
     in
     Eio.Fiber.fork ~sw (fun () ->
       let pool =

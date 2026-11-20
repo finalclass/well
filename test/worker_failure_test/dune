@@ -1,0 +1,15 @@
+(executable
+ (name worker_failure_server)
+ (modules worker_failure_server)
+ (libraries well x509 ptime mirage-crypto-rng.unix))
+
+(executable
+ (name worker_failure_test)
+ (modules worker_failure_test)
+ (libraries well eio unix))
+
+(rule
+ (alias runtest)
+ (deps worker_failure_server.exe)
+ (action
+  (run %{exe:worker_failure_test.exe} %{exe:worker_failure_server.exe})))

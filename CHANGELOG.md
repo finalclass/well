@@ -39,6 +39,17 @@
 - **Migration log.** `auto_migrate` logs `created table` / `added column`
   only when SQLite accepts the statement; a rejected statement is logged at
   `error` level with the SQLite message and the SQL.
+- **Connections no longer hang when a worker fails.** `Well.run` closes every
+  accepted connection when its handling ends, including when the worker
+  raises (for example a TLS client that disconnects during the handshake).
+  Before, such a connection was only logged as `worker error` and left open,
+  so the client waited until it gave up or the process exited.
+- **Client address on worker domains.** The address used for the per-IP
+  connection limit is formatted without the shared `Format.str_formatter`.
+  Worker domains used to get an empty string, so the per-IP limit counted all
+  their clients together, and concurrent connections could fail with
+  `Invalid_argument("Format: Unsynchronized access to formatter")` and hang
+  as above.
 
 ### Breaking changes
 - **`Well.every` and shutdown.** A task whose function never returns (an
